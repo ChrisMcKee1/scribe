@@ -32,11 +32,17 @@ final class TranscriptionEngineTests: XCTestCase {
         scratch: ScratchAudioDirectory,
         deadlines: TranscriptionDeadlines = TranscriptionDeadlines(),
         resolutionLifetime: Duration = TranscriptionEngine.defaultResolutionLifetime,
+        foundryModelAlias: String? = nil,
+        selectedFoundryModelAlias: @escaping @Sendable () -> String = {
+            TranscriptionEngine.defaultFoundryModelAlias
+        },
         now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) -> TranscriptionEngine {
-        TranscriptionEngine(
+        var environment = ["SCRIBE_FOUNDRY_CLI": foundry.path(percentEncoded: false)]
+        environment["SCRIBE_FOUNDRY_ASR_MODEL"] = foundryModelAlias
+        return TranscriptionEngine(
             resolver: TranscriptionBackendResolver(
-                environment: ["SCRIBE_FOUNDRY_CLI": foundry.path(percentEncoded: false)],
+                environment: environment,
                 searchPath: [],
                 whisperCliCandidates: [],
                 whisperModelCandidates: []),
@@ -44,6 +50,7 @@ final class TranscriptionEngineTests: XCTestCase {
             deadlines: deadlines,
             resolutionLifetime: resolutionLifetime,
             killGracePeriod: .milliseconds(500),
+            selectedFoundryModelAlias: selectedFoundryModelAlias,
             now: now)
     }
 
@@ -179,6 +186,326 @@ final class TranscriptionEngineTests: XCTestCase {
         let result = try await engine.transcribe(samples: tone, sampleRate: 16_000)
 
         XCTAssertEqual(result.text, "hello")
+    }
+
+    func testUncachedSelectedSpeechModelFailsBeforeStartingTranscription() async throws {
+        let directory = try makeTemporaryDirectory(label: "uncached-speech-model")
+        let started = directory.appendingPathComponent("transcribe-started")
+        let startedPath = started.path(percentEncoded: false)
+        let script = try makeScript(
+            """
+            if [ "$1" = model ] && [ "$2" = list ]; then
+              printf '{"models":[{"alias":"whisper-base","cached":false}]}'
+              exit 0
+            fi
+            touch '\(startedPath)'
+            printf '{"text":"must not run"}'
+            """, in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let engine = makeEngine(foundry: script, scratch: scratch, foundryModelAlias: "whisper-base")
+
+        let failure = await transcriptionError {
+            try await engine.transcribe(samples: tone, sampleRate: 16_000)
+        }
+
+        XCTAssertEqual(failure, .speechModelNotCached)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: startedPath))
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+    }
+
+    func testSavedModelMissingFromInstalledCatalogIsPreservedButNotRun() async throws {
+        let directory = try makeTemporaryDirectory(label: "missing-speech-model")
+        let started = directory.appendingPathComponent("transcribe-started")
+        let startedPath = started.path(percentEncoded: false)
+        let script = try makeScript(
+            """
+            if [ "$1" = model ] && [ "$2" = list ]; then
+              printf '{"models":[{"alias":"parakeet-tdt-0.6b-v2","type":"Speech","cached":true}]}'
+              exit 0
+            fi
+            touch '\(startedPath)'
+            printf '{"text":"must not run"}'
+            """, in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let engine = makeEngine(
+            foundry: script, scratch: scratch, foundryModelAlias: "removed-from-runtime")
+
+        let failure = await transcriptionError {
+            try await engine.transcribe(samples: tone, sampleRate: 16_000)
+        }
+
+        XCTAssertEqual(failure, .speechModelNotListed)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: startedPath))
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+    }
+
+    func testStoredModelSelectionInvalidatesTheResolvedBackendImmediately() throws {
+        let selected = OSAllocatedUnfairLock(initialState: TranscriptionEngine.defaultFoundryModelAlias)
+        let directory = try makeTemporaryDirectory(label: "speech-model-selection")
+        let script = try makeScript("printf '{\"text\":\"unused\"}'", in: directory)
+        let engine = makeEngine(
+            foundry: script,
+            scratch: ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true)),
+            resolutionLifetime: .seconds(60),
+            selectedFoundryModelAlias: { selected.withLock { $0 } })
+
+        XCTAssertEqual(try engine.resolveBackend().foundryModelAlias, TranscriptionEngine.defaultFoundryModelAlias)
+        selected.withLock { $0 = "whisper-base" }
+        XCTAssertEqual(try engine.resolveBackend().foundryModelAlias, "whisper-base")
+    }
+
+    func testLongFoundryCapturesAreSentAsSequentialBoundedWavsWithoutChangingTheirSamples() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-chunks")
+        let evidence = directory.appendingPathComponent("chunks", isDirectory: true)
+        try FileManager.default.createDirectory(at: evidence, withIntermediateDirectories: true)
+        let callCount = directory.appendingPathComponent("call-count").path(percentEncoded: false)
+        let evidencePath = evidence.path(percentEncoded: false)
+        let script = try makeScript(
+            """
+            count=0
+            if [ -f '\(callCount)' ]; then count=$(cat '\(callCount)'); fi
+            count=$((count + 1))
+            printf '%s' "$count" > '\(callCount)'
+            cp "$5" '\(evidencePath)/chunk-'"$count"'.wav'
+            printf '{"text":"part%s"}\\n' "$count"
+            """, in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let sampleCount: Int = 65 * 16_000
+        let samples: [Float] = (0..<sampleCount).map { (index: Int) -> Float in
+            let numerator: Int = (index * 37 % 2_003) - 1_001
+            return Float(numerator) / Float(1_001)
+        }
+        let expectedSpans = TranscriptionChunker.plan(samples: samples, sampleRate: 16_000)
+
+        let result = try await makeEngine(foundry: script, scratch: scratch)
+            .transcribe(samples: samples, sampleRate: 16_000)
+
+        let chunks = try FileManager.default.contentsOfDirectory(at: evidence, includingPropertiesForKeys: nil)
+            .sorted {
+                let lhs = Int($0.deletingPathExtension().lastPathComponent.dropFirst("chunk-".count)) ?? 0
+                let rhs = Int($1.deletingPathExtension().lastPathComponent.dropFirst("chunk-".count)) ?? 0
+                return lhs < rhs
+            }
+        XCTAssertEqual(chunks.count, expectedSpans.count)
+        XCTAssertEqual(result.text, "part1 part2 part3")
+        var stitched: [Float] = []
+        for (file, span) in zip(chunks, expectedSpans) {
+            let samplesInChunk = try Self.samplesInWav(at: file)
+            XCTAssertLessThanOrEqual(samplesInChunk.count, 30 * 16_000)
+            XCTAssertEqual(samplesInChunk, Array(samples[span]))
+            stitched.append(contentsOf: samplesInChunk)
+        }
+        XCTAssertEqual(stitched, samples)
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+    }
+
+    func testOnlyExactlyZeroChunksAreOmittedAndTheFirstDecodedChunkKeepsItsColdBudget() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-zero-chunks")
+        let evidence = directory.appendingPathComponent("chunks", isDirectory: true)
+        try FileManager.default.createDirectory(at: evidence, withIntermediateDirectories: true)
+        let callCount = directory.appendingPathComponent("call-count").path(percentEncoded: false)
+        let script = try makeScript(
+            """
+            count=0
+            if [ -f '\(callCount)' ]; then count=$(cat '\(callCount)'); fi
+            count=$((count + 1))
+            printf '%s' "$count" > '\(callCount)'
+            cp "$5" '\(evidence.path(percentEncoded: false))/chunk-'"$count"'.wav'
+            printf '{"text":"part%s"}\\n' "$count"
+            """, in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        var samples = [Float](repeating: -0.0, count: 95 * 16_000)
+        samples[70 * 16_000] = Float.leastNormalMagnitude
+        samples[90 * 16_000] = 0.25
+        let spans = TranscriptionChunker.plan(samples: samples, sampleRate: 16_000)
+        let decoded = spans.filter { !samples[$0].allSatisfy { $0 == 0 } }
+        XCTAssertGreaterThan(spans.count, decoded.count)
+        XCTAssertFalse(decoded.isEmpty)
+        let result = try await makeEngine(foundry: script, scratch: scratch)
+            .transcribe(samples: samples, sampleRate: 16_000)
+        XCTAssertEqual(try String(contentsOfFile: callCount, encoding: .utf8), String(decoded.count))
+        XCTAssertEqual(result.text, (1...decoded.count).map { "part\($0)" }.joined(separator: " "))
+        XCTAssertTrue(result.diagnostics.usedColdBudget)
+        for (index, span) in decoded.enumerated() {
+            let wav = evidence.appendingPathComponent("chunk-\(index + 1).wav")
+            XCTAssertEqual(try Self.samplesInWav(at: wav), Array(samples[span]))
+        }
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+    }
+
+    func testAWholeLongZeroCaptureFailsWithoutStartingTheRecognizer() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-all-zero")
+        let called = directory.appendingPathComponent("called")
+        let script = try makeScript(
+            "touch '\(called.path(percentEncoded: false))'; printf '{\"text\":\"hallucination\"}'",
+            in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let engine = makeEngine(foundry: script, scratch: scratch)
+        let failure = await transcriptionError {
+            try await engine.transcribe(samples: [Float](repeating: 0, count: 65 * 16_000), sampleRate: 16_000)
+        }
+        XCTAssertEqual(failure, .emptyOutput)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: called.path))
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+    }
+
+    func testShortExactZeroCaptureNeverAcceptsRecognizerHallucination() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-short-zero")
+        let called = directory.appendingPathComponent("called")
+        let script = try makeScript(
+            "touch '\(called.path(percentEncoded: false))'; printf '{\"text\":\"hallucination\"}'",
+            in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let engine = makeEngine(foundry: script, scratch: scratch)
+        for seconds in [1, 5, 30] {
+            let failure = await transcriptionError {
+                try await engine.transcribe(
+                    samples: [Float](repeating: -0.0, count: seconds * 16_000), sampleRate: 16_000)
+            }
+            XCTAssertEqual(failure, .emptyOutput)
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: called.path))
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+    }
+
+    func testInvalidCaptureStartsNeitherModelDiscoveryNorRecognition() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-invalid")
+        let called = directory.appendingPathComponent("called")
+        let script = try makeScript(
+            "touch '\(called.path(percentEncoded: false))'; printf '{\"text\":\"hallucination\"}'",
+            in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let engine = makeEngine(foundry: script, scratch: scratch, foundryModelAlias: "whisper-base")
+        for invalid in [Float.nan, .infinity, -.infinity] {
+            for seconds in [1, 65] {
+                var samples = [Float](repeating: 0.25, count: seconds * 16_000)
+                samples[samples.count - 1] = invalid
+                let failure = await transcriptionError {
+                    try await engine.transcribe(samples: samples, sampleRate: 16_000)
+                }
+                XCTAssertEqual(failure, .audioWriteFailed(errno: EINVAL))
+            }
+        }
+        for rate in [Double.nan, .infinity, -1, 0, 0.5, 16_000.5, Double(UInt32.max) / 4 + 1] {
+            let failure = await transcriptionError {
+                try await engine.transcribe(samples: [0.25], sampleRate: rate)
+            }
+            XCTAssertEqual(failure, .audioWriteFailed(errno: EINVAL))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: called.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.url.path))
+    }
+
+    func testEmptyCaptureNeverStartsModelDiscoveryOrAcceptsHallucinatedText() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-empty-capture")
+        let called = directory.appendingPathComponent("called")
+        let script = try makeScript(
+            "touch '\(called.path(percentEncoded: false))'; printf '{\"text\":\"hallucination\"}'",
+            in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let engine = makeEngine(foundry: script, scratch: scratch, foundryModelAlias: "whisper-base")
+        let failure = await transcriptionError {
+            try await engine.transcribe(samples: [], sampleRate: 16_000)
+        }
+        XCTAssertEqual(failure, .emptyOutput)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: called.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.url.path))
+    }
+
+    func testShortNonzeroCaptureStillReachesTheRecognizerWithoutASilenceThreshold() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-short-nonzero")
+        let evidence = directory.appendingPathComponent("recording.wav")
+        let script = try makeScript(
+            "cp \"$5\" '\(evidence.path(percentEncoded: false))'; printf '{\"text\":\"decoded\"}'",
+            in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let engine = makeEngine(foundry: script, scratch: scratch)
+        var samples = [Float](repeating: 0, count: 16_000)
+        samples[8000] = Float.leastNormalMagnitude
+        let result = try await engine.transcribe(samples: samples, sampleRate: 16_000)
+        XCTAssertEqual(result.text, "decoded")
+        XCTAssertEqual(try Self.samplesInWav(at: evidence), samples)
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+    }
+
+    func testFailureAfterTheFirstFoundryChunkDoesNotReturnPartialText() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-chunk-failure")
+        let callCount = directory.appendingPathComponent("call-count").path(percentEncoded: false)
+        let evidence = directory.appendingPathComponent("calls", isDirectory: true)
+        try FileManager.default.createDirectory(at: evidence, withIntermediateDirectories: true)
+        let evidencePath = evidence.path(percentEncoded: false)
+        let script = try makeScript(
+            """
+            count=0
+            if [ -f '\(callCount)' ]; then count=$(cat '\(callCount)'); fi
+            count=$((count + 1))
+            printf '%s' "$count" > '\(callCount)'
+            cp "$5" '\(evidencePath)/chunk-'"$count"'.wav'
+            if [ "$count" -eq 2 ]; then
+              printf '{"error":{"code":"scripted"}}'
+              exit 0
+            fi
+            printf '{"text":"first chunk only"}'
+            """, in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let samples = [Float](repeating: 0.25, count: 65 * 16_000)
+        let engine = makeEngine(foundry: script, scratch: scratch)
+
+        let failure = await transcriptionError {
+            try await engine.transcribe(samples: samples, sampleRate: 16_000)
+        }
+
+        XCTAssertEqual(failure, .backendReportedError)
+        XCTAssertEqual(try String(contentsOfFile: callCount, encoding: .utf8), "2")
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+    }
+
+    func testCancellationAfterOneChunkPreventsTheNextChunkFromStarting() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-chunk-cancel")
+        let callCount = directory.appendingPathComponent("call-count").path(percentEncoded: false)
+        let gatePath = directory.appendingPathComponent("gate").path(percentEncoded: false)
+        let leaderPath = directory.appendingPathComponent("leader").path(percentEncoded: false)
+        let descendantPath = directory.appendingPathComponent("descendant").path(percentEncoded: false)
+        defer { FileManager.default.createFile(atPath: gatePath, contents: nil) }
+        let script = try makeScript(
+            """
+            count=0
+            if [ -f '\(callCount)' ]; then count=$(cat '\(callCount)'); fi
+            count=$((count + 1))
+            printf '%s' "$count" > '\(callCount)'
+            printf '{"text":"first chunk"}'
+            if [ "$count" -eq 1 ]; then
+              (while [ ! -e '\(gatePath)' ]; do sleep 0.05; done) &
+              printf '%s' "$!" > '\(descendantPath)'
+              printf '%s' "$$" > '\(leaderPath)'
+            fi
+            """, in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let engine = makeEngine(foundry: script, scratch: scratch)
+        let samples = [Float](repeating: 0.25, count: 65 * 16_000)
+        let held = AudioTestSignalLatch()
+        let release = DispatchSemaphore(value: 0)
+        let systemCalls = readsHeldAfterTheObservedExit(of: leaderPath, held: held, release: release)
+
+        let task = Task {
+            try await ProcessRunner.systemCalls.withValue(systemCalls) {
+                try await engine.transcribe(samples: samples, sampleRate: 16_000)
+            }
+        }
+        let reachedExit = await held.wait()
+        XCTAssertTrue(reachedExit, "the first chunk did not finish before the runner was held")
+        task.cancel()
+        release.signal()
+
+        let failure = await transcriptionError { try await task.value }
+
+        XCTAssertEqual(failure, .cancelled)
+        XCTAssertEqual(try String(contentsOfFile: callCount, encoding: .utf8), "1")
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+        let descendant = try XCTUnwrap(
+            pid_t(try String(contentsOfFile: descendantPath, encoding: .utf8)))
+        FileManager.default.createFile(atPath: gatePath, contents: nil)
+        XCTAssertTrue(ProcessResources.waitForExit(of: descendant, timeout: .seconds(10)))
     }
 
     func testTheColdBudgetAppliesUntilASuccessAndAgainAfterAFailure() async throws {
@@ -441,7 +768,7 @@ final class TranscriptionEngineTests: XCTestCase {
             return (script, record)
         }
         let quickDeadline = TranscriptionDeadlines(
-            coldBase: .milliseconds(300), warmBase: .milliseconds(300), perAudioSecond: 0)
+            coldBase: .seconds(2), warmBase: .seconds(2), perAudioSecond: 0)
 
         let success = try recognizer("success", then: "printf '{\"text\":\"done\"}'")
         let result = try await makeEngine(foundry: success.script, scratch: scratch)
@@ -584,6 +911,58 @@ final class TranscriptionEngineTests: XCTestCase {
         XCTAssertEqual(error, .unsupportedAudioFile)
     }
 
+    func testWhisperOverridesWorkIndependentlyWithDiscoveredCounterparts() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-whisper-independent")
+        let arguments = directory.appendingPathComponent("arguments")
+        let whisper = try makeScript(
+            "printf '%s\\n' \"$@\" > '\(arguments.path)'; echo 'fallback words'",
+            in: directory, named: "whisper-cli")
+        let model = directory.appendingPathComponent("model with spaces.bin")
+        try Data([0]).write(to: model)
+        for overrides in [
+            ["SCRIBE_WHISPER_MODEL": model.path],
+            ["SCRIBE_WHISPER_CLI": whisper.path],
+            ["SCRIBE_WHISPER_MODEL": model.path, "SCRIBE_ASR_BACKEND": "whisper"],
+            ["SCRIBE_WHISPER_CLI": whisper.path, "SCRIBE_ASR_BACKEND": "whisper"],
+        ] {
+            let resolver = TranscriptionBackendResolver(
+                environment: overrides, searchPath: [directory.path],
+                whisperCliCandidates: [], whisperModelCandidates: [model.path])
+            let engine = TranscriptionEngine(
+                resolver: resolver, scratch: ScratchAudioDirectory(url: directory.appendingPathComponent("scratch"))
+            )
+            let result = try await engine.transcribe(samples: tone, sampleRate: 16_000)
+            XCTAssertEqual(result.text, "fallback words")
+            XCTAssertEqual(result.backend, .whisperCpp)
+            let sent = try String(contentsOf: arguments, encoding: .utf8).split(separator: "\n").map(String.init)
+            XCTAssertEqual(Array(sent.prefix(2)), ["-m", model.path])
+            XCTAssertEqual(Array(sent.suffix(4)), ["-nt", "-np", "-l", "en"])
+            XCTAssertTrue(
+                scratchFiles(ScratchAudioDirectory(url: directory.appendingPathComponent("scratch"))).isEmpty)
+        }
+    }
+
+    func testForcedWhisperDoesNotReplaceAnInvalidOverrideWithAnotherModelOrFoundry() throws {
+        let directory = try makeTemporaryDirectory(label: "asr-whisper-invalid")
+        _ = try makeScript("echo foundry", in: directory, named: "foundry")
+        let whisper = try makeScript("echo fallback", in: directory, named: "whisper-cli")
+        let model = directory.appendingPathComponent("model.bin")
+        try Data([0]).write(to: model)
+        for (key, issue) in [
+            ("SCRIBE_WHISPER_MODEL", TranscriptionBackendIssue.whisperModelNotFound),
+            ("SCRIBE_WHISPER_CLI", TranscriptionBackendIssue.whisperCliNotFound),
+        ] {
+            let resolver = TranscriptionBackendResolver(
+                environment: [
+                    "SCRIBE_ASR_BACKEND": "whisper", key: directory.appendingPathComponent("missing").path,
+                ],
+                searchPath: [directory.path], whisperCliCandidates: [whisper.path],
+                whisperModelCandidates: [model.path])
+            XCTAssertThrowsError(try resolver.resolve()) {
+                XCTAssertEqual($0 as? TranscriptionError, .backendMissing(issue))
+            }
+        }
+    }
     // MARK: - Reading a finished run
 
     private func outcome(
@@ -601,6 +980,17 @@ final class TranscriptionEngineTests: XCTestCase {
                 data: data, totalByteCount: data.count, reachedEndOfFile: true),
             standardError: ProcessRunner.CapturedOutput(data: Data(), totalByteCount: 0, reachedEndOfFile: true),
             duration: .milliseconds(10))
+    }
+
+    private static func samplesInWav(at url: URL) throws -> [Float] {
+        let data = try Data(contentsOf: url)
+        XCTAssertGreaterThanOrEqual(data.count, 44)
+        let audio = Data(data.dropFirst(44))
+        return audio.withUnsafeBytes { raw in
+            (0..<(raw.count / MemoryLayout<Float>.size)).map {
+                raw.loadUnaligned(fromByteOffset: $0 * MemoryLayout<Float>.size, as: Float.self)
+            }
+        }
     }
 
     func testAStoppedRunNeverYieldsAPartialTranscript() {
@@ -629,6 +1019,104 @@ final class TranscriptionEngineTests: XCTestCase {
         ) { XCTAssertEqual($0 as? TranscriptionError, .terminatedBySignal(SIGTERM)) }
     }
 
+    func testTruncatedRecognizerOutputNeverYieldsItsKeptPrefix() throws {
+        for kind in [TranscriptionBackendKind.foundryLocal, .whisperCpp] {
+            let text = kind == .foundryLocal ? "{\"text\":\"kept prefix\"}\n" : "kept prefix"
+            let data = Data(text.utf8)
+            let result = ProcessRunner.Outcome(
+                terminationReason: .finished, exitStatus: 0, terminationSignal: nil,
+                standardOutput: ProcessRunner.CapturedOutput(
+                    data: data, totalByteCount: data.count + 1, reachedEndOfFile: true),
+                standardError: ProcessRunner.CapturedOutput(
+                    data: Data(), totalByteCount: 0, reachedEndOfFile: true),
+                duration: .milliseconds(1))
+            XCTAssertThrowsError(try TranscriptionEngine.transcript(from: result, kind: kind)) {
+                XCTAssertEqual($0 as? TranscriptionError, .malformedOutput)
+            }
+            XCTAssertEqual(
+                try TranscriptionEngine.transcript(from: outcome(stdout: text), kind: kind), "kept prefix")
+        }
+    }
+
+    func testFoundryErrorWinsOverTextInTheSameReplyWithoutReadingErrorDetails() throws {
+        for errorJSON in ["{}", "\"failure\"", "false", "0"] {
+            for prefix in ["", "Loading model\n"] {
+                let reply = prefix + "{\"text\":\"partial words\",\"error\":\(errorJSON)}"
+                XCTAssertThrowsError(
+                    try TranscriptionEngine.transcript(from: outcome(stdout: reply), kind: .foundryLocal)
+                ) {
+                    XCTAssertEqual($0 as? TranscriptionError, .backendReportedError)
+                }
+            }
+        }
+        XCTAssertEqual(
+            try TranscriptionEngine.transcript(
+                from: outcome(stdout: "{\"text\":\"complete\",\"error\":null}"), kind: .foundryLocal),
+            "complete")
+    }
+
+    func testFoundryMixedErrorAndTextRefusesTheRecordingAndDeletesScratch() async throws {
+        let recorder = recordScribeLog()
+        let directory = try makeTemporaryDirectory(label: "asr-mixed-error")
+        let script = try makeScript(
+            """
+            printf '{"text":"%s","error":{"message":"%s"}}\\n' \
+            '\(PrivacyCanary.transcript)' '\(PrivacyCanary.secret)'
+            """, in: directory, named: "foundry")
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch"))
+        let engine = makeEngine(foundry: script, scratch: scratch)
+        let error = await transcriptionError { try await engine.transcribe(samples: self.tone, sampleRate: 16_000) }
+        XCTAssertEqual(error, .backendReportedError)
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+        PrivacyCanary.assertAbsent(from: recorder.publicText)
+    }
+
+    func testFoundryRefusesDamagedUTF8InWholeOrProgressPrefixedReplies() throws {
+        for prefix in ["", "Loading model\n"] {
+            let valid = prefix + "{\"text\":\"caf\u{00E9}\"}"
+            XCTAssertEqual(
+                try TranscriptionEngine.transcript(from: outcome(stdout: valid), kind: .foundryLocal), "caf\u{00E9}")
+            let data = Data((prefix + "{\"text\":\"caf").utf8) + Data([0xFF]) + Data("\"}".utf8)
+            let result = ProcessRunner.Outcome(
+                terminationReason: .finished, exitStatus: 0, terminationSignal: nil,
+                standardOutput: ProcessRunner.CapturedOutput(
+                    data: data, totalByteCount: data.count, reachedEndOfFile: true),
+                standardError: ProcessRunner.CapturedOutput(
+                    data: Data(), totalByteCount: 0, reachedEndOfFile: true),
+                duration: .milliseconds(1))
+            XCTAssertThrowsError(try TranscriptionEngine.transcript(from: result, kind: .foundryLocal)) {
+                XCTAssertEqual($0 as? TranscriptionError, .malformedOutput)
+            }
+        }
+    }
+
+    func testWhisperRefusesInvalidUTF8InsteadOfReplacingLostTranscriptBytes() {
+        let result = ProcessRunner.Outcome(
+            terminationReason: .finished, exitStatus: 0, terminationSignal: nil,
+            standardOutput: ProcessRunner.CapturedOutput(
+                data: Data([0x61, 0xFF, 0x62]), totalByteCount: 3, reachedEndOfFile: true),
+            standardError: ProcessRunner.CapturedOutput(
+                data: Data(), totalByteCount: 0, reachedEndOfFile: true),
+            duration: .milliseconds(1))
+        XCTAssertThrowsError(try TranscriptionEngine.transcript(from: result, kind: .whisperCpp)) {
+            XCTAssertEqual($0 as? TranscriptionError, .malformedOutput)
+        }
+    }
+
+    func testOversizedFoundryStdoutRefusesAValidJSONPrefixAndDeletesScratch() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-output-overflow")
+        let script = try makeScript(
+            """
+            printf '{"text":"kept prefix"}\\n'
+            /usr/bin/head -c \(ProcessRunner.defaultOutputLimit + 1) /dev/zero
+            """, in: directory, named: "foundry")
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch"))
+        let engine = makeEngine(foundry: script, scratch: scratch)
+        let error = await transcriptionError { try await engine.transcribe(samples: self.tone, sampleRate: 16_000) }
+        XCTAssertEqual(error, .malformedOutput)
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+    }
+
     func testTheDeadlineGrowsWithTheAudioAndIsLongerWhileCold() {
         let deadlines = TranscriptionDeadlines()
 
@@ -636,6 +1124,38 @@ final class TranscriptionEngineTests: XCTestCase {
         XCTAssertEqual(deadlines.deadline(audioSeconds: 60, warm: false), .seconds(360))
         XCTAssertEqual(deadlines.deadline(audioSeconds: -5, warm: true), .seconds(30))
         XCTAssertEqual(deadlines.deadline(audioSeconds: .nan, warm: true), .seconds(30))
+    }
+
+    func testSignalTerminatedRecognizersNeverYieldACompleteLookingPrefix() {
+        for kind in [TranscriptionBackendKind.foundryLocal, .whisperCpp] {
+            for signal in [SIGTERM, SIGKILL, SIGABRT] {
+                let text = kind == .foundryLocal ? "{\"text\":\"prefix\"}" : "prefix"
+                XCTAssertThrowsError(
+                    try TranscriptionEngine.transcript(
+                        from: outcome(status: nil, signal: signal, stdout: text), kind: kind)
+                ) {
+                    XCTAssertEqual($0 as? TranscriptionError, .terminatedBySignal(signal))
+                }
+            }
+        }
+    }
+
+    func testFoundryKilledAfterPrintingJSONRefusesTextAndRemovesScratch() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-signal-prefix")
+        let script = try makeScript(
+            """
+            printf '{"text":"prefix"}\\n'
+            kill -TERM "$$"
+            """, in: directory, named: "foundry")
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch"))
+        let engine = makeEngine(foundry: script, scratch: scratch)
+        let error = await transcriptionError { try await engine.transcribe(samples: self.tone, sampleRate: 16_000) }
+        XCTAssertEqual(error, .terminatedBySignal(SIGTERM))
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+        try writeScript("printf '{\"text\":\"complete\"}'", at: script)
+        let recovered = try await engine.transcribe(samples: tone, sampleRate: 16_000)
+        XCTAssertEqual(recovered.text, "complete")
+        XCTAssertTrue(recovered.diagnostics.usedColdBudget)
     }
 
     // MARK: - Privacy

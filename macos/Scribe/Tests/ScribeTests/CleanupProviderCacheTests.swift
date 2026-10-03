@@ -5,6 +5,431 @@ import os
 @testable import Scribe
 
 final class CleanupProviderCacheTests: XCTestCase {
+    func testInvalidatingDisabledCleanupRetriesItsFormerLocalModelRetirement() async throws {
+        let fixture = makeCleanupStore()
+        configureOpenAICompatible(fixture.store)
+        fixture.store.isEnabled = true
+        fixture.store.localModelIdleMinutes = 0
+        let retryStarted = LifecycleGate()
+        let retry = LifecycleGate()
+        let attempts = LockedValue<Int>()
+        let lifecycle = LocalModelLifecycle(
+            idle: .zero,
+            actions: .init(
+                unloadModel: { _, model, _ in
+                    XCTAssertEqual(model, "local-model")
+                    let count = (attempts.value ?? 0) + 1
+                    attempts.set(count)
+                    return count > 1
+                },
+                unloadInstance: { _, _, _ in
+                    XCTFail("An ordinary model has no tracked instance")
+                    return false
+                }),
+            sleeper: { duration in
+                XCTAssertEqual(duration, .seconds(30))
+                retryStarted.open()
+                try await retry.wait()
+            })
+        let cache = CleanupProviderCache(
+            store: fixture.store, environment: [:],
+            factory: .testing(
+                session: makeStubSession { request in
+                    XCTFail("Retirement cannot send a completion")
+                    return StubReply.completion(request, "never")
+                }), lifecycle: lifecycle)
+        let target = try XCTUnwrap(cache.currentLocalTarget())
+        let use = try await lifecycle.beginUse(target)
+        use.end()
+        fixture.store.isEnabled = false
+        cache.invalidate()
+        try await retryStarted.wait()
+        XCTAssertEqual(attempts.value, 1)
+        retry.open()
+        let completed = await finishes(within: 30) {
+            while lifecycle.configurationRetirementCountForTests != 0 { await Task.yield() }
+        }
+        XCTAssertTrue(completed)
+        XCTAssertEqual(attempts.value, 2)
+    }
+
+    func testSavingACandidateKeyDoesNotMakeItsCopyLookLikeAnotherConfiguration() throws {
+        let rig = try makeRig()
+        configureOpenAICompatible(rig.store)
+        rig.store.selectedLocalApp = .lmStudio
+        rig.store.lmStudioContextTokens = 8192
+        let before = try CleanupProviderResolver.connection(store: rig.store, environment: [:])
+        try rig.store.setOpenAIApiKey("newly-saved-candidate-key")
+        let after = try CleanupProviderResolver.connection(store: rig.store, environment: [:])
+        XCTAssertNotEqual(before, after)
+        XCTAssertTrue(CleanupProviderCache.usesSameLocalCopy(before, after))
+        rig.store.lmStudioContextTokens = 4096
+        let changedSize = try CleanupProviderResolver.connection(store: rig.store, environment: [:])
+        XCTAssertFalse(CleanupProviderCache.usesSameLocalCopy(before, changedSize))
+    }
+
+    @MainActor
+    func testChosenSizeTestRefusesAFailedLoadForSavedAndCandidateSettings() async throws {
+        for candidateCheck in [false, true] {
+            let rig = try makeRig(
+                reply: { request in
+                    if request.url?.path == "/api/v1/chat" {
+                        return StubReply.json(request, status: 400, #"{"error":"size refused"}"#)
+                    }
+                    return StubReply.completion(request, "default-size-answer")
+                },
+                readLocalServer: { _, _ in LocalServerState(reach: .reached, models: [], loaded: []) })
+            configureOpenAICompatible(rig.store)
+            rig.store.selectedLocalApp = .lmStudio
+            rig.store.lmStudioContextTokens = 8192
+            let check: CleanupConnectionCheck
+            if candidateCheck {
+                let candidate = CleanupConnectionCandidate(
+                    settings: CleanupSettingsAccess.backed(by: rig.store, providers: rig.cache).load(),
+                    openAIApiKey: nil, azureClientSecret: nil, azureApiKey: nil,
+                    writingStyle: "", frontierPrompt: "", localPrompt: "")
+                check = await rig.cache.checkConnection(candidate: candidate)
+            } else {
+                check = await rig.cache.checkConnection()
+            }
+            XCTAssertFalse(check.reachable)
+            XCTAssertTrue(check.message.contains("could not load the model at the chosen context size"), check.message)
+            XCTAssertEqual(rig.requests.all.map(\.path), ["/api/v1/chat"])
+            XCTAssertTrue(rig.cache.lifecycle.ownedCopies.isEmpty)
+        }
+    }
+
+    func testChosenSizeTestSendsNothingWhenAnotherRequestUsesTheModel() async throws {
+        let rig = try makeRig(
+            readLocalServer: { _, _ in LocalServerState(reach: .reached, models: [], loaded: []) })
+        configureOpenAICompatible(rig.store)
+        rig.store.selectedLocalApp = .lmStudio
+        rig.store.lmStudioContextTokens = 8192
+        let active = try await rig.cache.lifecycle.beginUse(
+            LocalModelTarget(endpoint: "http://127.0.0.1:1234/v1", model: "m", app: .lmStudio, apiKey: nil))
+        defer { active.end() }
+        let check = await rig.cache.checkConnection()
+        XCTAssertFalse(check.reachable)
+        XCTAssertTrue(check.message.contains("Test again when the other request has finished"), check.message)
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    func testChosenSizeTestDoesNotSendAfterAnUnreadableResidencyCheck() async throws {
+        let rig = try makeRig(readLocalServer: { _, _ in .failed })
+        configureOpenAICompatible(rig.store)
+        rig.store.selectedLocalApp = .lmStudio
+        rig.store.lmStudioContextTokens = 8192
+        let check = await rig.cache.checkConnection()
+        XCTAssertFalse(check.reachable)
+        XCTAssertTrue(check.message.contains("could not confirm LM Studio's loaded model"), check.message)
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    @MainActor
+    func testAnOversizeChosenOllamaProbeFailsWithoutSendingOrDroppingItsInstructions() async throws {
+        let rig = try makeRig()
+        rig.store.providerKind = .ollama
+        rig.store.ollamaContextTokens = 2048
+        rig.store.localPrompt = String(repeating: "instruction ", count: 2000)
+        let check = await rig.cache.checkConnection()
+        XCTAssertFalse(check.reachable)
+        XCTAssertTrue(check.message.contains("does not fit the available context size"), check.message)
+        XCTAssertTrue(rig.requests.all.isEmpty)
+    }
+
+    @MainActor
+    func testManagedOllamaCandidateUsesItsSizeWithoutChangingSavedSettings() async throws {
+        let rig = try makeRig(reply: { request in
+            if request.url?.path == "/api/show" {
+                return StubReply.json(request, #"{"model_info":{"gemma.context_length":32768}}"#)
+            }
+            if request.url?.path == "/api/ps" {
+                return StubReply.json(request, #"{"models":[{"name":"qwen2.5:3b","context_length":32768}]}"#)
+            }
+            if request.url?.path == "/api/chat" {
+                return StubReply.json(request, #"{"message":{"role":"assistant","content":"OK"},"done":true}"#)
+            }
+            return StubReply.completion(request, "ok")
+        })
+        rig.store.providerKind = .ollama
+        rig.store.ollamaContextTokens = 4096
+        var settings = CleanupSettingsAccess.backed(by: rig.store, providers: rig.cache).load()
+        settings.ollamaContextTokens = 8192
+        let candidate = CleanupConnectionCandidate(
+            settings: settings, openAIApiKey: nil, azureClientSecret: nil, azureApiKey: nil,
+            writingStyle: "", frontierPrompt: "", localPrompt: "")
+        let check = await rig.cache.checkConnection(candidate: candidate)
+        XCTAssertTrue(check.reachable, check.message)
+        let candidateSend = try XCTUnwrap(rig.requests.all.first { $0.url?.path == "/api/chat" })
+        XCTAssertEqual(candidateSend.url?.path, "/api/chat")
+        XCTAssertEqual((candidateSend.jsonBody["options"] as? [String: Any])?["num_ctx"] as? Int, 8192)
+        XCTAssertEqual(rig.store.ollamaContextTokens, 4096)
+
+        let old = try rig.cache.provider()
+        rig.store.ollamaContextTokens = 16384
+        let new = try rig.cache.provider()
+        XCTAssertFalse((old as AnyObject) === (new as AnyObject))
+        _ = try await old.clean(CleanupRequest(transcript: "earlier snapshot", maxOutputTokens: 16))
+        _ = try await new.clean(CleanupRequest(transcript: "new snapshot", maxOutputTokens: 16))
+        let sizes = rig.requests.all.compactMap {
+            ($0.jsonBody["options"] as? [String: Any])?["num_ctx"] as? Int
+        }
+        XCTAssertEqual(sizes, [8192, 4096, 16384])
+    }
+
+    @MainActor
+    func testLMStudioCandidateUsesItsOwnContextAppAndKeyWithoutSaving() async throws {
+        let loaded = LockedValue<Bool>()
+        let rig = try makeRig(
+            reply: { request in
+                if request.url?.path == "/api/v1/chat" {
+                    loaded.set(true)
+                    return StubReply.json(request, status: 200, #"{"model_instance_id":"candidate-copy"}"#)
+                }
+                return StubReply.completion(request, "ok")
+            },
+            readLocalServer: { _, _ in
+                LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: loaded.value == true
+                        ? [LocalServerLoadedModel("local-model", 0, contextTokens: 8192, instanceID: "candidate-copy")]
+                        : [])
+            })
+        configureOpenAICompatible(rig.store)
+        rig.store.selectedLocalApp = .none
+        rig.store.lmStudioContextTokens = 4096
+        var settings = CleanupSettingsAccess.backed(by: rig.store, providers: rig.cache).load()
+        settings.selectedLocalApp = .lmStudio
+        settings.openAIBaseURL = "http://127.0.0.1:1234/v1"
+        settings.lmStudioContextTokens = 8192
+        let candidate = CleanupConnectionCandidate(
+            settings: settings, openAIApiKey: "candidate-key", azureClientSecret: nil, azureApiKey: nil,
+            writingStyle: "", frontierPrompt: "", localPrompt: "")
+
+        let check = await rig.cache.checkConnection(candidate: candidate)
+
+        XCTAssertTrue(check.reachable, check.message)
+        XCTAssertEqual(rig.requests.all.map(\.path), ["/api/v1/chat", "/v1/chat/completions"])
+        let load = try XCTUnwrap(rig.requests.all.first)
+        XCTAssertEqual(load.jsonBody["context_length"] as? Int, 8192)
+        XCTAssertEqual(load.jsonBody["store"] as? Bool, false)
+        XCTAssertEqual(load.header("Authorization"), "Bearer candidate-key")
+        XCTAssertEqual(rig.requests.all.last?.header("Authorization"), "Bearer candidate-key")
+        XCTAssertEqual(rig.store.selectedLocalApp, .none)
+        XCTAssertEqual(rig.store.lmStudioContextTokens, 4096)
+        XCTAssertEqual(rig.fixture.apiKeys.writes, 0)
+    }
+
+    func testContextAndLocalAppChangesRebuildRatherThanMutateAnExistingProvider() async throws {
+        let rig = try makeRig()
+        configureOpenAICompatible(rig.store)
+        rig.store.selectedLocalApp = .lmStudio
+        rig.store.lmStudioContextTokens = 4096
+        let first = try rig.cache.provider()
+        rig.store.lmStudioContextTokens = 8192
+        let second = try rig.cache.provider()
+        XCTAssertFalse((first as AnyObject) === (second as AnyObject))
+        rig.store.selectedLocalApp = .none
+        let third = try rig.cache.provider()
+        XCTAssertFalse((second as AnyObject) === (third as AnyObject))
+    }
+
+    func testChangingIdleTimeRebuildsTheRetentionSentByTheProvider() async throws {
+        let rig = try makeRig()
+        rig.store.providerKind = .ollama
+        let request = CleanupRequest(transcript: "sample", writingStylePrompt: "Edit.", maxOutputTokens: 32)
+        _ = try await rig.cache.provider().clean(request)
+        XCTAssertEqual(rig.requests.all.last?.jsonBody["keep_alive"] as? String, "10m")
+        rig.store.localModelIdleMinutes = 30
+        _ = try await rig.cache.provider().clean(request)
+        XCTAssertEqual(rig.requests.all.last?.jsonBody["keep_alive"] as? String, "30m")
+        rig.store.localModelIdleMinutes = 0
+        _ = try await rig.cache.provider().clean(request)
+        XCTAssertNil(rig.requests.all.last?.jsonBody["keep_alive"])
+    }
+
+    func testDictationAdmissionRefusesAConfigurationThatChangesBackDuringPlanning() async throws {
+        let fixture = makeCleanupStore()
+        let store = fixture.store
+        store.isEnabled = true
+        configureOpenAICompatible(store)
+        store.selectedLocalApp = .lmStudio
+        let log = RequestLog()
+        let factory = CleanupProviderFactory.testing(
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "Unused.")
+            },
+            readLocalServer: { _, _ in
+                let model = store.openAIModel
+                store.openAIModel = "changed"
+                store.openAIModel = model
+                return LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: [LocalServerLoadedModel("local-model", 0, contextTokens: 8192)])
+            })
+        let cache = CleanupProviderCache(store: store, environment: [:], factory: factory)
+        let provider = try cache.admittedProvider()
+        do {
+            _ = try await provider.contextForPlanning()
+            XCTFail("A changed-back revision cannot authorize a plan")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+        do {
+            _ = try await provider.clean(CleanupRequest(transcript: "private sample", maxOutputTokens: 32))
+            XCTFail("An obsolete admitted provider cannot send")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+        XCTAssertEqual(log.count, 0)
+    }
+
+    @MainActor
+    func testCancelledLiveProviderLookupReadsNoSecret() async throws {
+        let apiKeys = InMemorySecretStore([CleanupSettingsStore.openAIApiKeyAccount: "sk-test"])
+        let rig = try makeRig(apiKeys: apiKeys)
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        let cleanup = LiveDictationCleanup(cache: rig.cache)
+        let lookup = Task {
+            _ = withUnsafeCurrentTask { $0?.cancel() }
+            return try await cleanup.provider()
+        }
+        do {
+            _ = try await lookup.value
+            XCTFail("Cancelled lookup cannot return a provider")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(apiKeys.reads, 0)
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    @MainActor
+    func testLiveProviderLookupForwardsCancellationThroughHeldSecretRead() async throws {
+        let apiKeys = InMemorySecretStore([CleanupSettingsStore.openAIApiKeyAccount: "sk-test"])
+        let rig = try makeRig(apiKeys: apiKeys)
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        let pause = apiKeys.pauseNextRead()
+        let cleanup = LiveDictationCleanup(cache: rig.cache)
+        let lookup = Task { try await cleanup.provider() }
+        let reached = await finishes(within: 30) { await pause.waitUntilReached() }
+        XCTAssertTrue(reached, "The detached lookup must reach its secret read")
+        lookup.cancel()
+        pause.releaseOnceCancelled()
+        do {
+            _ = try await lookup.value
+            XCTFail("A late secret read cannot return a cancelled provider lookup")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(apiKeys.reads, 1)
+        XCTAssertEqual(rig.requests.count, 0)
+        _ = try await cleanup.provider()
+    }
+
+    @MainActor
+    func testTheLiveDictationAdapterDropsAnAnswerAfterItsSettingsChange() async throws {
+        let rig = try makeRig()
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        rig.store.openAIBaseURL = "https://remote.example/v1"
+        let store = rig.store
+        let log = RequestLog()
+        let cache = CleanupProviderCache(
+            store: store, environment: [:],
+            factory: .testing(
+                session: makeStubSession { request in
+                    log.record(request)
+                    store.isEnabled = false
+                    return StubReply.completion(request, "Stale.")
+                }))
+        let provider = try await LiveDictationCleanup(cache: cache).provider()
+        do {
+            _ = try await provider.clean(CleanupRequest(transcript: "private sample"))
+            XCTFail("The actual dictation adapter must discard obsolete answers")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+        XCTAssertEqual(log.count, 1)
+    }
+
+    @MainActor
+    func testTheLiveDictationAdapterChecksTheRevisionAtTheActualLocalSend() async throws {
+        let fixture = makeCleanupStore()
+        let store = fixture.store
+        configureOpenAICompatible(store)
+        store.isEnabled = true
+        store.selectedLocalApp = .lmStudio
+        let log = RequestLog()
+        let factory = CleanupProviderFactory.testing(
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "Unused.")
+            },
+            readLocalServer: { _, _ in
+                store.isEnabled = false
+                store.isEnabled = true
+                return LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: [LocalServerLoadedModel("local-model", 0, contextTokens: 8192)])
+            })
+        let cache = CleanupProviderCache(store: store, environment: [:], factory: factory)
+        let provider = try await LiveDictationCleanup(cache: cache).provider()
+        do {
+            _ = try await provider.clean(
+                CleanupRequest(transcript: "private sample", writingStylePrompt: "Edit.", maxOutputTokens: 32))
+            XCTFail("Changing back while residency is read cannot authorize URLSession resume")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+        XCTAssertEqual(log.count, 0)
+    }
+
+    func testOneOffAdmissionRefusesAConfigurationThatChangedBack() async throws {
+        let rig = try makeRig()
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        let admission = try rig.cache.admitOneOff()
+        let model = rig.store.openAIModel
+        rig.store.openAIModel = "other"
+        rig.store.openAIModel = model
+        do {
+            _ = try await rig.cache.completeOneOff(
+                CleanupRequest(transcript: "private sample", writingStylePrompt: "instructions"),
+                admission: admission)
+            XCTFail("the admission must not survive a configuration change")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    func testOneOffDropsTheReplyWhenSettingsChangeAfterHandoff() async throws {
+        let fixture = makeCleanupStore()
+        fixture.store.isEnabled = true
+        configureOpenAICompatible(fixture.store)
+        fixture.store.openAIBaseURL = "https://remote.example/v1"
+        let store = fixture.store
+        let session = makeStubSession { request in
+            store.isEnabled = false
+            return StubReply.completion(request, "stale reply")
+        }
+        let factory = CleanupProviderFactory.testing(session: session)
+        let cache = CleanupProviderCache(store: fixture.store, environment: [:], factory: factory)
+        let admission = try cache.admitOneOff()
+        do {
+            _ = try await cache.completeOneOff(
+                CleanupRequest(transcript: "private sample", writingStylePrompt: "instructions"),
+                admission: admission)
+            XCTFail("a stale reply must not be presented")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+    }
+
     private struct Rig {
         let fixture: CleanupStoreFixture
         let cache: CleanupProviderCache
@@ -32,6 +457,8 @@ final class CleanupProviderCacheTests: XCTestCase {
             StubReply.completion($0, "Cleaned.")
         },
         checkTimer: (@Sendable (Duration) async throws -> Void)? = nil,
+        readinessTimer: (@Sendable (Duration) async throws -> Void)? = nil,
+        readLocalServer: (@Sendable (String, String?) async -> LocalServerState)? = nil,
         foundryStatus: FoundryLocalStatusSource? = nil,
         azureCliLaunch: AzureCliCredentialProvider.Launch? = nil
     ) throws -> Rig {
@@ -53,13 +480,23 @@ final class CleanupProviderCacheTests: XCTestCase {
         let fixture = makeCleanupStore(apiKeys: apiKeys, clientSecrets: clientSecrets)
         let factory = CleanupProviderFactory.testing(
             session: session, foundryStatus: foundryStatus ?? fakeFoundryStatus.source, azureCli: azureCli,
-            azureCliLaunch: azureCliLaunch, azureCliSearchPath: [azDirectory.path(percentEncoded: false)], clock: clock)
+            azureCliLaunch: azureCliLaunch, azureCliSearchPath: [azDirectory.path(percentEncoded: false)], clock: clock,
+            readLocalServer: readLocalServer ?? { _, _ in
+                LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: [
+                        LocalServerLoadedModel("local-model", 1, contextTokens: 8192),
+                        LocalServerLoadedModel(CleanupSettingsStore.defaultOllamaModel, 1, contextTokens: 4096),
+                    ])
+            })
         let realTimer: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
         let timer: @Sendable (Duration) async throws -> Void = checkTimer ?? realTimer
         let cache = CleanupProviderCache(
             store: fixture.store, environment: environment, factory: factory,
-            checkDeadline: { kind in checkDeadline ?? CleanupProviderCache.checkDeadline(for: kind) },
-            checkTimer: timer)
+            checkDeadline: { kind, local in
+                checkDeadline ?? CleanupProviderCache.checkDeadline(for: kind, localApp: local)
+            },
+            checkTimer: timer, readinessTimer: readinessTimer ?? realTimer)
         return Rig(
             fixture: fixture, cache: cache, requests: requests, azureCli: azureCli, foundryStatus: fakeFoundryStatus,
             clock: clock)
@@ -90,7 +527,11 @@ final class CleanupProviderCacheTests: XCTestCase {
     }
 
     private func clean(_ rig: Rig) async throws {
-        _ = try await rig.cache.provider().clean(CleanupRequest(transcript: "raw text"))
+        let provider = try rig.cache.provider()
+        _ = try await provider.clean(
+            CleanupRequest(
+                transcript: "raw text", writingStylePrompt: "Edit.",
+                maxOutputTokens: provider.requiresOutputLimit ? 32 : nil))
     }
 
     private func same(_ first: any CleanupProvider, _ second: any CleanupProvider) -> Bool {
@@ -362,11 +803,51 @@ final class CleanupProviderCacheTests: XCTestCase {
         XCTAssertEqual(
             probe.messageContents,
             [
-                CleanupPrompt.systemPrompt(writingStyle: CleanupPrompt.defaultWritingStyle, useLocalPrompt: false),
+                CleanupPrompt.systemPrompt(writingStyle: CleanupPrompt.defaultWritingStyle, useLocalPrompt: true),
                 "<transcript>\nok\n</transcript>",
             ])
         XCTAssertEqual(rig.requests.count, 2)
         XCTAssertEqual(rig.fixture.apiKeys.reads, 1, "the dictation reused the provider Test Connection built")
+    }
+
+    @MainActor
+    func testTestConnectionUsesUnsavedFoundryCredentialsAndPromptDrafts() async throws {
+        let rig = try makeRig()
+        var settings = CleanupSettingsAccess.backed(by: rig.store, providers: rig.cache).load()
+        settings.isEnabled = true
+        settings.providerKind = .microsoftFoundry
+        settings.azureEndpoint = "https://my-res.services.ai.azure.com/api/projects/my-project"
+        settings.azureDeployment = "gpt-5-mini"
+        settings.azureAuthMode = .servicePrincipal
+        settings.azureApiKeySelected = true
+        settings.azureTenantId = ""
+        settings.azureClientId = ""
+        let key = "unsaved-foundry-key"
+        let writingStyle = "Use the candidate style."
+        let detailedPrompt = "Candidate detailed guardrails."
+        let localPrompt = "Candidate local guardrails."
+        let candidate = CleanupConnectionCandidate(
+            settings: settings,
+            openAIApiKey: nil,
+            azureClientSecret: nil,
+            azureApiKey: key,
+            writingStyle: writingStyle,
+            frontierPrompt: detailedPrompt,
+            localPrompt: localPrompt)
+
+        let check = await rig.cache.checkConnection(candidate: candidate)
+
+        XCTAssertTrue(check.reachable, check.message)
+        let request = try XCTUnwrap(rig.requests.all.first)
+        XCTAssertEqual(request.header("api-key"), key)
+        XCTAssertNil(request.header("Authorization"))
+        XCTAssertEqual(
+            request.messageContents,
+            [detailedPrompt + "\n\nWriting style:\n" + writingStyle, "<transcript>\nok\n</transcript>"])
+        XCTAssertEqual(rig.azureCli.launches, 0)
+        XCTAssertEqual(rig.fixture.azureApiKeys.writes, 0)
+        XCTAssertFalse(
+            rig.fixture.defaults.dictionaryRepresentation().values.contains { ($0 as? String) == key })
     }
 
     func testTestConnectionReportsADeploymentThatCannotClean() async throws {
@@ -399,6 +880,27 @@ final class CleanupProviderCacheTests: XCTestCase {
         XCTAssertFalse(check.reachable)
         XCTAssertEqual(check.message, CleanupConfigurationProblem.openAIEndpointMissing.message(for: .settings))
         XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    func testTestConnectionDeadlineFollowsTheRecognizedLocalTarget() {
+        XCTAssertEqual(CleanupProviderCache.checkDeadline(for: .openAICompatible, localApp: true), .seconds(180))
+        XCTAssertEqual(CleanupProviderCache.checkDeadline(for: .openAICompatible, localApp: false), .seconds(90))
+        XCTAssertEqual(CleanupProviderCache.checkDeadline(for: .microsoftFoundry, localApp: false), .seconds(90))
+        XCTAssertEqual(CleanupProviderCache.checkDeadline(for: .ollama, localApp: false), .seconds(180))
+    }
+
+    @MainActor
+    func testLMStudioTestConnectionWaitsOutTheLocalDeadlineAndARemoteEndpointDoesNot() async throws {
+        let waits = DurationLog()
+        let rig = try makeRig(checkTimer: { try await waits.add($0) })
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        _ = await rig.cache.checkConnection()
+        rig.store.openAIBaseURL = "https://api.example.com/v1"
+        rig.store.selectedLocalApp = .none
+        _ = await rig.cache.checkConnection()
+        XCTAssertEqual(waits.values.first, .seconds(180))
+        XCTAssertEqual(waits.values.last, .seconds(90))
     }
 
     func testTestConnectionGivesOnDeviceModelsTimeToLoad() {
@@ -501,7 +1003,7 @@ final class CleanupProviderCacheTests: XCTestCase {
     // MARK: - Test Connection's output ceiling
 
     /// Windows' readiness probe ceilings: 4096 for a Microsoft Foundry deployment, which may reason before it answers,
-    /// and 16 for the rest. A dictation carries no ceiling.
+    /// and 16 for the rest. Recognized local runtimes retain a dictation's output ceiling too.
     func testTheCheckCapsTheAnswerAsWindowsDoes() async throws {
         let cases: [(kind: CleanupProviderKind, ceiling: Int)] = [
             (.foundryLocal, 16), (.ollama, 16), (.openAICompatible, 16), (.microsoftFoundry, 4096),
@@ -515,6 +1017,7 @@ final class CleanupProviderCacheTests: XCTestCase {
                 rig.store.providerKind = .ollama
             case .openAICompatible:
                 configureOpenAICompatible(rig.store)
+                rig.store.openAIBaseURL = "http://127.0.0.1:1235/v1"
             case .microsoftFoundry:
                 configureMicrosoftFoundry(rig.store)
             }
@@ -526,8 +1029,17 @@ final class CleanupProviderCacheTests: XCTestCase {
             let bodies = rig.requests.all.filter { $0.host != Self.entraHost }.map(\.jsonBody)
             XCTAssertEqual(bodies.count, 2, "\(kind)")
             XCTAssertEqual(bodies.first?["max_completion_tokens"] as? Int, ceiling, "\(kind)")
-            XCTAssertNil(bodies.last?["max_completion_tokens"], "\(kind): a dictation has no ceiling")
-            XCTAssertNil(bodies.first?["max_tokens"], "\(kind)")
+            if kind == .ollama || kind == .foundryLocal {
+                XCTAssertEqual(bodies.last?["max_completion_tokens"] as? Int, 32)
+            } else {
+                XCTAssertNil(bodies.last?["max_completion_tokens"], "\(kind): a dictation has no ceiling")
+            }
+            let copiedLimit = bodies.first?["max_tokens"] as? Int
+            if kind == .ollama || kind == .openAICompatible {
+                XCTAssertEqual(copiedLimit, ceiling, "\(kind)")
+            } else {
+                XCTAssertNil(copiedLimit, "\(kind)")
+            }
         }
     }
 
@@ -564,6 +1076,23 @@ final class CleanupProviderCacheTests: XCTestCase {
 
     // MARK: - Test Connection passes wherever dictation works
 
+    func testAContextBoundLocalCheckNeverClaimsItConfirmedWithoutAnOutputLimit() async throws {
+        for lengthStop in [true, false] {
+            let rig = try makeRig { request in
+                lengthStop
+                    ? StubReply.completion(request, nil, finishReason: "length")
+                    : StubReply.json(request, status: 400, #"{"error":{"message":"refused"}}"#)
+            }
+            configureOpenAICompatible(rig.store)
+            rig.store.selectedLocalApp = .lmStudio
+            let check = try await boundedCheck(rig.cache)
+            XCTAssertFalse(check.reachable)
+            XCTAssertEqual(rig.requests.count, lengthStop ? 1 : 2)
+            XCTAssertTrue(rig.requests.all.allSatisfy { $0.jsonBody["max_completion_tokens"] as? Int == 16 })
+            XCTAssertFalse(check.message.contains("without one"))
+        }
+    }
+
     /// A reasoning model can spend the probe's whole ceiling thinking and stop at `length` with nothing visible. One
     /// request without the ceiling then comes back with text, so the check passes, says only that the model answered,
     /// and the dictation that follows cleans with it. The confirmation carries neither field.
@@ -574,6 +1103,7 @@ final class CleanupProviderCacheTests: XCTestCase {
                 : StubReply.completion(request, nil, finishReason: "length")
         }
         configureOpenAICompatible(rig.store)
+        rig.store.openAIBaseURL = "http://127.0.0.1:1235/v1"
 
         let check = try await boundedCheck(rig.cache)
         try await clean(rig)
@@ -595,10 +1125,11 @@ final class CleanupProviderCacheTests: XCTestCase {
     /// never writes text) would fail every dictation, so it fails the check: the confirmation without a ceiling stops
     /// the same way. A confirmation refused outright fails it too. Either way there is no third request.
     func testAServerThatStopsEveryRequestAtLengthFailsTheCheck() async throws {
-        let replies: [(name: String, reply: @Sendable (URLRequest) -> (HTTPURLResponse, Data))] = [
-            ("always length", { request in StubReply.completion(request, nil, finishReason: "length") }),
+        let replies: [(name: String, sent: Int, reply: @Sendable (URLRequest) -> (HTTPURLResponse, Data))] = [
+            ("always length", 2, { request in StubReply.completion(request, nil, finishReason: "length") }),
             (
                 "length, then refused",
+                3,
                 { request in
                     RecordedRequest(request).jsonBody["max_completion_tokens"] == nil
                         ? StubReply.json(request, status: 400, #"{"error":{"message":"refused"}}"#)
@@ -606,18 +1137,20 @@ final class CleanupProviderCacheTests: XCTestCase {
                 }
             ),
         ]
-        for (name, reply) in replies {
+        for (name, sent, reply) in replies {
             let rig = try makeRig(reply: reply)
             configureOpenAICompatible(rig.store)
+            rig.store.openAIBaseURL = "http://127.0.0.1:1235/v1"
 
             let check = try await boundedCheck(rig.cache)
 
             XCTAssertFalse(check.reachable, "\(name): \(check.message)")
-            XCTAssertEqual(rig.requests.count, 2, name)
+            XCTAssertEqual(rig.requests.count, sent, name)
             XCTAssertNil(rig.requests.all.last?.jsonBody["max_completion_tokens"], name)
         }
         let alwaysLength = try makeRig { request in StubReply.completion(request, nil, finishReason: "length") }
         configureOpenAICompatible(alwaysLength.store)
+        alwaysLength.store.openAIBaseURL = "http://127.0.0.1:1235/v1"
         let check = try await boundedCheck(alwaysLength.cache)
         XCTAssertEqual(
             check.message, "OpenAI-compatible endpoint: The model reached its output limit before writing any text.")
@@ -654,13 +1187,14 @@ final class CleanupProviderCacheTests: XCTestCase {
                 : StubReply.json(request, status: 400, #"{"error":{"message":"extra fields not permitted"}}"#)
         }
         configureOpenAICompatible(rig.store)
+        rig.store.openAIBaseURL = "http://127.0.0.1:1235/v1"
 
         let check = try await boundedCheck(rig.cache)
 
         XCTAssertFalse(check.reachable)
         XCTAssertEqual(
             check.message, "OpenAI-compatible endpoint: The model reached its output limit before writing any text.")
-        XCTAssertEqual(rig.requests.count, 2)
+        XCTAssertEqual(rig.requests.count, 3)
     }
 
     /// A strict server that declares only `max_tokens` and forbids every other field (vLLM 0.6.0) refuses the ceiling,
@@ -669,7 +1203,7 @@ final class CleanupProviderCacheTests: XCTestCase {
     func testAServerThatRefusesTheCeilingFieldPassesOnTheRetryWithout() async throws {
         for status in [400, 422] {
             let rig = try makeRig { request in
-                let allowed: Set<String> = ["model", "messages", "temperature", "stream", "max_tokens"]
+                let allowed: Set<String> = ["model", "messages", "stream"]
                 guard Set(RecordedRequest(request).jsonBody.keys).isSubset(of: allowed) else {
                     return StubReply.json(
                         request, status: status,
@@ -680,6 +1214,7 @@ final class CleanupProviderCacheTests: XCTestCase {
                 return StubReply.completion(request, "Cleaned.")
             }
             configureOpenAICompatible(rig.store)
+            rig.store.openAIBaseURL = "https://ai.example.invalid/v1"
             let recorder = recordScribeLog()
 
             let check = try await boundedCheck(rig.cache)
@@ -701,11 +1236,12 @@ final class CleanupProviderCacheTests: XCTestCase {
     /// Only a 400 or 422 to a request that carried the ceiling is retried, and only once: the retry's own 400 is the
     /// answer, and a 401 or a 404 is never retried.
     func testOnlyARefusalOfTheCeilingIsRetriedAndOnlyOnce() async throws {
-        for (status, sent) in [(400, 2), (422, 2), (401, 1), (404, 1)] {
+        for (status, sent) in [(400, 4), (422, 4), (401, 1), (404, 1)] {
             let rig = try makeRig { request in
                 StubReply.json(request, status: status, #"{"error":{"message":"refused"}}"#)
             }
             configureOpenAICompatible(rig.store)
+            rig.store.openAIBaseURL = "http://127.0.0.1:1235/v1"
 
             let check = try await boundedCheck(rig.cache)
 
@@ -786,5 +1322,193 @@ final class CleanupProviderCacheTests: XCTestCase {
 
             XCTAssertEqual(try rig.cache.provider().displayName, kind.providerName, "\(kind)")
         }
+    }
+
+    // MARK: - Recording readiness
+
+    @MainActor
+    private func prepare(_ cache: CleanupProviderCache) async -> LocalModelPreparationResult {
+        await cache.prepareLocalModel(isCurrent: { true }, onStarting: {})
+    }
+
+    @MainActor
+    func testAResidentLocalModelNeedsNoReadyingRequest() async throws {
+        let state = LocalServerState(
+            reach: .reached, models: [], loaded: [LocalServerLoadedModel("local-model", 1)])
+        let rig = try makeRig(readLocalServer: { _, _ in state })
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        rig.store.selectedLocalApp = .lmStudio
+        XCTAssertEqual(rig.store.snapshot().selectedLocalApp, .lmStudio)
+        XCTAssertEqual(LocalAiServer.appAt(rig.store.snapshot().openAIBaseURL), .lmStudio)
+        let connection = try CleanupProviderResolver.connection(store: rig.store, environment: [:])
+        XCTAssertEqual(connection.source, .settings)
+        XCTAssertEqual(connection.kind, .openAICompatible)
+        let provider = try rig.cache.provider()
+        XCTAssertTrue(provider is OpenAICompatibleCleanupProvider)
+
+        let result = await prepare(rig.cache)
+
+        XCTAssertEqual(result, .resident)
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    @MainActor
+    func testConcurrentRecordingsShareReadyingThroughTheLocalModelLane() async throws {
+        let reads = LockedValue<Int>()
+        let rig = try makeRig(readLocalServer: { _, _ in
+            let count = (reads.value ?? 0) + 1
+            reads.set(count)
+            let loaded = count > 1 ? [LocalServerLoadedModel("local-model", 1, contextTokens: 8192)] : []
+            return LocalServerState(reach: .reached, models: [], loaded: loaded, failureDetail: nil)
+        })
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        rig.store.selectedLocalApp = .lmStudio
+
+        let cache = rig.cache
+        async let first = cache.prepareLocalModel(isCurrent: { true }, onStarting: {})
+        async let second = cache.prepareLocalModel(isCurrent: { true }, onStarting: {})
+        let results = await [first, second]
+
+        XCTAssertEqual(results.filter { $0 == .resident }.count, 1)
+        XCTAssertEqual(results.filter { $0 == .started }.count, 1)
+        XCTAssertEqual(reads.value, 4)
+        XCTAssertEqual(rig.requests.count, 1, "the second recording should observe the first one's readying request")
+    }
+
+    @MainActor
+    func testAColdLocalModelGetsOneFixedReadyingRequestWithoutUserContent() async throws {
+        let reads = LockedValue<Int>()
+        let rig = try makeRig(
+            readLocalServer: { _, _ in
+                let count = (reads.value ?? 0) + 1
+                reads.set(count)
+                return LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: count > 2 ? [LocalServerLoadedModel("local-model", 1, contextTokens: 8192)] : [],
+                    failureDetail: nil)
+            })
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        rig.store.selectedLocalApp = .lmStudio
+        let starting = LockedValue<Bool>()
+
+        let result = await rig.cache.prepareLocalModel(
+            isCurrent: { true },
+            onStarting: { starting.set(true) })
+
+        XCTAssertEqual(result, .started)
+        XCTAssertEqual(starting.value, true)
+        XCTAssertEqual(rig.requests.count, 1)
+        let wire = try XCTUnwrap(rig.requests.all.first?.bodyText)
+        XCTAssertTrue(wire.contains("ok"))
+        XCTAssertTrue(wire.contains("Return only OK."))
+        for privateText in ["transcript-canary", "snippet-canary", "vocabulary-canary"] {
+            XCTAssertFalse(wire.contains(privateText))
+        }
+    }
+
+    @MainActor
+    func testAConfigurationChangeAfterTheResidencyReadSendsNoReadyingRequest() async throws {
+        let storeBox = LockedValue<CleanupSettingsStore>()
+        let rig = try makeRig(
+            readLocalServer: { _, _ in
+                storeBox.value?.openAIModel = "changed-model"
+                return LocalServerState(reach: .reached, models: [], loaded: [], failureDetail: nil)
+            })
+        storeBox.set(rig.store)
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        rig.store.selectedLocalApp = .lmStudio
+        let starting = LockedValue<Bool>()
+
+        let result = await rig.cache.prepareLocalModel(
+            isCurrent: { true },
+            onStarting: { starting.set(true) })
+
+        XCTAssertEqual(result, .configurationChanged)
+        XCTAssertFalse(result.permitsCleanup)
+        XCTAssertEqual(starting.value, nil)
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    @MainActor
+    func testCloudProvidersAreNeverReadiedOrTouchedByTheLocalManager() async throws {
+        let localReads = LockedValue<Int>()
+        let rig = try makeRig(readLocalServer: { _, _ in
+            localReads.set((localReads.value ?? 0) + 1)
+            return .failed
+        })
+        configureMicrosoftFoundry(rig.store)
+        rig.store.isEnabled = true
+
+        let result = await prepare(rig.cache)
+
+        XCTAssertEqual(result, .notApplicable)
+        XCTAssertEqual(localReads.value, nil)
+        XCTAssertEqual(rig.requests.count, 0)
+        XCTAssertEqual(rig.azureCli.launches, 0)
+    }
+
+    @MainActor
+    func testReadinessTimeoutCancelsItsLocalReadAndReturnsARealTimeout() async throws {
+        let read = HeldWork()
+        let rig = try makeRig(
+            readinessTimer: { _ in
+                await read.waitUntilStarted()
+                throw OperationDeadlineError.exceeded(seconds: 30)
+            },
+            readLocalServer: { _, _ in
+                do {
+                    try await read.hold()
+                } catch {}
+                return .failed
+            })
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        rig.store.selectedLocalApp = .lmStudio
+
+        let result = await prepare(rig.cache)
+
+        XCTAssertEqual(result, .timedOut)
+        XCTAssertTrue(read.sawCancellation)
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    @MainActor
+    func testCancellingReadinessCancelsItsLocalRead() async throws {
+        let read = HeldWork()
+        let rig = try makeRig(readLocalServer: { _, _ in
+            do {
+                try await read.hold()
+            } catch {}
+            return .failed
+        })
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        rig.store.selectedLocalApp = .lmStudio
+
+        let cache = rig.cache
+        let preparing = Task {
+            await cache.prepareLocalModel(isCurrent: { true }, onStarting: {})
+        }
+        await read.waitUntilStarted()
+        preparing.cancel()
+
+        let result = await preparing.value
+        XCTAssertEqual(result, .cancelled)
+        XCTAssertTrue(read.sawCancellation)
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+}
+
+private final class DurationLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [Duration] = []
+    var values: [Duration] { lock.withLock { stored } }
+    func add(_ value: Duration) async throws {
+        lock.withLock { stored.append(value) }
+        try await Task.sleep(for: .seconds(3600))
     }
 }

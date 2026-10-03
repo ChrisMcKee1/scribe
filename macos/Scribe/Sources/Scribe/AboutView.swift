@@ -1,6 +1,16 @@
 import AppKit
 import SwiftUI
 
+struct SettingsAboutPage: View {
+    let persistenceStore: PersistenceStore
+
+    var body: some View {
+        SettingsPage(title: "About", subtitle: "Version, updates, help, privacy and feedback.") {
+            AboutView(persistenceStore: persistenceStore)
+        }
+    }
+}
+
 /// About tab: version, Open at Login, updates, privacy stance, support and source links, GitHub star, and the
 /// local data location. Direct port of the intent behind Windows' `SectionAbout` in `SettingsWindow.xaml`,
 /// adapted to macOS conventions (Finder rather than File Explorer, no Microsoft Store share card since Scribe for
@@ -8,18 +18,9 @@ import SwiftUI
 struct AboutView: View {
     let persistenceStore: PersistenceStore
 
-    private static let repoURL = URL(string: "https://github.com/x3nc0n/scribe")!
-    private static let privacyPolicyURL = URL(string: "https://github.com/x3nc0n/scribe/blob/main/PRIVACY.md")!
-    private static let newIssueURL = URL(string: "https://github.com/x3nc0n/scribe/issues/new")!
-
-    @State private var updateChecker = UpdateChecker()
-    @State private var updateCheckResult: UpdateCheckResult?
-    @State private var isCheckingForUpdate = false
-    @StateObject private var loginItem: LoginItemSwitch
-
-    init(persistenceStore: PersistenceStore, loginItemService: any LoginItemService = SystemLoginItemService()) {
+    @StateObject private var updates = UpdateCheckModel()
+    init(persistenceStore: PersistenceStore) {
         self.persistenceStore = persistenceStore
-        _loginItem = StateObject(wrappedValue: LoginItemSwitch(service: loginItemService))
     }
 
     private var appVersion: String {
@@ -30,7 +31,6 @@ struct AboutView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 headerCard
-                startupCard
                 updateCard
                 privacyCard
                 starCard
@@ -38,6 +38,10 @@ struct AboutView: View {
                 dataLocationsCard
             }
             .padding(.vertical, 4)
+        }
+        .onDisappear { updates.cancel() }
+        .onReceive(NotificationCenter.default.publisher(for: SettingsWindowController.willCloseNotification)) { _ in
+            updates.cancel()
         }
     }
 
@@ -78,11 +82,11 @@ struct AboutView: View {
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 8) {
-                    Button(isCheckingForUpdate ? "Checking..." : "Check for Updates") {
-                        checkForUpdate()
+                    Button(updates.isChecking ? "Checking..." : "Check for Updates") {
+                        updates.start(currentVersion: appVersion)
                     }
-                    .disabled(isCheckingForUpdate)
-                    if case .updateAvailable(_, _, let url) = updateCheckResult {
+                    .disabled(updates.isChecking)
+                    if case .updateAvailable(_, _, let url) = updates.result {
                         Button("Download latest") {
                             NSWorkspace.shared.open(url)
                         }
@@ -93,58 +97,18 @@ struct AboutView: View {
         }
     }
 
-    /// "Open at Login", shown in About beside Updates because this port has no General section. It shows what
-    /// macOS reports and applies a flip at once (see `LoginItemSwitch`).
-    private var startupCard: some View {
-        card {
-            VStack(alignment: .leading, spacing: 8) {
-                Toggle(
-                    "Open Scribe AI at Login",
-                    isOn: Binding(
-                        get: { loginItem.isOn },
-                        set: { requested in
-                            Task { await loginItem.setEnabled(requested) }
-                        })
-                )
-                .font(.headline)
-                .disabled(!loginItem.canFlip)
-                Text(loginItem.message)
-                    .font(.footnote)
-                    .foregroundStyle(loginItem.refusal == nil ? Color.secondary : Color.red)
-                if loginItem.showsOpenLoginItems {
-                    Button("Open Login Items Settings") {
-                        loginItem.openLoginItems()
-                    }
-                }
-            }
-        }
-        .task {
-            await loginItem.refresh()
-        }
-    }
-
     private var updateStatusText: String {
-        switch updateCheckResult {
+        switch updates.result {
         case .none:
             return "Scribe has no auto-updater yet; check GitHub Releases manually for a newer version."
         case .upToDate(let current):
             return "You're up to date (version \(current))."
         case .updateAvailable(let current, let latest, _):
             return "Version \(latest) is available (you have \(current))."
+        case .noMacRelease:
+            return "No stable macOS download was found in the latest 100 GitHub releases."
         case .failed(let message):
             return message
-        }
-    }
-
-    private func checkForUpdate() {
-        isCheckingForUpdate = true
-        let version = appVersion
-        Task {
-            let result = await updateChecker.checkForUpdate(currentVersion: version)
-            await MainActor.run {
-                updateCheckResult = result
-                isCheckingForUpdate = false
-            }
         }
     }
 
@@ -163,7 +127,7 @@ struct AboutView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 Button("Read privacy policy") {
-                    NSWorkspace.shared.open(Self.privacyPolicyURL)
+                    NSWorkspace.shared.open(ScribeRepository.privacyURL)
                 }
             }
         }
@@ -181,7 +145,7 @@ struct AboutView: View {
                 }
                 Spacer()
                 Button("Open GitHub to star") {
-                    NSWorkspace.shared.open(Self.repoURL)
+                    NSWorkspace.shared.open(ScribeRepository.url)
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -205,11 +169,12 @@ struct AboutView: View {
                 }
                 Spacer()
                 VStack(spacing: 8) {
+                    SaveDiagnosticsButton()
                     Button("Report an issue") {
-                        NSWorkspace.shared.open(Self.newIssueURL)
+                        NSWorkspace.shared.open(ScribeRepository.newIssueURL)
                     }
                     Button("View source") {
-                        NSWorkspace.shared.open(Self.repoURL)
+                        NSWorkspace.shared.open(ScribeRepository.url)
                     }
                 }
             }

@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIGURATION="${1:-release}"
 APP_DIR="$PACKAGE_DIR/dist/Scribe.app"
+IDENTITY_NAME="Scribe Local Dev"
+SIGNING_KEYCHAIN="$HOME/Library/Keychains/scribe-dev.keychain-db"
+SETUP_SIGNING_SCRIPT="$SCRIPT_DIR/setup-dev-signing.sh"
 BIN_DIR="$(swift build --package-path "$PACKAGE_DIR" -c "$CONFIGURATION" --show-bin-path)"
 EXECUTABLE="$BIN_DIR/Scribe"
 
@@ -40,8 +43,16 @@ chmod +x "$APP_DIR/Contents/MacOS/Scribe"
 # checks that path first and only touches Bundle.module (which requires the app-root layout) as a
 # dev-only fallback when running via `swift build`/`swift run` outside a packaged .app.
 RESOURCE_BUNDLE="$BIN_DIR/ScribeMac_Scribe.bundle"
-if [ -d "$RESOURCE_BUNDLE/Libraries" ]; then
+# Newer SwiftPM toolchains lay the resource bundle out as a real macOS bundle
+# (Contents/Resources/Libraries); older ones put Libraries at the bundle root. Accept either, and
+# fail the build rather than ship an app without its word packs.
+if [ -d "$RESOURCE_BUNDLE/Contents/Resources/Libraries" ]; then
+    cp -R "$RESOURCE_BUNDLE/Contents/Resources/Libraries" "$APP_DIR/Contents/Resources/Libraries"
+elif [ -d "$RESOURCE_BUNDLE/Libraries" ]; then
     cp -R "$RESOURCE_BUNDLE/Libraries" "$APP_DIR/Contents/Resources/Libraries"
+else
+    echo "error: no Libraries folder in $RESOURCE_BUNDLE; the app would ship without its word packs." >&2
+    exit 1
 fi
 
 # Same brand mark as the Windows build (src/Scribe.App/Assets/scribe.ico) and the Store listing
@@ -90,23 +101,32 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 PLIST
 
 if command -v codesign >/dev/null 2>&1; then
-    # Signing consistently matters here: macOS's TCC (privacy) database keys Accessibility grants
-    # off the code signature, not the bundle path. Ad-hoc signing ("-") mints a fresh signature on
-    # every build, so a rebuilt app looks like a brand-new binary to TCC and re-prompts for
-    # Accessibility every single time, even though the user already granted it. A stable local
-    # signing identity ("Scribe Local Dev", a self-signed cert created by setup-dev-signing.sh)
-    # keeps the signature identical across rebuilds so one grant sticks.
+    # Signing consistently matters here: macOS's TCC (privacy) database keys Accessibility and
+    # Input Monitoring grants off the code signature, not the bundle path. Ad-hoc signing ("-")
+    # mints a fresh signature on every build, so a rebuilt app looks like a brand-new binary to TCC
+    # and re-prompts even though the user already granted it. A stable local signing identity keeps
+    # the signature identical across rebuilds so one grant sticks.
     #
     # Note: `security find-identity -v` filters to identities the system CA policy *trusts*, which
     # a self-signed dev cert never is, so it always reports 0 even when the identity works fine for
     # codesign. Check with `find-identity` (no -v) instead, which lists it as CSSMERR_TP_NOT_TRUSTED
     # but still matches, and codesign accepts it regardless of that trust status.
-    if security find-identity 2>/dev/null | grep -q "Scribe Local Dev"; then
-        codesign --force --deep --sign "Scribe Local Dev" "$APP_DIR" >/dev/null 2>&1 || \
-            codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || true
-    else
-        codesign --force --deep --sign - "$APP_DIR" >/dev/null 2>&1 || true
+    if ! security find-identity "$SIGNING_KEYCHAIN" 2>/dev/null | grep -Fq "\"$IDENTITY_NAME\""; then
+        if [ ! -x "$SETUP_SIGNING_SCRIPT" ]; then
+            echo "error: $SETUP_SIGNING_SCRIPT is missing or not executable" >&2
+            exit 1
+        fi
+        "$SETUP_SIGNING_SCRIPT"
     fi
+
+    if ! security find-identity "$SIGNING_KEYCHAIN" 2>/dev/null | grep -Fq "\"$IDENTITY_NAME\""; then
+        echo "error: required signing identity '$IDENTITY_NAME' was not found in $SIGNING_KEYCHAIN" >&2
+        echo "Run scripts/setup-dev-signing.sh and rebuild; refusing to fall back to ad-hoc signing." >&2
+        exit 1
+    fi
+
+    codesign --force --deep --keychain "$SIGNING_KEYCHAIN" --sign "$IDENTITY_NAME" "$APP_DIR"
+    codesign --verify --deep --strict "$APP_DIR"
 fi
 
 echo "Built app bundle: $APP_DIR (version $APP_VERSION, build $BUILD_NUMBER)"

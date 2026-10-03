@@ -329,6 +329,7 @@ final class CaptureTestDevice: CaptureDevice, Sendable {
         var interleaved = false
         var prepareError: (any Error)?
         var startError: (any Error)?
+        var microphoneSelection: MicrophoneSelectionOutcome?
         /// When set, `prepare` announces itself on `prepareEntered` and waits for `releasePrepare()`, 30 seconds at
         /// most, so a test that fails before releasing it cannot hold the engine's control queue for good.
         var holdsPrepare = false
@@ -408,6 +409,7 @@ final class CaptureTestDevice: CaptureDevice, Sendable {
     }
 
     var currentInputDeviceID: AudioDeviceID? { 42 }
+    var microphoneSelection: MicrophoneSelectionOutcome? { configuration.microphoneSelection }
 
     var counts: (prepared: Int, started: Int, closed: Int) {
         state.withLock { (prepared: $0.prepared, started: $0.started, closed: $0.closed) }

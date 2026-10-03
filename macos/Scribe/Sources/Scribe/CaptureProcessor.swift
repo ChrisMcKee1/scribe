@@ -61,6 +61,8 @@ struct CaptureEvent: Sendable, Equatable {
         /// The recording has ended by itself and keeps everything it captured until its owner calls
         /// `AudioCaptureEngine.stop(owner:)`. Posted once per recording.
         case stopRequested(CaptureEndReason)
+        /// Reported once, from the control queue after the device opens, never from the audio callback.
+        case microphoneSelection(MicrophoneSelectionOutcome)
     }
 
     let owner: RecordingID
@@ -112,6 +114,17 @@ struct CapturedAudio: Sendable {
     let owner: RecordingID
     let samples: [Float]
     let summary: AudioCaptureSummary
+    let microphoneSelection: MicrophoneSelectionOutcome?
+
+    init(
+        owner: RecordingID, samples: [Float], summary: AudioCaptureSummary,
+        microphoneSelection: MicrophoneSelectionOutcome? = nil
+    ) {
+        self.owner = owner
+        self.samples = samples
+        self.summary = summary
+        self.microphoneSelection = microphoneSelection
+    }
 }
 
 /// Everything one recording does with its audio between the device's tap and its owner's stop: per-channel
@@ -227,8 +240,11 @@ final class CaptureProcessor: Sendable {
     }
 
     /// Records when the device started delivering, for the summary.
-    func markOpened(at date: Date) {
-        state.withLockUnchecked { $0.openedAt = date }
+    func markOpened(at date: Date, selection: MicrophoneSelectionOutcome? = nil) {
+        state.withLockUnchecked {
+            $0.openedAt = date
+            $0.microphoneSelection = selection
+        }
     }
 
     /// Takes one buffer from the tap and returns what to tell the owner: at most one meter reading, then the
@@ -384,7 +400,8 @@ final class CaptureProcessor: Sendable {
                 acceptedBufferCount: state.accepted,
                 droppedBufferCount: state.dropped,
                 resamplerFlush: state.resamplerFlush ?? .notNeeded)
-            return CapturedAudio(owner: owner, samples: samples, summary: summary)
+            return CapturedAudio(
+                owner: owner, samples: samples, summary: summary, microphoneSelection: state.microphoneSelection)
         }
     }
 
@@ -446,6 +463,7 @@ final class CaptureProcessor: Sendable {
         var dropped = 0
         let createdAt: Date
         var openedAt: Date?
+        var microphoneSelection: MicrophoneSelectionOutcome?
         /// Unset until the recording ends and the resampler is flushed.
         var resamplerFlush: AudioCaptureSummary.ResamplerFlush?
 

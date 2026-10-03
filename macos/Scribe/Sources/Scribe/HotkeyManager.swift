@@ -321,7 +321,12 @@ final class HotkeyManager: DictationTriggerSource {
             if state.binding.gesture == .toggle {
                 event = .lockChanged(isOn: flags.contains(.maskAlphaShift))
             } else {
-                event = .modifierChanged(isDown: isDown(observed.keyCode, flags: flags))
+                event = .modifierChanged(
+                    isDown: modifierTransitionIsDown(
+                        observed.keyCode,
+                        flagsIsDown: isDownInFlags(observed.keyCode, flags: flags),
+                        sourceIsDown: readKeyDown(observed.keyCode),
+                        isEngaged: state.isEngaged))
             }
         case .keyDown:
             guard !observed.isSynthetic, observed.keyCode == state.binding.keyCode else { return }
@@ -405,6 +410,33 @@ final class HotkeyManager: DictationTriggerSource {
         61: 0x0040,  // Right Option
         62: 0x2000,  // Right Control
     ]
+
+    private static func modifierTransitionIsDown(
+        _ keyCode: CGKeyCode,
+        flagsIsDown: Bool,
+        sourceIsDown: Bool,
+        isEngaged: Bool
+    ) -> Bool {
+        guard deviceKeyMasks[keyCode] != nil else { return flagsIsDown || sourceIsDown }
+        return isEngaged ? flagsIsDown && sourceIsDown : flagsIsDown || sourceIsDown
+    }
+
+    private func modifierTransitionIsDown(
+        _ keyCode: CGKeyCode,
+        flagsIsDown: Bool,
+        sourceIsDown: Bool,
+        isEngaged: Bool
+    ) -> Bool {
+        Self.modifierTransitionIsDown(
+            keyCode, flagsIsDown: flagsIsDown, sourceIsDown: sourceIsDown, isEngaged: isEngaged)
+    }
+
+    private func isDownInFlags(_ keyCode: CGKeyCode, flags: CGEventFlags) -> Bool {
+        if let mask = Self.deviceKeyMasks[keyCode] {
+            return flags.rawValue & mask != 0
+        }
+        return false
+    }
 
     private func isDown(_ keyCode: CGKeyCode, flags: CGEventFlags) -> Bool {
         if let mask = Self.deviceKeyMasks[keyCode] {

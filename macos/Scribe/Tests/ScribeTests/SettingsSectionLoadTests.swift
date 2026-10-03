@@ -2,9 +2,23 @@ import XCTest
 
 @testable import Scribe
 
-/// The Windows `SettingsSectionLoadTests` that apply on macOS: the ticket rules. Windows' saved-state snapshot and
-/// `Invalidate` are not ported (see `SettingsSectionLoad`).
+/// The Windows ticket rules, including invalidation before a replacement read begins.
 final class SettingsSectionLoadTests: XCTestCase {
+    func testInvalidationWithdrawsEveryOldTicketWithoutBlockingTheNextRead() {
+        var section = SettingsSectionLoad()
+        let old = section.begin()
+        section.invalidate()
+        XCTAssertEqual(section.state, .unloaded)
+        XCTAssertFalse(section.publish(old))
+        XCTAssertFalse(section.fail(old))
+        let next = section.begin()
+        XCTAssertFalse(section.publish(old))
+        XCTAssertTrue(section.publish(next))
+        section.invalidate()
+        XCTAssertFalse(section.isLoaded)
+        XCTAssertFalse(section.publish(next))
+    }
+
     func testASectionStartsUnloadedAndLoadsThroughItsTicket() {
         var section = SettingsSectionLoad()
         XCTAssertEqual(section.state, .unloaded)

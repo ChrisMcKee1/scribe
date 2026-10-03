@@ -7,9 +7,8 @@ import Foundation
 /// is not something a tab can rely on.
 ///
 /// The macOS port of Windows' `SettingsSectionLoad` (`SettingsWindow` publishes and fails its history load through
-/// it). It leaves out Windows' saved-state snapshot, which only Windows' batch Save needs, and `Invalidate`, which
-/// exists for writes made around a loaded grid: every macOS Settings edit is written the moment it is made, and the
-/// tab reads its rows again afterwards, which starts a newer read than any already running.
+/// it). It leaves out Windows' saved-state snapshot, which only Windows' batch Save needs. Invalidation withdraws
+/// a period's read immediately when the selection changes, before its replacement task starts.
 ///
 /// Not thread-safe by design: its owner is a main-actor model, and the reads it tickets never touch it.
 struct SettingsSectionLoad: Equatable, Sendable {
@@ -36,6 +35,11 @@ struct SettingsSectionLoad: Equatable, Sendable {
         newest &+= 1
         state = .loading
         return newest
+    }
+
+    mutating func invalidate() {
+        newest &+= 1
+        state = .unloaded
     }
 
     /// Whether a finished read may still be shown: it is the newest read, and nothing has settled it yet.

@@ -32,6 +32,27 @@ final class CaptureTestDeviceFactory: Sendable {
 /// The engine with a scripted device: buffers arrive on threads the tests choose while the owner stops on the
 /// main actor, so ownership, generations and the control queue are exercised without a microphone.
 final class AudioCaptureEngineTests: XCTestCase {
+    func testTheOpenedDeviceReportsItsSelectionAndTheSealedAudioKeepsIt() async throws {
+        var configuration = CaptureTestDevice.Configuration()
+        let selection = MicrophoneSelectionOutcome(requestedUID: PrivacyCanary.path, result: .systemDefault)
+        configuration.microphoneSelection = selection
+        let device = CaptureTestDevice(configuration)
+        let engine = AudioCaptureEngine(makeDevice: { device })
+        let events = OSAllocatedUnfairLock<[MicrophoneSelectionOutcome]>(initialState: [])
+        let recorder = recordScribeLog()
+        let owner = RecordingID(rawValue: 1)
+        _ = try await engine.start(owner: owner, policy: .hold()) { event in
+            if case .microphoneSelection(let selection) = event.kind {
+                events.withLock { $0.append(selection) }
+            }
+        }
+        let captured = try XCTUnwrap(engine.stop(owner: owner))
+        await engine.waitUntilIdle()
+        XCTAssertEqual(events.withLock { $0 }, [selection])
+        XCTAssertEqual(captured.microphoneSelection, selection)
+        PrivacyCanary.assertAbsent(from: recorder.everyText)
+    }
+
     private func buffer(_ value: Float, frames: Int = 160, sampleRate: Double = 16_000) -> AVAudioPCMBuffer {
         AudioTestBuffers.mono([Float](repeating: value, count: frames), sampleRate: sampleRate)
     }
@@ -469,6 +490,27 @@ final class AudioCaptureEngineTests: XCTestCase {
 
 /// The relay the app uses to bring capture events to the main actor.
 final class CaptureEventRelayTests: XCTestCase {
+    @MainActor
+    func testASelectionAfterAStopIsNotLostOrCoalescedWithMeterReadings() async {
+        let received = MainActorEventList()
+        let delivered = AudioTestSignalLatch()
+        let relay = CaptureEventRelay { event in
+            received.append(event)
+            if case .microphoneSelection = event.kind { delivered.signal() }
+        }
+        let owner = RecordingID(rawValue: 1)
+        relay.post(CaptureEvent(owner: owner, kind: .stopRequested(.deviceChanged)))
+        relay.post(
+            CaptureEvent(
+                owner: owner,
+                kind: .microphoneSelection(MicrophoneSelectionOutcome(requestedUID: "chosen", result: .systemDefault))))
+        let arrived = await delivered.wait()
+        XCTAssertTrue(arrived)
+        XCTAssertEqual(received.events.count, 2)
+        if case .stopRequested = received.events[0].kind {} else { XCTFail("the stop was reordered") }
+        if case .microphoneSelection = received.events[1].kind {} else { XCTFail("the selection was lost") }
+    }
+
     @MainActor
     func testLevelsCoalesceWhileTheMainActorIsBusyAndStopRequestsAllArriveInOrder() async {
         let received = MainActorEventList()

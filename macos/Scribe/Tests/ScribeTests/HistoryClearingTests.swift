@@ -24,6 +24,10 @@ final class HistoryClearingTests: XCTestCase {
         await harness.waitUntilProcessed()
         XCTAssertEqual(harness.reports.latest?.finalText, "words the user is about to clear")
         XCTAssertEqual(harness.recovery.recent(), ["words the user is about to clear"])
+        var problem = try XCTUnwrap(harness.reports.latest)
+        problem.cleanupOutcome = .fellBack
+        harness.reports.publish(problem)
+        XCTAssertEqual(harness.reports.problems.count, 1)
 
         // A second dictation is still being recognized when the Clear runs.
         let recognizer = DictationGate<String>()
@@ -45,6 +49,7 @@ final class HistoryClearingTests: XCTestCase {
         clearing.apply()
 
         XCTAssertNil(harness.reports.latest, "the Playground still shows the cleared text")
+        XCTAssertTrue(harness.reports.problems.isEmpty, "Diagnostics still shows a cleared session problem")
         XCTAssertTrue(harness.recovery.recent().isEmpty)
         XCTAssertEqual(effects.notificationTextsForgotten, 1)
         XCTAssertEqual(effects.pillRecoveriesWithdrawn, 1)

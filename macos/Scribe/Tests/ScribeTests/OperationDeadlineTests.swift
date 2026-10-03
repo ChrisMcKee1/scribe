@@ -4,6 +4,50 @@ import XCTest
 @testable import Scribe
 
 final class OperationDeadlineTests: XCTestCase {
+    func testCancelledDeadlineRefusesLateSuccessAndWaitsForWorkSettlement() async throws {
+        let started = LifecycleGate()
+        let settle = LifecycleGate()
+        let stopped = LockedValue<Bool>()
+        let running = Task {
+            try await OperationDeadline.run(within: .seconds(30)) {
+                started.open()
+                await Task.detached { try? await settle.wait() }.value
+                stopped.set(true)
+                return 42
+            }
+        }
+        try await started.wait()
+        running.cancel()
+        XCTAssertNil(stopped.value)
+        settle.open()
+        do {
+            _ = try await running.value
+            XCTFail("A success returned by cancelled work cannot succeed")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(stopped.value, true)
+    }
+
+    func testAlreadyCancelledDeadlineStartsNeitherWorkNorTimer() async {
+        let running = Task {
+            _ = withUnsafeCurrentTask { $0?.cancel() }
+            return try await OperationDeadline.run(
+                within: .seconds(30),
+                sleep: { _ in XCTFail("An already cancelled call cannot start its timer") }
+            ) {
+                XCTFail("An already cancelled call cannot start work")
+                return 42
+            }
+        }
+        do {
+            _ = try await running.value
+            XCTFail("An already cancelled call cannot succeed")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
     func testAnOperationThatFinishesInTimeKeepsItsResult() async throws {
         let value = try await OperationDeadline.run(within: .seconds(30)) { 42 }
 

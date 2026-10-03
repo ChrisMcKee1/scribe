@@ -18,6 +18,7 @@ import os
 /// (`az login` as someone else). A change of settings needs no call, since the next `provider()` sees a different
 /// connection and builds a new provider, but one is harmless and drops the old credential at once.
 final class CleanupProviderCache: Sendable {
+    @TaskLocal static var isConnectionTest = false
     /// The app's cache, over the live settings store, the process environment and the live factory. No test uses it.
     static let shared = CleanupProviderCache(
         store: .live, environment: ProcessInfo.processInfo.environment, factory: .live)
@@ -25,9 +26,12 @@ final class CleanupProviderCache: Sendable {
     let store: CleanupSettingsStore
     private let environment: [String: String]
     private let factory: CleanupProviderFactory
-    private let deadlineForCheck: @Sendable (CleanupProviderKind) -> Duration
+    private let deadlineForCheck: @Sendable (CleanupProviderKind, Bool) -> Duration
     private let checkTimer: @Sendable (Duration) async throws -> Void
+    private let readinessTimer: @Sendable (Duration) async throws -> Void
     private let state = OSAllocatedUnfairLock(initialState: CleanupProviderCacheState())
+    private let lifetime = CleanupRequestLifetime()
+    let lifecycle: LocalModelLifecycle
 
     /// - Parameters:
     ///   - checkDeadline: How long Test Connection may take for a provider kind; tests shorten it.
@@ -36,16 +40,21 @@ final class CleanupProviderCache: Sendable {
         store: CleanupSettingsStore,
         environment: [String: String],
         factory: CleanupProviderFactory,
-        checkDeadline: @escaping @Sendable (CleanupProviderKind) -> Duration = {
-            CleanupProviderCache.checkDeadline(for: $0)
+        checkDeadline: @escaping @Sendable (CleanupProviderKind, Bool) -> Duration = {
+            CleanupProviderCache.checkDeadline(for: $0, localApp: $1)
         },
-        checkTimer: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+        checkTimer: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        readinessTimer: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+        lifecycle: LocalModelLifecycle? = nil
     ) {
+        self.lifecycle = lifecycle ?? factory.localModelLifecycle
         self.store = store
         self.environment = environment
         self.factory = factory
         self.deadlineForCheck = checkDeadline
         self.checkTimer = checkTimer
+        self.readinessTimer = readinessTimer
+        self.lifecycle.useSavedKeys { try store.localRetirementKey(for: $0) }
     }
 
     /// The provider for the configuration stored now: the cached one when the configuration matches, otherwise a new
@@ -53,16 +62,189 @@ final class CleanupProviderCache: Sendable {
     /// `.secretUnavailable` when a secret cannot be read. Reads the preferences on every call and the secret store only
     /// when it builds; it never starts a process or sends a request.
     func provider() throws -> any CleanupProvider {
+        try lifetime.check()
         let connection = try CleanupProviderResolver.connection(store: store, environment: environment)
+        applyIdleTime()
         return try entry(for: connection).provider
+    }
+
+    struct OneOffAdmission: Sendable {
+        let connection: CleanupConnection
+        fileprivate let handoff: CleanupSendHandoff
+    }
+
+    func isCurrent(_ admission: OneOffAdmission) -> Bool {
+        (try? admission.handoff.perform { true }) == true
+    }
+
+    func admitOneOff() throws -> OneOffAdmission {
+        try CleanupSettingsHandoff.shared.synchronized {
+            let handoff = CleanupSendHandoff(store: store, lifetime: lifetime)
+            return try handoff.perform {
+                OneOffAdmission(
+                    connection: try CleanupProviderResolver.connection(store: store, environment: environment),
+                    handoff: handoff)
+            }
+        }
+    }
+
+    func admittedProvider() throws -> any CleanupProvider {
+        let admission = try admitOneOff()
+        let provider = try entry(for: admission.connection).provider
+        return try admission.handoff.perform {
+            AdmittedCleanupProvider(provider: provider, handoff: admission.handoff)
+        }
+    }
+
+    func completeOneOff(
+        _ request: CleanupRequest, admission: OneOffAdmission
+    ) async throws -> CleanupResponse {
+        try Task.checkCancellation()
+        try admission.handoff.perform {}
+        let provider = AdmittedCleanupProvider(
+            provider: try entry(for: admission.connection).provider, handoff: admission.handoff)
+        var fitted = request
+        if let context = try await provider.contextForPlanning() {
+            fitted = try ContextBudget.fitAuxiliary(request, contextTokens: context)
+        }
+        return try await provider.clean(fitted)
     }
 
     /// Drops the cached provider and credential, and with them any token or secret held in memory, in one step. No
     /// `provider()` that begins after this returns can be handed anything from before it: a build still running
     /// across the call hands its provider to its own caller once and keeps nothing (`CleanupProviderCacheState`).
     func invalidate() {
+        let served = lifecycle.servedTarget
         state.withLock { $0.invalidate() }
         ScribeLog.debug(.cleanup, "Dropped the cached cleanup provider")
+        // A configuration that no longer uses the model it served frees it, once its uses have ended. A, B, A is not
+        // a change: `wanted` is asked again when the release commits.
+        if let served {
+            lifecycle.scheduleConfigurationRetirement(
+                served,
+                wanted: { self.currentLocalTarget() != served })
+        }
+        applyIdleTime()
+    }
+
+    /// Hands the lifecycle the idle time stored now, so a change reaches the next countdown without a restart.
+    private func applyIdleTime() {
+        lifecycle.setIdle(.seconds(store.localModelIdleMinutes * 60))
+    }
+
+    /// The local model the settings stored now would use, or nil when cleanup is off or not a model on this Mac.
+    func currentLocalTarget() -> LocalModelTarget? {
+        guard store.isEnabled,
+            let connection = try? CleanupProviderResolver.connection(store: store, environment: environment)
+        else { return nil }
+        switch connection.target {
+        case .ollama(let model):
+            return LocalModelTarget(
+                endpoint: ManagedOllamaCleanupProvider.defaultBaseURL.absoluteString, model: model, app: .ollama,
+                apiKey: nil)
+        case .openAICompatible(let url, let model, _, _):
+            guard connection.source == .settings else { return nil }
+            let app =
+                connection.localServerApp != .none
+                ? connection.localServerApp : LocalAiServer.appAt(url.absoluteString)
+            guard app != .none else { return nil }
+            return LocalModelTarget(endpoint: url.absoluteString, model: model, app: app, apiKey: nil)
+        default:
+            return nil
+        }
+    }
+
+    /// Frees the model last served for `reason`. A configuration change is wanted only while the settings stored now
+    /// no longer use that model.
+    @discardableResult
+    func releaseLocalModel(_ reason: LocalModelReleaseReason) async -> LocalModelReleaseOutcome {
+        if reason == .shutdown { lifetime.close() }
+        let served = lifecycle.servedTarget
+        guard reason == .shutdown || served != nil || !lifecycle.ownedCopies.isEmpty else { return .nothingToRelease }
+        let wanted: @Sendable () -> Bool
+        if reason == .configurationChanged {
+            wanted = { [self] in currentLocalTarget() != served }
+        } else {
+            wanted = { true }
+        }
+        return await lifecycle.release(reason, target: served, wanted: wanted)
+    }
+
+    /// Starts only a known local model. Building the provider, waiting for the shared model lane, checking residency
+    /// and the one-token readying request all share the 30 second deadline. A cloud or unknown endpoint is never
+    /// probed. The request uses a fixed token and prompt, with no admitted vocabulary or dictated content.
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async -> LocalModelPreparationResult {
+        let admission: OneOffAdmission
+        do {
+            admission = try admitOneOff()
+        } catch is CleanupSendHandoff.Refusal {
+            return .configurationChanged
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .notApplicable
+        }
+        let connection = admission.connection
+        guard Self.isRecognizedLocal(connection, selectedApp: connection.localServerApp) else {
+            return .notApplicable
+        }
+        let handoff = admission.handoff
+        do {
+            return try await OperationDeadline.run(within: LocalModelDefaults.startWait, sleep: readinessTimer) {
+                try Task.checkCancellation()
+                let provider = AdmittedCleanupProvider(
+                    provider: try self.entry(for: connection).provider, handoff: handoff)
+                guard await self.isCurrent(connection, requested: isCurrent) else { return .configurationChanged }
+                let result = try await provider.prepareLocalModel(
+                    isCurrent: {
+                        guard (try? handoff.perform { true }) == true else { return false }
+                        return await self.isCurrent(connection, requested: isCurrent)
+                    },
+                    onStarting: onStarting)
+                guard await self.isCurrent(connection, requested: isCurrent) else { return .configurationChanged }
+                return result
+            }
+        } catch is CleanupSendHandoff.Refusal {
+            return .configurationChanged
+        } catch is CancellationError {
+            return .cancelled
+        } catch is OperationDeadlineError {
+            ScribeLog.warning(.cleanup, "Local model did not become ready within the allowed time")
+            return .timedOut
+        } catch {
+            ScribeLog.warning(.cleanup, "Local model readiness failed", .failure(error))
+            return .failed
+        }
+    }
+
+    private static func isRecognizedLocal(
+        _ connection: CleanupConnection,
+        selectedApp: LocalServerApp
+    ) -> Bool {
+        switch connection.target {
+        case .foundryLocal, .ollama:
+            return true
+        case .openAICompatible(let serviceURL, _, _, _):
+            guard connection.source == .settings, selectedApp != .none else { return false }
+            return LocalAiServer.appAt(serviceURL.absoluteString) == selectedApp
+        case .microsoftFoundry:
+            return false
+        }
+    }
+
+    private func isCurrent(
+        _ connection: CleanupConnection,
+        requested: @escaping @MainActor @Sendable () async -> Bool
+    ) async -> Bool {
+        guard await requested(), store.isEnabled,
+            let current = try? CleanupProviderResolver.connection(store: store, environment: environment)
+        else {
+            return false
+        }
+        return current == connection
     }
 
     /// Test Connection: a real cleanup request for a one-word transcript, with the default writing style, through the
@@ -88,12 +270,58 @@ final class CleanupProviderCache: Sendable {
             return CleanupConnectionCheck(
                 reachable: false, message: CleanupFailureText.forSettings(error, providerName: nil))
         }
+        return await checkConnection(for: connection)
+    }
 
+    /// Tests the unsaved AI Cleanup draft with its candidate credentials. This deliberately bypasses the provider
+    /// cache so neither the cached provider nor stored settings can replace what the user asked to test.
+    func checkConnection(candidate: CleanupConnectionCandidate) async -> CleanupConnectionCheck {
+        let connection: CleanupConnection
+        do {
+            connection = try CleanupProviderResolver.connection(candidate: candidate, store: store)
+        } catch {
+            return CleanupConnectionCheck(
+                reachable: false, message: CleanupFailureText.forSettings(error, providerName: nil))
+        }
+        let owner = LocalModelLifecycle.Candidate { [self] in
+            guard store.isEnabled else { return true }
+            guard let current = try? CleanupProviderResolver.connection(store: store, environment: environment) else {
+                return true
+            }
+            return !Self.usesSameLocalCopy(current, connection)
+        }
+        defer { owner.finish(in: lifecycle) }
+        return await LocalModelLifecycle.$candidate.withValue(owner) {
+            await checkConnection(for: connection, candidate: candidate)
+        }
+    }
+
+    static func usesSameLocalCopy(_ first: CleanupConnection, _ second: CleanupConnection) -> Bool {
+        guard first.source == .settings, second.source == .settings,
+            first.localServerApp == second.localServerApp,
+            first.localContextTokens == second.localContextTokens
+        else { return false }
+        guard case .openAICompatible(let firstURL, let firstModel, _, _) = first.target,
+            case .openAICompatible(let secondURL, let secondModel, _, _) = second.target
+        else { return false }
+        return LocalAiServer.appAt(firstURL.absoluteString) == .lmStudio
+            && LocalAiServer.appAt(secondURL.absoluteString) == .lmStudio
+            && LocalModelLifecycle.sameServer(firstURL.absoluteString, secondURL.absoluteString)
+            && LocalServerClient.sameModel(firstModel, secondModel)
+    }
+
+    private func checkConnection(
+        for connection: CleanupConnection, candidate: CleanupConnectionCandidate? = nil
+    ) async -> CleanupConnectionCheck {
         let kind = connection.kind
-        let deadline = deadlineForCheck(kind)
+        applyIdleTime()
+        let localApp = isLocalApp(connection)
+        let deadline = deadlineForCheck(kind, localApp)
         do {
             return try await OperationDeadline.run(within: deadline, sleep: checkTimer) {
-                try await self.check(connection)
+                try await self.lifetime.whileOpen {
+                    try await self.check(connection, candidate: candidate, deadline: deadline)
+                }
             }
         } catch let error as OperationDeadlineError {
             ScribeLog.info(.cleanup, "Test Connection ran out of time", .name("provider", kind), .failure(error))
@@ -141,12 +369,30 @@ final class CleanupProviderCache: Sendable {
     ///   passes, and anything else, a `length` stop included, fails without a third request.
     ///
     /// Every request first checks for cancellation, so a check stopped between two requests sends no second one.
-    static func probe(_ provider: any CleanupProvider, kind: CleanupProviderKind) async throws -> ProbeAnswer {
+    /// Context-bound local requests always need an output ceiling, so those failures are final, never an uncapped retry.
+    static func probe(
+        _ provider: any CleanupProvider,
+        kind: CleanupProviderKind,
+        systemPrompt: String? = nil,
+        deadline: Duration? = nil
+    ) async throws -> ProbeAnswer {
+        try await $isConnectionTest.withValue(true) {
+            try await probeAnswer(provider, kind: kind, systemPrompt: systemPrompt, deadline: deadline)
+        }
+    }
+
+    private static func probeAnswer(
+        _ provider: any CleanupProvider,
+        kind: CleanupProviderKind,
+        systemPrompt: String?,
+        deadline: Duration?
+    ) async throws -> ProbeAnswer {
         let capped = CleanupRequest(
             transcript: CleanupPrompt.wrapTranscript("ok"),
-            writingStylePrompt: CleanupPrompt.systemPrompt(
-                writingStyle: CleanupPrompt.defaultWritingStyle, useLocalPrompt: provider.usesLocalCleanupPrompt),
-            timeout: ChatCompletionsTransport.seconds(checkDeadline(for: kind)),
+            writingStylePrompt: systemPrompt
+                ?? CleanupPrompt.systemPrompt(
+                    writingStyle: CleanupPrompt.effectiveWritingStyle, useLocalPrompt: provider.usesLocalCleanupPrompt),
+            timeout: ChatCompletionsTransport.seconds(deadline ?? checkDeadline(for: kind)),
             maxOutputTokens: checkOutputCeiling(for: kind))
         let uncapped = capped.withoutOutputLimit()
 
@@ -154,7 +400,9 @@ final class CleanupProviderCache: Sendable {
         do {
             first = try await attempt(provider, capped)
         } catch let error as CleanupProviderError {
-            guard case .rejected(let status, _, _) = error, status == 400 || status == 422 else {
+            guard !provider.requiresOutputLimit,
+                case .rejected(let status, _, _) = error, status == 400 || status == 422
+            else {
                 throw error
             }
             ScribeLog.info(
@@ -166,6 +414,9 @@ final class CleanupProviderCache: Sendable {
         case .text:
             return .text
         case .stoppedAtCeiling:
+            guard !provider.requiresOutputLimit else {
+                throw CleanupProviderError.invalidResponse(.outputLimitReachedBeforeText)
+            }
             ScribeLog.info(.cleanup, "Test Connection confirming without an output limit", .name("provider", kind))
             return try await lastAttempt(provider, uncapped, answer: .textAfterOutputLimit)
         }
@@ -202,14 +453,33 @@ final class CleanupProviderCache: Sendable {
 
     /// Everything the deadline covers: building the provider, its Keychain read included, and the probe. Returns the
     /// result, failures included, and throws only a cancellation, so the deadline or the caller says what it meant.
-    private func check(_ connection: CleanupConnection) async throws -> CleanupConnectionCheck {
+    private func check(
+        _ connection: CleanupConnection,
+        candidate: CleanupConnectionCandidate? = nil,
+        deadline: Duration
+    ) async throws -> CleanupConnectionCheck {
         let kind = connection.kind
         // A check cancelled before it began (Cancel pressed at once, Settings closed) builds nothing and reads no
         // Keychain item: the task group still starts its child when the group is already cancelled.
         try Task.checkCancellation()
         let provider: any CleanupProvider
         do {
-            provider = try entry(for: connection).provider
+            if let candidate {
+                provider = try CleanupProviderResolver.makeProvider(
+                    for: connection,
+                    store: store,
+                    environment: [:],
+                    factory: factory,
+                    lifecycle: lifecycle,
+                    openAIApiKeyOverride: candidate.openAIApiKey,
+                    azureClientSecretOverride: candidate.azureClientSecret,
+                    azureApiKeyOverride: candidate.azureApiKey
+                ) { _, make in
+                    try make()
+                }
+            } else {
+                provider = try entry(for: connection).provider
+            }
         } catch {
             return CleanupConnectionCheck(
                 reachable: false, message: CleanupFailureText.forSettings(error, providerName: nil))
@@ -219,7 +489,24 @@ final class CleanupProviderCache: Sendable {
 
         let started = ContinuousClock.now
         do {
-            let answer = try await Self.probe(provider, kind: kind)
+            let prompt: String?
+            if let candidate {
+                prompt = CleanupPrompt.systemPrompt(
+                    writingStyle: CleanupPrompt.effectiveOverride(
+                        candidate.writingStyle, defaultValue: CleanupPrompt.defaultWritingStyle),
+                    useLocalPrompt: provider.usesLocalCleanupPrompt,
+                    frontierPrompt: candidate.frontierPrompt,
+                    localPrompt: candidate.localPrompt)
+            } else {
+                let settings = store.snapshot()
+                prompt = CleanupPrompt.systemPrompt(
+                    writingStyle: CleanupPrompt.effectiveOverride(
+                        settings.writingStyle, defaultValue: CleanupPrompt.defaultWritingStyle),
+                    useLocalPrompt: provider.usesLocalCleanupPrompt,
+                    frontierPrompt: settings.frontierPrompt,
+                    localPrompt: settings.localPrompt)
+            }
+            let answer = try await Self.probe(provider, kind: kind, systemPrompt: prompt, deadline: deadline)
             let seconds = ChatCompletionsTransport.seconds(started.duration(to: .now))
             ScribeLog.info(.cleanup, "Test Connection succeeded", .name("provider", kind), .name("answer", answer))
             return CleanupConnectionCheck(
@@ -249,10 +536,34 @@ final class CleanupProviderCache: Sendable {
         }
     }
 
+    /// What Windows allows a model on this Mac: Ollama and LM Studio load a model on the first request, which
+    /// takes minutes for a large one, however the connection is represented.
+    static let localCheckDeadline = Duration.seconds(180)
+
+    /// Whether `connection` reaches Ollama or LM Studio on this Mac, the same recognition dictation uses.
+    private func isLocalApp(_ connection: CleanupConnection) -> Bool {
+        switch connection.target {
+        case .ollama:
+            return true
+        case .openAICompatible(let url, _, _, _):
+            guard connection.source == .settings else { return false }
+            let app =
+                connection.localServerApp != .none
+                ? connection.localServerApp : LocalAiServer.appAt(url.absoluteString)
+            return app != .none
+        default:
+            return false
+        }
+    }
+
     /// How long Test Connection may take from start to finish. A first request to an on-device model can wait for the
     /// model to load, which takes minutes for a large model; a cloud deployment answers within seconds unless it is
     /// cold or thinking hard. Windows' readiness probe allows the same 180 and 90 seconds, as one `CancelAfter` over
     /// the whole probe.
+    static func checkDeadline(for kind: CleanupProviderKind, localApp: Bool) -> Duration {
+        localApp ? max(checkDeadline(for: kind), localCheckDeadline) : checkDeadline(for: kind)
+    }
+
     static func checkDeadline(for kind: CleanupProviderKind) -> Duration {
         switch kind {
         case .foundryLocal, .ollama:
@@ -298,7 +609,7 @@ final class CleanupProviderCache: Sendable {
 
         var made: CleanupProviderCacheState.HeldCredential?
         let provider = try CleanupProviderResolver.makeProvider(
-            for: connection, store: store, environment: environment, factory: factory
+            for: connection, store: store, environment: environment, factory: factory, lifecycle: lifecycle
         ) { identity, make in
             if let held = snapshot.credential, held.identity == identity {
                 return held.credential
@@ -312,6 +623,44 @@ final class CleanupProviderCache: Sendable {
         let kept = state.withLock { $0.publish(built, credential: madeCredential, since: snapshot) }
         ScribeLog.debug(.cleanup, "Built a cleanup provider", .name("provider", connection.kind))
         return kept
+    }
+}
+
+private struct AdmittedCleanupProvider: CleanupProvider {
+    let provider: any CleanupProvider
+    let handoff: CleanupSendHandoff
+    var id: String { provider.id }
+    var displayName: String { provider.displayName }
+    var usesLocalCleanupPrompt: Bool { provider.usesLocalCleanupPrompt }
+    var requiresOutputLimit: Bool { provider.requiresOutputLimit }
+
+    func contextForPlanning() async throws -> Int? {
+        try await whileCurrent { try await provider.contextForPlanning() }
+    }
+
+    func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
+        try await whileCurrent { try await provider.clean(request) }
+    }
+
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async throws -> LocalModelPreparationResult {
+        try await whileCurrent {
+            try await provider.prepareLocalModel(isCurrent: isCurrent, onStarting: onStarting)
+        }
+    }
+
+    private func whileCurrent<Value: Sendable>(
+        _ work: @Sendable () async throws -> Value
+    ) async throws -> Value {
+        try Task.checkCancellation()
+        try handoff.perform {}
+        let value = try await CleanupSendHandoff.$current.withValue(handoff) {
+            try await work()
+        }
+        try Task.checkCancellation()
+        return try handoff.perform { value }
     }
 }
 

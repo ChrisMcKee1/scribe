@@ -56,7 +56,8 @@ enum HotkeyHint {
 /// `HotkeyManager` in the same step, so a rebind takes effect without a relaunch.
 struct HotkeySettingsStore {
     static let capsLockKeyCode: CGKeyCode = 57
-    static let defaultKeyCode: CGKeyCode = capsLockKeyCode
+    static let rightOptionKeyCode: CGKeyCode = 61
+    static let defaultKeyCode: CGKeyCode = rightOptionKeyCode
 
     private static let defaultsKey = "ScribePushToTalkKeyCode"
     private static let autoStopDefaultsKey = "ScribeAutoStopOnSilence"

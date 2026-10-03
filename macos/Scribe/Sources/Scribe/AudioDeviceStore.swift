@@ -55,7 +55,12 @@ struct AudioDeviceStore {
     /// the capture unit at it. `nil` means "use the system default", including when the saved device can no
     /// longer be found (unplugged, out of range).
     func resolveSelectedDeviceID() -> AudioDeviceID? {
-        guard let uid = selectedDeviceUID, let deviceIDs = Self.allDeviceIDs() else { return nil }
+        guard let uid = selectedDeviceUID else { return nil }
+        return resolveDeviceID(uid: uid)
+    }
+
+    func resolveDeviceID(uid: String) -> AudioDeviceID? {
+        guard let deviceIDs = Self.allDeviceIDs() else { return nil }
         return deviceIDs.first { Self.deviceUID($0) == uid }
     }
 

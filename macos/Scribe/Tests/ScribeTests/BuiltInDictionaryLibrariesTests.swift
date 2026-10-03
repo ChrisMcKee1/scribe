@@ -14,11 +14,8 @@ final class BuiltInDictionaryLibrariesTests: XCTestCase {
         XCTAssertTrue(libraries.allSatisfy { !$0.entries.isEmpty })
     }
 
-    func testLibrariesAreSortedByCategoryThenName() {
-        let libraries = BuiltInDictionaryLibraries.all
-        let categories = libraries.map(\.category)
-
-        XCTAssertEqual(categories, categories.sorted { $0.localizedCaseInsensitiveCompare($1) != .orderedDescending })
+    func testLibrariesFollowFrozenPrecedenceOrder() {
+        XCTAssertEqual(BuiltInDictionaryLibraries.all.map(\.id), LibraryPrecedence.builtInOrder)
     }
 
     func testKnownLibraryHasExpectedIdAndMetadata() {

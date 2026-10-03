@@ -145,6 +145,11 @@ protocol CaptureDevice: AnyObject {
 
     /// The device the input unit is pulling audio from, for `--verify-selected-microphone`.
     var currentInputDeviceID: AudioDeviceID? { get }
+    var microphoneSelection: MicrophoneSelectionOutcome? { get }
+}
+
+extension CaptureDevice {
+    var microphoneSelection: MicrophoneSelectionOutcome? { nil }
 }
 
 /// The microphone, owned one recording at a time.
@@ -378,7 +383,10 @@ final class AudioCaptureEngine: Sendable {
 
         slot.generation = capture.generation
         slot.device = device
-        capture.processor.markOpened(at: Date())
+        capture.processor.markOpened(at: Date(), selection: device.microphoneSelection)
+        if let selection = device.microphoneSelection {
+            capture.events(CaptureEvent(owner: capture.owner, kind: .microphoneSelection(selection)))
+        }
         let openTime = openStarted.duration(to: ContinuousClock.now)
 
         guard owns(capture) else {
@@ -627,6 +635,7 @@ final class AVAudioEngineCaptureDevice: CaptureDevice {
     private var format: AVAudioFormat?
     private var configurationObserver: (any NSObjectProtocol)?
     private var tapInstalled = false
+    private(set) var microphoneSelection: MicrophoneSelectionOutcome?
 
     init(deviceStore: AudioDeviceStore = .live) {
         self.deviceStore = deviceStore
@@ -709,7 +718,12 @@ final class AVAudioEngineCaptureDevice: CaptureDevice {
     /// default input changes later. With no choice saved the unit follows the system default by itself, which
     /// is also how a Bluetooth microphone works once macOS makes it the default input.
     private func selectSavedMicrophone(on inputNode: AVAudioInputNode) {
-        guard var deviceID = deviceStore.resolveSelectedDeviceID() else { return }
+        guard let uid = deviceStore.selectedDeviceUID else { return }
+        guard var deviceID = deviceStore.resolveDeviceID(uid: uid) else {
+            microphoneSelection = MicrophoneSelectionOutcome(requestedUID: uid, result: .systemDefault)
+            return
+        }
+        microphoneSelection = MicrophoneSelectionOutcome(requestedUID: uid, result: .unconfirmed)
         guard let audioUnit = inputNode.audioUnit else {
             ScribeLog.warning(.audio, "Could not select the saved microphone: the input node has no audio unit yet")
             return
@@ -725,10 +739,11 @@ final class AVAudioEngineCaptureDevice: CaptureDevice {
         let initializeStatus = AudioUnitInitialize(audioUnit)
 
         if uninitializeStatus == noErr, setStatus == noErr, initializeStatus == noErr {
+            microphoneSelection = MicrophoneSelectionOutcome(requestedUID: uid, result: .selected)
             ScribeLog.info(.audio, "Selected the saved microphone")
         } else {
             ScribeLog.warning(
-                .audio, "Could not select the saved microphone; using the system default input",
+                .audio, "Could not confirm the saved microphone selection",
                 .integer("uninitializeStatus", uninitializeStatus), .integer("setStatus", setStatus),
                 .integer("initializeStatus", initializeStatus))
         }

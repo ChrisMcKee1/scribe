@@ -3,12 +3,44 @@ import Foundation
 /// Which stage of the dictation pipeline failed, if any. Mirrors the stage names on Windows'
 /// `DictationPipelineReport` (see src/Scribe.App/Dictation/DictationController.cs), minus the voice activity stage,
 /// which macOS does not run as a step of its own.
-enum PipelineFailureStage: String {
+enum PipelineFailureStage: String, Equatable, Sendable {
     case capture
     case decode
     case cleanup
     case postProcessing
     case injection
+}
+
+/// Diagnostics keeps only the outcome's shape, not the report's text or failure reason.
+struct SessionDictationProblem: Identifiable, Equatable, Sendable {
+    let id: UInt64
+    let capturedAt: Date
+    let cleanupFellBack: Bool
+    let failureStage: PipelineFailureStage?
+
+    var messages: [String] {
+        var result: [String] = []
+        if cleanupFellBack {
+            result.append("AI cleanup did not run successfully. Scribe used what it heard.")
+        }
+        switch failureStage {
+        case .capture:
+            result.append("The microphone capture failed.")
+        case .decode:
+            result.append("Speech recognition failed. Nothing was typed.")
+        case .cleanup:
+            if !cleanupFellBack {
+                result.append("AI cleanup failed.")
+            }
+        case .postProcessing:
+            result.append("Scribe could not finish preparing the text.")
+        case .injection:
+            result.append("Not all of the text was typed. Check the recovery copy in the menu bar.")
+        case nil:
+            break
+        }
+        return result
+    }
 }
 
 /// A snapshot of one dictation run through the full pipeline: what was captured, how long each stage took, and what
@@ -74,15 +106,29 @@ struct PipelineReport {
 /// `ObservableObject`, since the report has to reach a Settings window that may already be open.
 @MainActor
 final class PipelineReportStore: ObservableObject {
+    static let problemLimit = 20
     @Published var latest: PipelineReport?
+    @Published private(set) var problems: [SessionDictationProblem] = []
 
     func publish(_ report: PipelineReport) {
         latest = report
+        problems.removeAll { $0.id == report.dictationID }
+        if report.cleanupOutcome == .fellBack || report.failureStage != nil {
+            problems.insert(
+                SessionDictationProblem(
+                    id: report.dictationID, capturedAt: report.capturedAt,
+                    cleanupFellBack: report.cleanupOutcome == .fellBack, failureStage: report.failureStage),
+                at: 0)
+            if problems.count > Self.problemLimit {
+                problems.removeLast(problems.count - Self.problemLimit)
+            }
+        }
     }
 
     /// Clear history: the report holds a dictation's text, so it goes too. A dictation still being processed may
     /// publish afterwards; its text was not part of what was cleared.
     func clear() {
         latest = nil
+        problems = []
     }
 }

@@ -33,6 +33,20 @@ enum CleanupResponseGuard {
         }
 
         var cleaned = stripMatches(in: candidate, using: thinkBlock).trimmingCharacters(in: .whitespacesAndNewlines)
+        cleaned = stripMatches(in: cleaned, using: leadingThinkTag).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !matches(announcementOpening, in: original) {
+            cleaned = stripMatches(in: cleaned, using: rewriteAnnouncement)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            cleaned = stripMatches(in: cleaned, using: leadingSeparators)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if !matches(labelOpening, in: original) {
+            cleaned = stripMatches(in: cleaned, using: rewriteLabel).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        cleaned = stripWrappingTag(cleaned, original: original, regex: leadingWrapperTag, trailing: false)
+        cleaned = stripWrappingTag(cleaned, original: original, regex: trailingWrapperTag, trailing: true)
 
         if cleaned.hasPrefix("```"), let firstNewline = cleaned.firstIndex(of: "\n") {
             cleaned = String(cleaned[cleaned.index(after: firstNewline)...])
@@ -44,12 +58,15 @@ enum CleanupResponseGuard {
         }
 
         cleaned = CleanupPrompt.stripTranscriptTags(cleaned)
+        cleaned = stripMatches(in: cleaned, using: trailingCommentary).trimmingCharacters(in: .whitespacesAndNewlines)
 
         if hasWrappingQuotePair(cleaned) && !hasMatchingOuterQuotes(original) {
             cleaned = String(cleaned.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
             // A model that quotes its whole answer can quote the echoed delimiters with it, so they
             // only come into reach once the quotes are gone.
             cleaned = CleanupPrompt.stripTranscriptTags(cleaned)
+            cleaned = stripWrappingTag(cleaned, original: original, regex: leadingWrapperTag, trailing: false)
+            cleaned = stripWrappingTag(cleaned, original: original, regex: trailingWrapperTag, trailing: true)
         }
 
         guard !cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -151,9 +168,98 @@ enum CleanupResponseGuard {
         return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
     }
 
+    private static func stripWrappingTag(
+        _ text: String,
+        original: String,
+        regex: NSRegularExpression,
+        trailing: Bool
+    ) -> String {
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = regex.firstMatch(in: text, options: [], range: range),
+            let tagRange = Range(match.range(at: 1), in: text)
+        else {
+            return text
+        }
+
+        let tag = text[tagRange].lowercased()
+        if original.localizedCaseInsensitiveContains("<\(tag)")
+            || original.localizedCaseInsensitiveContains("</\(tag)")
+        {
+            return text
+        }
+
+        if trailing {
+            guard let matchRange = Range(match.range, in: text) else {
+                return text
+            }
+            return String(text[..<matchRange.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        guard let matchRange = Range(match.range, in: text) else {
+            return text
+        }
+        return String(text[matchRange.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private static let thinkBlock = try! NSRegularExpression(
         pattern: #"<think>.*?</think>"#,
         options: [.caseInsensitive, .dotMatchesLineSeparators])
+
+    private static let leadingThinkTag = try! NSRegularExpression(
+        pattern: #"^\s*</?think>\s*"#,
+        options: [.caseInsensitive])
+
+    private static let rewriteAnnouncement = try! NSRegularExpression(
+        pattern:
+            #"^[ \t]*(?:\*\*)?(?:(?:sure|okay|ok|certainly|of course)[,!.]?[ \t]+)?"#
+            + #"(?:here(?:'s|[ \t]+is|[ \t]+are)|below[ \t]+is)\b[^\r\n]{0,120}?\b"#
+            + #"(?:rewrit\w*|revis\w*|clean\w*|correct\w*|edit\w*|polish\w*|version|transcript\w*"#
+            + #"|text|dictation)\b"#
+            + #"[^\r\n]{0,120}:[ \t]*(?:\*\*)?[ \t]*(?:\r?\n|\z)"#,
+        options: [.caseInsensitive])
+
+    private static let leadingSeparators = try! NSRegularExpression(
+        pattern: #"^(?:[ \t]*(?:-{3,}|\*{3,}|_{3,})?[ \t]*\r?\n)+"#,
+        options: [])
+
+    private static let rewriteLabel = try! NSRegularExpression(
+        pattern:
+            #"^[ \t]*(?:\*\*)?(?:[\w-]+[ \t]+){0,2}?"#
+            + #"(?:(?:rewrit|revis|clean|correct|edit|polish)[\w-]*[ \t]+(?:[\w-]+[ \t]+)??"#
+            + #"(?:transcript|text|version|dictation)\w*|(?:transcript|text|version|dictation)\w*[ \t]+"#
+            + #"(?:[\w-]+[ \t]+)??(?:rewrit|revis|clean|correct|edit|polish)[\w-]*|transcript)"#
+            + #"[ \t]*(?:\*\*)?[ \t]*:[ \t]*(?:\*\*)?[ \t]*(?:\r?\n|\z)"#,
+        options: [.caseInsensitive])
+
+    private static let trailingCommentary = try! NSRegularExpression(
+        pattern:
+            #"\r?\n[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*\r?\n\s*(?:\*\*)?"#
+            + #"(?:notes?\b|explanation\b|key (?:changes|corrections)\b|changes(?: made)?\b|summary of changes\b"#
+            + #"|corrections\b|this (?:is the (?:final|cleaned|rewritten|revised|corrected) )?"#
+            + #"(?:version|rewrite|rewritten|revision|revised|text|transcript)\b"#
+            + #"|i(?:'ve| have)? (?:made|kept|removed|corrected|fixed|changed|rewrote|preserved|maintained)\b"#
+            + #"|let me know\b|if (?:you|this) (?:need|want|still)\b)[\s\S]*$"#,
+        options: [.caseInsensitive])
+
+    private static let leadingWrapperTag = try! NSRegularExpression(
+        pattern:
+            #"^\s*(?:\*\*)?<(transcript|rewritten_transcript|rewritten_text|rewritten|text|output|answer|result"#
+            + #"|corrected|cleaned|cleaned_text)>(?:\*\*)?\s*"#,
+        options: [.caseInsensitive])
+
+    private static let trailingWrapperTag = try! NSRegularExpression(
+        pattern:
+            #"\s*(?:\*\*)?</(transcript|rewritten_transcript|rewritten_text|rewritten|text|output|answer|result"#
+            + #"|corrected|cleaned|cleaned_text)>(?:\*\*)?\s*$"#,
+        options: [.caseInsensitive])
+
+    private static let announcementOpening = try! NSRegularExpression(
+        pattern: #"^\W*(?:\w+\W+){0,6}?(?:here|below)\b"#,
+        options: [.caseInsensitive])
+
+    private static let labelOpening = try! NSRegularExpression(
+        pattern: #"^\W*(?:\w+\W+){0,6}?(?:rewrit|revis|clean|correct|edit|polish|transcript)"#,
+        options: [.caseInsensitive])
 
     private static let refusalPreamble = try! NSRegularExpression(
         pattern:
