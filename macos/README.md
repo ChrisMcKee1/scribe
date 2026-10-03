@@ -425,7 +425,11 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   LM Studio reconciliation refuses cancelled reads before touching ownership or committing a change.
   A late empty residency answer after cancellation cannot erase an instance still owed for retirement.
 - Foundry Local cleanup now reads its selected chat model's supported `model info` metadata for context planning
-  and again before each send, including an endpoint-refresh retry. The reported capacity only lowers a conservative
+  and again before each send, including an endpoint-refresh retry.
+  Recording readiness first fits its fixed, one-token readiness request to that capacity; an unknown
+  or insufficient capacity starts no residency work or load. This is a minimal readiness check,
+  not a promise that the later dictation or its app-profile instructions will fit.
+  The reported capacity only lowers a conservative
   4,096-token ceiling. Missing, invalid or mismatched capacity refuses cleanup explicitly, preserving ordinary
   dictation; no user content is sent by the metadata command. Full instructions, text, bounded output, template and
   margin must fit before sending. Local chunk/glossary and auxiliary-output planning apply to Foundry too, and Test

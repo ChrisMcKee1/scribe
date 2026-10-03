@@ -4,6 +4,59 @@ import XCTest
 @testable import Scribe
 
 final class FoundryLocalResidencyTests: XCTestCase {
+    func testRealResidentFoundryReadinessChecksCapacityWithoutLoadOrText() async throws {
+        guard ProcessInfo.processInfo.environment["SCRIBE_REAL_FOUNDRY_CLEANUP"] == "1" else {
+            throw XCTSkip("Opt in with qwen2.5-1.5b already resident in Foundry Local.")
+        }
+        let residency = FoundryLocalResidencySource.live()
+        guard try await residency.isLoaded("qwen2.5-1.5b") else {
+            throw XCTSkip("This read-only check requires an already resident model.")
+        }
+        let provider = FoundryLocalCleanupProvider(
+            modelAlias: "qwen2.5-1.5b",
+            residency: .init(
+                isLoaded: residency.isLoaded,
+                loadCached: { _ in
+                    XCTFail("The read-only integration check cannot load a model")
+                    throw LocalModelReadinessError.unavailable
+                }),
+            session: makeStubSession { request in
+                XCTFail("Resident readiness sends no text")
+                return StubReply.completion(request, "never")
+            })
+        let result = try await provider.prepareLocalModel(
+            isCurrent: { true }, onStarting: { XCTFail("Resident readiness cannot announce loading") })
+        XCTAssertEqual(result, .resident)
+    }
+
+    func testRecordingReadinessRefusesUnknownOrInsufficientContextBeforeResidencyOrLoading() async throws {
+        for capacity in [0, 256] {
+            let provider = FoundryLocalCleanupProvider(
+                modelAlias: "qwen",
+                context: .init(lookup: { _ in capacity }),
+                residency: .init(
+                    isLoaded: { _ in
+                        XCTFail("Refused readiness cannot inspect residency")
+                        return false
+                    },
+                    loadCached: { _ in XCTFail("Refused readiness cannot load") }),
+                modelLane: AsyncLane(),
+                session: makeStubSession { request in
+                    XCTFail("Refused readiness cannot send")
+                    return StubReply.completion(request, "never")
+                })
+            do {
+                _ = try await provider.prepareLocalModel(
+                    isCurrent: { true }, onStarting: { XCTFail("Refused readiness cannot announce loading") })
+                XCTFail("Readiness must refuse an unusable context")
+            } catch {
+                XCTAssertEqual(
+                    error as? CleanupProviderError,
+                    capacity == 0 ? .localContextUnknown : .localRequestTooLarge)
+            }
+        }
+    }
+
     func testReadinessDeadlineCancelsAnInFlightLoadAndTheNextRequestCanUseTheLane() async throws {
         let store = makeCleanupStore().store
         store.isEnabled = true

@@ -101,7 +101,8 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
         isCurrent: @escaping @MainActor @Sendable () async -> Bool,
         onStarting: @escaping @MainActor @Sendable () async -> Void
     ) async throws -> LocalModelPreparationResult {
-        try await modelLane.run {
+        _ = try await boundedRequest(LocalModelReadiness.request)
+        return try await modelLane.run {
             try await LocalModelReadiness.prepare(
                 isResident: { try await self.residency.isLoaded(self.modelAlias) },
                 isCurrent: isCurrent,
