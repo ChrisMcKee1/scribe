@@ -4,17 +4,13 @@ struct SettingsAdvancedPage: View {
     private let newlineStore: AdvancedDictationSettingsStore
     @State private var newlineMode: NewlineInjectionMode
     @State private var speechModelAlias: String
-    @State private var speechModels: [FoundrySpeechModelChoice] = []
-    @State private var speechModelCatalogLoaded = false
-    @State private var speechModelTask: Task<Void, Never>?
-    @State private var speechModelStatus = "Checking Foundry Local model cache…"
-    @State private var speechModelCatalogProblem: String?
-    @State private var isDownloadingSpeechModel = false
+    @StateObject private var speechModelSetup: SpeechModelSetup
 
     init(newlineStore: AdvancedDictationSettingsStore = .live) {
         self.newlineStore = newlineStore
         _newlineMode = State(initialValue: newlineStore.newlineMode)
         _speechModelAlias = State(initialValue: newlineStore.speechModelAlias)
+        _speechModelSetup = StateObject(wrappedValue: SpeechModelSetup(selectedAlias: newlineStore.speechModelAlias))
     }
 
     var body: some View {
@@ -95,16 +91,17 @@ struct SettingsAdvancedPage: View {
         .onAppear {
             newlineMode = newlineStore.newlineMode
             speechModelAlias = newlineStore.speechModelAlias
-            startSpeechModelRefresh()
+            speechModelSetup.select(speechModelAlias)
+            speechModelSetup.refresh()
         }
-        .onDisappear { cancelSpeechModelTask() }
+        .onDisappear { speechModelSetup.cancel() }
         .onReceive(NotificationCenter.default.publisher(for: SettingsWindowController.willCloseNotification)) { _ in
-            cancelSpeechModelTask()
+            speechModelSetup.cancel()
         }
     }
 
     private var speechModelChoices: [FoundrySpeechModelChoice] {
-        FoundrySpeechModelCatalog.choices(from: speechModels, preserving: speechModelAlias)
+        FoundrySpeechModelCatalog.choices(from: speechModelSetup.models, preserving: speechModelAlias)
     }
 
     private var speechModelCard: some View {
@@ -117,7 +114,7 @@ struct SettingsAdvancedPage: View {
                     set: { alias in
                         speechModelAlias = alias
                         newlineStore.speechModelAlias = alias
-                        updateSpeechModelStatus()
+                        speechModelSetup.select(alias)
                     })
             ) {
                 ForEach(speechModelChoices) { choice in
@@ -126,131 +123,21 @@ struct SettingsAdvancedPage: View {
             }
             .pickerStyle(.menu)
             .frame(maxWidth: 420, alignment: .leading)
-            .disabled(isDownloadingSpeechModel || !speechModelCatalogLoaded)
+            .disabled(speechModelSetup.isDownloading || !speechModelSetup.catalogLoaded)
             Text(
                 "Scribe reads speech model choices from Foundry Local. Choosing a model does not download it. Download an uncached choice here; dictation never downloads a newly selected model. Existing settings continue to use Parakeet TDT v2. If SCRIBE_WHISPER_CLI and SCRIBE_WHISPER_MODEL are set, the developer fallback is whisper.cpp with ggml-tiny.en."
             )
             .cardDescription()
-            Text(speechModelStatus)
+            Text(speechModelSetup.status)
                 .cardDescription()
             HStack {
-                Button("Refresh model list") { startSpeechModelRefresh() }
-                    .disabled(isDownloadingSpeechModel)
-                Button(isDownloadingSpeechModel ? "Downloading…" : "Download selected model") {
-                    startSpeechModelDownload()
+                Button("Refresh model list") { speechModelSetup.refresh() }
+                    .disabled(speechModelSetup.isDownloading)
+                Button(speechModelSetup.isDownloading ? "Downloading…" : "Download selected model") {
+                    speechModelSetup.download()
                 }
-                .disabled(!canDownloadSelectedSpeechModel)
+                .disabled(!speechModelSetup.canDownload)
             }
-        }
-    }
-
-    private var canDownloadSelectedSpeechModel: Bool {
-        guard !isDownloadingSpeechModel, speechModelCatalogLoaded,
-            let choice = speechModels.first(where: { $0.alias == speechModelAlias })
-        else {
-            return false
-        }
-        return choice.isCached == false
-    }
-
-    private func startSpeechModelRefresh() {
-        speechModelTask?.cancel()
-        speechModelTask = Task { @MainActor in
-            await refreshSpeechModelList()
-        }
-    }
-
-    private func cancelSpeechModelTask() {
-        speechModelTask?.cancel()
-        speechModelTask = nil
-    }
-
-    private func startSpeechModelDownload() {
-        speechModelTask?.cancel()
-        speechModelTask = Task { @MainActor in
-            await downloadSelectedSpeechModel()
-        }
-    }
-
-    @MainActor
-    private func refreshSpeechModelList() async {
-        guard let cliURL = TranscriptionBackendResolver.live().foundryExecutable() else {
-            speechModelCatalogLoaded = false
-            speechModelCatalogProblem = FoundryLocalSetupText.missing
-            speechModelStatus = FoundryLocalSetupText.missing + " Model availability cannot be checked."
-            return
-        }
-        do {
-            speechModels = try await AuxiliaryOperations.shared.run {
-                try await FoundrySpeechModelCatalog.list(cliURL: cliURL)
-            }
-            speechModelCatalogLoaded = true
-            speechModelCatalogProblem = nil
-            updateSpeechModelStatus()
-        } catch is CancellationError {
-            speechModelStatus = "The model list check was cancelled."
-        } catch AuxiliaryOperations.Refusal.closed {
-            speechModelCatalogProblem = "Scribe is quitting."
-            speechModelStatus = "Scribe is quitting. The selected model has not changed."
-        } catch {
-            speechModelCatalogLoaded = false
-            speechModelCatalogProblem = "Foundry Local could not list speech models."
-            speechModelStatus = "Foundry Local could not list speech models. Your saved selection is unchanged."
-        }
-    }
-
-    private func updateSpeechModelStatus() {
-        guard speechModelCatalogLoaded else {
-            speechModelStatus =
-                speechModelCatalogProblem
-                .map { "\($0) Your saved selection is unchanged." }
-                ?? "Waiting for Foundry Local's speech model list."
-            return
-        }
-        guard let choice = speechModels.first(where: { $0.alias == speechModelAlias }) else {
-            speechModelStatus =
-                "Foundry Local does not list this saved alias. It is preserved; choose a listed model to use or download."
-            return
-        }
-        if choice.isCached == true {
-            speechModelStatus = "This model is downloaded and ready."
-        } else if choice.isCached == false {
-            if speechModelAlias == TranscriptionEngine.defaultFoundryModelAlias {
-                speechModelStatus =
-                    "The default model is not downloaded. Foundry may download it on first use, as before; you can download it here."
-            } else {
-                speechModelStatus = "This newly selected model is not downloaded. Download it before dictating."
-            }
-        } else {
-            speechModelStatus = "Foundry Local did not report whether this model is downloaded."
-        }
-    }
-
-    @MainActor
-    private func downloadSelectedSpeechModel() async {
-        guard let cliURL = TranscriptionBackendResolver.live().foundryExecutable() else {
-            speechModelStatus = FoundryLocalSetupText.missing
-            return
-        }
-        isDownloadingSpeechModel = true
-        speechModelStatus = "Downloading the selected model. This may take a while."
-        defer { isDownloadingSpeechModel = false }
-        do {
-            let models = try await AuxiliaryOperations.shared.run {
-                try await FoundrySpeechModelCatalog.download(alias: speechModelAlias, cliURL: cliURL)
-                try Task.checkCancellation()
-                return try await FoundrySpeechModelCatalog.list(cliURL: cliURL)
-            }
-            speechModels = models
-            speechModelCatalogLoaded = true
-            speechModelCatalogProblem = nil
-            updateSpeechModelStatus()
-        } catch is CancellationError {
-            speechModelStatus = "The model download was cancelled."
-        } catch AuxiliaryOperations.Refusal.closed {
-            speechModelStatus = "Scribe is quitting. The model download did not start."
-        } catch {
-            speechModelStatus = "Foundry Local could not download this model. Check Foundry Local and try again."
         }
     }
 

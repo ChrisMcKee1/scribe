@@ -53,6 +53,8 @@ Foundry cleanup also refuses signal-terminated or truncated status, capacity and
 JSON, so an incomplete management reply cannot authorize an endpoint, model load or text request.
 The speech model picker likewise rejects damaged catalog output and option-shaped model aliases. An explicit download
 terminated by a signal is a failure; long progress output alone does not invalidate a successful download.
+Leaving the Advanced page cancels its model setup work. A late result from that visit cannot replace a newer visit's
+catalog, status or download state, and an explicit download keeps the model selected when it was clicked.
 
 ## Build
 
