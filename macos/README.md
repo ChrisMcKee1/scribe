@@ -447,6 +447,8 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   limits. Extreme integer values cannot overflow the budget arithmetic; ordinary vocabulary budgets stay identical.
 - Captures with NaN or infinite samples, or invalid rates, refuse before model discovery, chunk planning or scratch I/O.
   Finite sample bits are preserved without clipping or noise filtering. This does not add model-backed VAD.
+- A capture rate must be an integer representable in the WAV header without changing it, never a truncated fractional
+  rate. Empty captures also refuse recognition, rather than accepting invented text from a recognizer.
 - A nonempty capture at a valid sample rate whose samples are all exactly zero is refused before recording
   scratch storage, model-cache discovery or decoding, at short lengths too. Signed zero counts as zero;
   even the smallest normal nonzero sample still reaches decoding. This prevents recognizer hallucinations

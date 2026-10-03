@@ -105,7 +105,9 @@ struct ScratchAudioDirectory: Sendable {
     }
 
     static func validateRecording(samples: [Float], sampleRate: Double) throws {
-        guard sampleRate > 0, sampleRate.isFinite, sampleRate <= Double(UInt32.max) / 4 else {
+        guard sampleRate >= 1, sampleRate.isFinite, sampleRate.rounded(.towardZero) == sampleRate,
+            sampleRate <= Double(UInt32.max) / 4
+        else {
             throw ScratchAudioError(operation: .invalidAudio, errno: EINVAL)
         }
         guard samples.count <= (Int(UInt32.max) - 36) / 4 else {

@@ -79,6 +79,11 @@ final class ScratchAudioTests: XCTestCase {
 
         XCTAssertThrowsError(try scratch.writeRecording(samples: [0.1], sampleRate: 0))
         XCTAssertThrowsError(try scratch.writeRecording(samples: [0.1], sampleRate: .infinity))
+        for rate in [0.5, 16_000.5, Double(UInt32.max) / 4 + 1] {
+            XCTAssertThrowsError(try scratch.writeRecording(samples: [0.1], sampleRate: rate)) {
+                XCTAssertEqual($0 as? ScratchAudioError, ScratchAudioError(operation: .invalidAudio, errno: EINVAL))
+            }
+        }
         XCTAssertFalse(exists(scratch.url))
     }
 

@@ -331,9 +331,9 @@ final class TranscriptionEngine: Sendable {
                 .integer("errno", error.errno))
             throw TranscriptionError.audioWriteFailed(errno: error.errno)
         }
-        if sampleRate.isFinite, sampleRate > 0, !samples.isEmpty, samples.allSatisfy({ $0 == 0 }) {
+        if samples.isEmpty || samples.allSatisfy({ $0 == 0 }) {
             ScribeLog.warning(
-                .transcription, "Capture contains only digital silence", .count("samples", samples.count))
+                .transcription, "Capture contains no audio or only digital silence", .count("samples", samples.count))
             throw TranscriptionError.emptyOutput
         }
         try await requireFoundryModelIsCached(backend)

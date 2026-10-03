@@ -386,12 +386,28 @@ final class TranscriptionEngineTests: XCTestCase {
                 XCTAssertEqual(failure, .audioWriteFailed(errno: EINVAL))
             }
         }
-        for rate in [Double.nan, .infinity, -1, 0] {
+        for rate in [Double.nan, .infinity, -1, 0, 0.5, 16_000.5, Double(UInt32.max) / 4 + 1] {
             let failure = await transcriptionError {
                 try await engine.transcribe(samples: [0.25], sampleRate: rate)
             }
             XCTAssertEqual(failure, .audioWriteFailed(errno: EINVAL))
         }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: called.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.url.path))
+    }
+
+    func testEmptyCaptureNeverStartsModelDiscoveryOrAcceptsHallucinatedText() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-empty-capture")
+        let called = directory.appendingPathComponent("called")
+        let script = try makeScript(
+            "touch '\(called.path(percentEncoded: false))'; printf '{\"text\":\"hallucination\"}'",
+            in: directory)
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch", isDirectory: true))
+        let engine = makeEngine(foundry: script, scratch: scratch, foundryModelAlias: "whisper-base")
+        let failure = await transcriptionError {
+            try await engine.transcribe(samples: [], sampleRate: 16_000)
+        }
+        XCTAssertEqual(failure, .emptyOutput)
         XCTAssertFalse(FileManager.default.fileExists(atPath: called.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.url.path))
     }
