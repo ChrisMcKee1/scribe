@@ -93,6 +93,29 @@ implementation outline, not authorization to add a dependency, change a schema o
 | Local-app idle/pause release and resize admission are integrated | A release waits for every local-app use. Pause is recorded synchronously, a resume withdraws it, and a use ending while paused pays the release. A chosen-size LM Studio change publishes its barrier atomically with the sole-use decision; new requests wait even after the original caller abandons the load. A retirement spanning servers never tries one server's current key against another server's copy. | Headless tests cover these orderings. Foundry Local and speech release remain separate open work; live local-app unload behavior still needs runtime checks. |
 | Candidate context and unused LM Studio copy reconciliation are present | Provider identity captures the selected local app and context, so Test connection uses its draft's size and key. A failed chosen-size load, unreadable residency or concurrent use fails the test without sending a completion; a copy loaded by hand is tested as it is. Only a named instance establishes ownership. Candidate-created copies retire by that check's instance ids after it ends, including loads settling after cancellation, unless its configuration became saved; saving a key does not change which copy that configuration uses. The next same-server request retires tracked copies other than the one its requests reach, only as the sole use and against a reading no newer use overtook. Retirement tries that server's saved key, then the original loaded key; a revision change during the Keychain read refuses the reading. Refused retirements stay owed. Management mutations use the configured address once, not alias races; injected transports still use no proxies, cookies, disk cache or redirects. | Wire and concurrency tests cover candidate load credentials/size, no saving, strict refusal, duplicate-mutation prevention, active uses, stale reads, late candidate loads, rotated keys, destination changes during a read and retry after refused retirement. Broader ownership reconciliation and real-runtime verification remain open. |
 
+## Supported native speech candidate, not yet adopted
+
+The remaining runtime, multilingual speech, VAD and Intel recognition gaps have a concrete shared candidate:
+[sherpa-onnx v1.13.8's official Swift package](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.8/Package.swift).
+Its manifest declares macOS support, a checksummed macOS static or shared XCFramework, and the exact
+`onnxruntime-libs` dependency `1.28.2`. The same release also publishes separate arm64/x64 and universal2
+native macOS artifacts in its [official release](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v1.13.8).
+The runtime's [license](https://github.com/k2-fsa/sherpa-onnx/blob/v1.13.8/LICENSE) is Apache-2.0; model
+licenses and attribution remain separate obligations.
+
+Windows already records the Parakeet v3 INT8 and Silero v5 payload's sizes and SHA-256 hashes in
+`scripts/Model-Manifest.ps1`, and its source URLs in `scripts/Download-Models.ps1`. Reusing those files
+would avoid selecting different model bytes, but does not prove that the Swift API, macOS binaries or
+packaging can decode them correctly. The official Swift wrapper, native ownership/cancellation,
+CPU/thread behavior, real multilingual fixtures, Intel execution, bundle-contained resource lookup,
+native-library closure and signed packaging must all be validated before replacing the current backend.
+
+This is verified upstream manifest/release evidence, not an installed dependency or an implementation.
+Adoption and the roughly 650 MB model download still require explicit dependency/component approval.
+No native package/model was downloaded for this investigation, no model was loaded or unloaded, and
+neither the installed app nor signing configuration changed. The current local Foundry speech catalog
+reports only the English Parakeet v2 model as cached.
+
 ## Windows 0.4.4 to 0.5.4 parity pass
 
 The port was at Windows 0.4.3. This pass (branch `macos/parity-0.5.4`, built from three streams that each went
