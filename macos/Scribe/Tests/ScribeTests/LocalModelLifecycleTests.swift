@@ -1379,7 +1379,9 @@ final class LocalModelLifecycleTests: XCTestCase {
         try await owned(lifecycle, "i1")
         await clock.waitForSleepers(1)
         clock.fire()
-        for _ in 0..<500 where lifecycle.ownedCopies.count > 0 { await Task.yield() }
+        try await fake.instanceStarted.wait()
+        let lease = try await lifecycle.beginUse(target())
+        defer { lease.end() }
         XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
         XCTAssertTrue(fake.models.isEmpty, "idle sends no explicit model unload")
         XCTAssertEqual(fake.instances.map(\.id), ["i1"])
