@@ -46,6 +46,28 @@ final class CleanupSettingsHandoff: @unchecked Sendable {
     }
 }
 
+final class CleanupRequestLifetime: @unchecked Sendable {
+    @TaskLocal static var current: CleanupRequestLifetime?
+    private var closed = false
+
+    func close() {
+        CleanupSettingsHandoff.shared.synchronized { closed = true }
+    }
+
+    func check() throws {
+        try CleanupSettingsHandoff.shared.synchronized {
+            guard !closed else { throw CancellationError() }
+        }
+    }
+
+    func whileOpen<Value: Sendable>(_ work: @Sendable () async throws -> Value) async throws -> Value {
+        try check()
+        let value = try await Self.$current.withValue(self) { try await work() }
+        try check()
+        return value
+    }
+}
+
 struct CleanupSendHandoff: Sendable {
     enum Refusal: LocalizedError, Equatable {
         case settingsChanged
@@ -59,18 +81,21 @@ struct CleanupSendHandoff: Sendable {
     private let store: CleanupSettingsStore
     private let snapshot: CleanupSettingsSnapshot
     private let revision: UUID
+    private let lifetime: CleanupRequestLifetime?
 
-    init(store: CleanupSettingsStore) {
+    init(store: CleanupSettingsStore, lifetime: CleanupRequestLifetime? = nil) {
         let captured = CleanupSettingsHandoff.shared.synchronized {
             (store.snapshot(), CleanupSettingsHandoff.shared.revision(for: store.domain))
         }
         self.store = store
         snapshot = captured.0
         revision = captured.1
+        self.lifetime = lifetime
     }
 
     func perform<Value>(_ start: () throws -> Value) throws -> Value {
         try CleanupSettingsHandoff.shared.synchronized {
+            try lifetime?.check()
             guard snapshot.isEnabled, store.snapshot() == snapshot,
                 CleanupSettingsHandoff.shared.revision(for: store.domain) == revision,
                 !CleanupSettingsHandoff.shared.hasSecretChange(store.domain)
@@ -82,7 +107,9 @@ struct CleanupSendHandoff: Sendable {
     }
 
     static func data(for request: URLRequest, session: URLSession) async throws -> (Data, URLResponse) {
-        guard let handoff = current else { return try await session.data(for: request) }
+        let handoff = current
+        let lifetime = CleanupRequestLifetime.current
+        guard handoff != nil || lifetime != nil else { return try await session.data(for: request) }
         let operation = BoundCleanupDataTask()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
@@ -98,7 +125,14 @@ struct CleanupSendHandoff: Sendable {
                 }
                 operation.install(task, continuation: continuation)
                 do {
-                    try handoff.perform { try operation.start() }
+                    try CleanupSettingsHandoff.shared.synchronized {
+                        try lifetime?.check()
+                        if let handoff {
+                            try handoff.perform { try operation.start() }
+                        } else {
+                            try operation.start()
+                        }
+                    }
                 } catch {
                     operation.finish(.failure(error))
                     task.cancel()

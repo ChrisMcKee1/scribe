@@ -5,6 +5,133 @@ import os
 @testable import Scribe
 
 final class CleanupSendHandoffTests: XCTestCase {
+    func testClosingOneCacheDoesNotWithdrawAnotherWithTheSameSettings() async throws {
+        let store = makeCleanupStore().store
+        store.isEnabled = true
+        var factory = CleanupProviderFactory.testing(
+            session: makeStubSession { request in StubReply.completion(request, "kept") },
+            foundryStatus: .init(lookup: { URL(string: "http://localhost:5273")! }))
+        factory.foundryLocalContext = .init(lookup: { _ in 4096 })
+        factory.foundryLocalResidency = .init(isLoaded: { _ in true }, loadCached: { _ in })
+        let first = CleanupProviderCache(store: store, environment: [:], factory: factory)
+        let second = CleanupProviderCache(store: store, environment: [:], factory: factory)
+        let provider = try second.admittedProvider()
+        _ = await first.releaseLocalModel(.shutdown)
+        let reply = try await provider.clean(CleanupRequest(transcript: "kept", writingStylePrompt: "fix"))
+        XCTAssertEqual(reply.cleanedText, "kept")
+        _ = await second.releaseLocalModel(.shutdown)
+    }
+
+    func testAnAnswerDeliveredAfterLifetimeClosureIsNotAccepted() async throws {
+        let lifetime = CleanupRequestLifetime()
+        let session = makeStubSession { request in
+            lifetime.close()
+            return StubReply.completion(request, "late")
+        }
+        do {
+            _ = try await lifetime.whileOpen {
+                try await CleanupSendHandoff.data(
+                    for: URLRequest(url: URL(string: "https://example.test")!), session: session)
+            }
+            XCTFail("An already-sent request's late response cannot be accepted")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
+    func testShutdownWithdrawsFoundryConnectionTestBeforeLoading() async throws {
+        let store = makeCleanupStore().store
+        let began = LifecycleGate()
+        let resume = LifecycleGate()
+        let loaded = StubSwitch()
+        var factory = CleanupProviderFactory.testing(
+            session: makeStubSession { request in
+                XCTFail("A withdrawn connection test cannot send")
+                return StubReply.completion(request, "never")
+            },
+            foundryStatus: .init(lookup: { URL(string: "http://localhost:5273")! }))
+        factory.foundryLocalContext = .init(lookup: { _ in
+            began.open()
+            try await resume.wait()
+            return 4096
+        })
+        factory.foundryLocalResidency = .init(
+            isLoaded: { _ in false }, loadCached: { _ in loaded.turnOn() })
+        let cache = CleanupProviderCache(store: store, environment: [:], factory: factory)
+        let check = Task { await cache.checkConnection() }
+        try await began.wait()
+        _ = await cache.releaseLocalModel(.shutdown)
+        resume.open()
+        let outcome = await check.value
+        XCTAssertFalse(outcome.reachable)
+        XCTAssertFalse(loaded.isOn)
+    }
+
+    func testClosingTheCacheWithdrawsFoundryPlanningBeforeLoadOrTextSend() async throws {
+        let store = makeCleanupStore().store
+        store.isEnabled = true
+        let began = LifecycleGate()
+        let resume = LifecycleGate()
+        let loaded = StubSwitch()
+        let log = RequestLog()
+        var factory = CleanupProviderFactory.testing(
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "never")
+            },
+            foundryStatus: .init(lookup: { URL(string: "http://localhost:5273")! }))
+        factory.foundryLocalContext = .init(lookup: { _ in
+            began.open()
+            try await resume.wait()
+            return 4096
+        })
+        factory.foundryLocalResidency = .init(
+            isLoaded: { _ in false }, loadCached: { _ in loaded.turnOn() })
+        let cache = CleanupProviderCache(store: store, environment: [:], factory: factory)
+        let admission = try cache.admitOneOff()
+        let provider = try cache.admittedProvider()
+        let request = Task {
+            try await provider.clean(
+                CleanupRequest(transcript: "never", writingStylePrompt: "Fix spelling.", maxOutputTokens: 64))
+        }
+        try await began.wait()
+        _ = await cache.releaseLocalModel(.shutdown)
+        XCTAssertFalse(cache.isCurrent(admission))
+        XCTAssertThrowsError(try cache.admitOneOff()) { XCTAssertTrue($0 is CancellationError) }
+        resume.open()
+        if case .failure(let error) = await request.result {
+            XCTAssertTrue(error is CancellationError)
+        } else {
+            XCTFail("Shutdown must withdraw the request")
+        }
+        XCTAssertFalse(loaded.isOn)
+        XCTAssertTrue(log.all.isEmpty)
+    }
+
+    func testClosedLifetimeRefusesTransportWithoutChangingTheSavedSettings() async throws {
+        let store = makeCleanupStore().store
+        store.isEnabled = true
+        let original = store.snapshot()
+        let lifetime = CleanupRequestLifetime()
+        let handoff = CleanupSendHandoff(store: store, lifetime: lifetime)
+        lifetime.close()
+        let session = makeStubSession { request in
+            XCTFail("A closed lifetime cannot send")
+            return StubReply.completion(request, "never")
+        }
+        do {
+            _ = try await CleanupSendHandoff.$current.withValue(handoff) {
+                try await CleanupSendHandoff.data(
+                    for: URLRequest(url: URL(string: "https://example.test")!), session: session)
+            }
+            XCTFail("Closed lifetime must fail")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(store.snapshot(), original)
+        XCTAssertNoThrow(try CleanupSendHandoff(store: store).perform {})
+    }
+
     func testAChangeAndChangeBackStillWithdrawTheHandoff() throws {
         let store = makeCleanupStore().store
         store.isEnabled = true

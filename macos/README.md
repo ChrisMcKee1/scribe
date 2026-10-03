@@ -403,6 +403,11 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   An empty cache still closes its lifecycle. Recognized-local cleanup providers report this as cancellation,
   not a fictitious timeout, without reaching transport. LM Studio reconciliation checks closing before its
   read and at its unload/load commit, so a read spanning shutdown cannot start a new model change.
+ - Cleanup-cache shutdown also withdraws admitted dictation and one-off requests, plus saved and candidate
+  connection tests. Lifetime closure and HTTP task resume share the existing settings/send boundary:
+  later attempts send nothing and late successful replies are refused. Foundry planning resumed after
+  closure cannot start a model load. This does not retract requests or daemon work already started.
+  Independent caches keep independent lifetimes, without changing saved settings.
 - Foundry Local cleanup now reads its selected chat model's supported `model info` metadata for context planning
   and again before each send, including an endpoint-refresh retry. The reported capacity only lowers a conservative
   4,096-token ceiling. Missing, invalid or mismatched capacity refuses cleanup explicitly, preserving ordinary

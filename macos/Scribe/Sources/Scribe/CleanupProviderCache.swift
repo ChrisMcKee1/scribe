@@ -30,6 +30,7 @@ final class CleanupProviderCache: Sendable {
     private let checkTimer: @Sendable (Duration) async throws -> Void
     private let readinessTimer: @Sendable (Duration) async throws -> Void
     private let state = OSAllocatedUnfairLock(initialState: CleanupProviderCacheState())
+    private let lifetime = CleanupRequestLifetime()
     let lifecycle: LocalModelLifecycle
 
     /// - Parameters:
@@ -61,6 +62,7 @@ final class CleanupProviderCache: Sendable {
     /// `.secretUnavailable` when a secret cannot be read. Reads the preferences on every call and the secret store only
     /// when it builds; it never starts a process or sends a request.
     func provider() throws -> any CleanupProvider {
+        try lifetime.check()
         let connection = try CleanupProviderResolver.connection(store: store, environment: environment)
         applyIdleTime()
         return try entry(for: connection).provider
@@ -77,7 +79,7 @@ final class CleanupProviderCache: Sendable {
 
     func admitOneOff() throws -> OneOffAdmission {
         try CleanupSettingsHandoff.shared.synchronized {
-            let handoff = CleanupSendHandoff(store: store)
+            let handoff = CleanupSendHandoff(store: store, lifetime: lifetime)
             return try handoff.perform {
                 OneOffAdmission(
                     connection: try CleanupProviderResolver.connection(store: store, environment: environment),
@@ -157,6 +159,7 @@ final class CleanupProviderCache: Sendable {
     /// no longer use that model.
     @discardableResult
     func releaseLocalModel(_ reason: LocalModelReleaseReason) async -> LocalModelReleaseOutcome {
+        if reason == .shutdown { lifetime.close() }
         let served = lifecycle.servedTarget
         guard reason == .shutdown || served != nil || !lifecycle.ownedCopies.isEmpty else { return .nothingToRelease }
         let wanted: @Sendable () -> Bool
@@ -315,7 +318,9 @@ final class CleanupProviderCache: Sendable {
         let deadline = deadlineForCheck(kind, localApp)
         do {
             return try await OperationDeadline.run(within: deadline, sleep: checkTimer) {
-                try await self.check(connection, candidate: candidate, deadline: deadline)
+                try await self.lifetime.whileOpen {
+                    try await self.check(connection, candidate: candidate, deadline: deadline)
+                }
             }
         } catch let error as OperationDeadlineError {
             ScribeLog.info(.cleanup, "Test Connection ran out of time", .name("provider", kind), .failure(error))

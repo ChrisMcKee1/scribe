@@ -122,6 +122,7 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
 
     private func loadAndConfirm() async throws {
         try Task.checkCancellation()
+        try CleanupRequestLifetime.current?.check()
         try CleanupSendHandoff.current?.perform {}
         try await residency.loadCached(modelAlias)
         try Task.checkCancellation()

@@ -165,6 +165,11 @@ final class LocalModelLifecycleTests: XCTestCase {
                 return StubReply.completion(request, "never")
             })
         let cache = CleanupProviderCache(store: store, environment: [:], factory: factory)
+        store.isEnabled = true
+        store.providerKind = .openAICompatible
+        store.openAIBaseURL = "http://localhost:11434/v1"
+        store.openAIModel = "m"
+        let provider = try cache.admittedProvider()
         let outcome = await cache.releaseLocalModel(.shutdown)
         XCTAssertEqual(outcome, .nothingToRelease)
         do {
@@ -173,11 +178,6 @@ final class LocalModelLifecycleTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? LocalModelLifecycleError, .closing)
         }
-        store.isEnabled = true
-        store.providerKind = .openAICompatible
-        store.openAIBaseURL = "http://localhost:11434/v1"
-        store.openAIModel = "m"
-        let provider = try cache.admittedProvider()
         do {
             _ = try await provider.clean(
                 CleanupRequest(transcript: "never", writingStylePrompt: "Fix spelling.", maxOutputTokens: 64))
