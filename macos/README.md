@@ -365,6 +365,15 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   deterministic tests even when real-ASR is off. No new model is downloaded by these added tests. The
   workflow's optional real speech recognition job does the same on a hosted runner, only when it is dispatched by
   hand; it fits one, with the model taking about 700 MB of disk and Foundry Local about 1.1 GB of memory.
+- Foundry Local cleanup now reads its selected chat model's supported `model info` metadata for context planning
+  and again before each send, including an endpoint-refresh retry. The reported capacity only lowers a conservative
+  4,096-token ceiling. Missing, invalid or mismatched capacity refuses cleanup explicitly, preserving ordinary
+  dictation; no user content is sent by the metadata command. Full instructions, text, bounded output, template and
+  margin must fit before sending. Local chunk/glossary and auxiliary-output planning apply to Foundry too, and Test
+  connection cannot retry without an output limit. This is catalog-capacity checking, not proof of the active runtime's
+  context or atomic ownership. Older CLIs without usable metadata cannot serve cleanup until upgraded.
+  `SCRIBE_REAL_FOUNDRY_CLEANUP=1 swift test --package-path macos/Scribe --filter FoundryLocalCleanupProviderTests`
+  checks a synthetic bounded completion only when the default `qwen2.5-1.5b` is already cached and loaded.
 
 The runners cannot grant Microphone, Accessibility or Input Monitoring access and have no screen to look at, so the
 event tap, a real microphone, insertion into real apps and the menu bar and overlay UI still need a real Mac.

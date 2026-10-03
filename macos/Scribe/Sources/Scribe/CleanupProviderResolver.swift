@@ -81,6 +81,7 @@ struct CleanupProviderFactory: Sendable {
     /// Elapsed time, for how long Foundry Local's endpoint is trusted.
     var monotonicNow: @Sendable () -> ContinuousClock.Instant
     var localModelLifecycle: LocalModelLifecycle = .shared
+    var foundryLocalContext: FoundryLocalContextSource = .live()
 
     static var live: CleanupProviderFactory {
         CleanupProviderFactory(
@@ -181,7 +182,8 @@ enum CleanupProviderResolver {
         switch connection.target {
         case .foundryLocal(let modelAlias):
             return FoundryLocalCleanupProvider(
-                modelAlias: modelAlias, status: factory.foundryLocalStatus, session: factory.session,
+                modelAlias: modelAlias, status: factory.foundryLocalStatus, context: factory.foundryLocalContext,
+                session: factory.session,
                 now: factory.monotonicNow)
         case .ollama(let model):
             return ManagedOllamaCleanupProvider(

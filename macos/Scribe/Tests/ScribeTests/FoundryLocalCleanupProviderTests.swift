@@ -3,6 +3,51 @@ import XCTest
 @testable import Scribe
 
 final class FoundryLocalStatusTests: XCTestCase {
+    func testContextMetadataMustNameTheChatModelAndNeverEnlargesTheBudget() throws {
+        for (reported, expected) in [(512, 512), (2048, 2048), (32768, 4096)] {
+            let json = #"{"model":{"alias":"qwen","type":"Chat","contextLength":\#(reported)}}"#
+            XCTAssertEqual(try FoundryLocalContextSource.capacity(from: Data(json.utf8), model: "qwen"), expected)
+        }
+        for json in [
+            #"{"model":{"alias":"another","type":"Chat","contextLength":4096}}"#,
+            #"{"model":{"alias":"qwen","type":"Speech","contextLength":4096}}"#,
+            #"{"model":{"alias":"qwen","type":"Chat","contextLength":0}}"#,
+            #"{"model":{"alias":"qwen","type":"Chat","contextLength":-1}}"#,
+            #"{"model":{"alias":"qwen","type":"Chat","contextLength":null}}"#,
+            #"{"model":{"alias":"qwen","type":"Chat","contextLength":"4096"}}"#,
+            "{}",
+        ] {
+            XCTAssertThrowsError(try FoundryLocalContextSource.capacity(from: Data(json.utf8), model: "qwen")) {
+                XCTAssertEqual($0 as? CleanupProviderError, .localContextUnknown)
+            }
+        }
+        let exact = #"{"model":{"id":"qwen-gpu:4","type":"Chat","contextLength":2048}}"#
+        XCTAssertEqual(try FoundryLocalContextSource.capacity(from: Data(exact.utf8), model: "qwen-gpu:4"), 2048)
+    }
+
+    func testContextLookupUsesOnlyTheBoundedMetadataCommand() async throws {
+        let directory = try makeTemporaryDirectory(label: "foundry-context")
+        let arguments = directory.appendingPathComponent("arguments")
+        let script = try makeScript(
+            named: "foundry",
+            body: """
+                printf '%s\\n' "$@" > '\(arguments.path(percentEncoded: false))'
+                echo '{"model":{"alias":"qwen","type":"Chat","contextLength":32768}}'
+                """)
+        let source = FoundryLocalContextSource.live(environment: ["SCRIBE_FOUNDRY_CLI": script.path])
+        let context = try await source.lookup("qwen")
+        XCTAssertEqual(context, 4096)
+        XCTAssertEqual(
+            try String(contentsOf: arguments, encoding: .utf8).split(separator: "\n").map(String.init),
+            ["model", "info", "qwen", "-o", "json"])
+        do {
+            _ = try await source.lookup("--help")
+            XCTFail("A model cannot become a CLI option")
+        } catch {
+            XCTAssertEqual(error as? CleanupProviderError, .localContextUnknown)
+        }
+    }
+
     func testOnlyUncredentialedLoopbackHTTPAddressesAreLocalEndpoints() throws {
         for text in [
             "http://127.0.0.1:5273", "http://127.10.20.30:5273", "https://localhost:5273/v1",
@@ -109,6 +154,107 @@ final class FoundryLocalStatusTests: XCTestCase {
 }
 
 final class FoundryLocalCleanupProviderTests: XCTestCase {
+    func testCachedFoundryModelPlansAndAnswersABoundedSyntheticRequest() async throws {
+        guard ProcessInfo.processInfo.environment["SCRIBE_REAL_FOUNDRY_CLEANUP"] == "1" else {
+            throw XCTSkip("Opt in only with qwen2.5-1.5b already cached and loaded in Foundry Local.")
+        }
+        let provider = FoundryLocalCleanupProvider()
+        let planned = try await provider.contextForPlanning()
+        XCTAssertGreaterThan(try XCTUnwrap(planned), 0)
+        XCTAssertLessThanOrEqual(try XCTUnwrap(planned), ContextBudget.assumedContextTokens)
+        let request = CleanupRequest(
+            transcript: "Please send the meeting notes tomorrow.",
+            writingStylePrompt: "Return only the sentence with spelling and punctuation corrected.",
+            maxOutputTokens: 64)
+        let answer = try await provider.clean(request)
+        XCTAssertFalse(answer.cleanedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        XCTAssertEqual(answer.providerID, "foundry-local")
+    }
+
+    func testReportedContextPlansAndBoundsTheActualWireRequest() async throws {
+        let log = RequestLog()
+        let provider = FoundryLocalCleanupProvider(
+            status: .init(lookup: { URL(string: "http://localhost:5273")! }),
+            context: .init(lookup: { _ in 1024 }),
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "Cleaned.")
+            })
+        let planned = try await provider.contextForPlanning()
+        XCTAssertEqual(planned, 1024)
+        XCTAssertTrue(provider.requiresOutputLimit)
+        _ = try await provider.clean(
+            CleanupRequest(transcript: "hello", writingStylePrompt: "Fix spelling.", maxOutputTokens: 64))
+        XCTAssertEqual(log.all.count, 1)
+        XCTAssertEqual(log.all.first?.jsonBody["max_completion_tokens"] as? Int, 64)
+        let failure = try await cleanupFailure(
+            of: provider, CleanupRequest(transcript: String(repeating: "large ", count: 1000), maxOutputTokens: 64))
+        XCTAssertEqual(failure, .localRequestTooLarge)
+        XCTAssertEqual(log.all.count, 1)
+    }
+
+    func testUnknownCapacityNeverSendsAndMissingOutputLimitBecomesBounded() async throws {
+        let log = RequestLog()
+        let handler: StubURLProtocol.Handler = { request in
+            log.record(request)
+            return StubReply.completion(request, "Cleaned.")
+        }
+        let status = FoundryLocalStatusSource { URL(string: "http://localhost:5273")! }
+        let unknown = FoundryLocalCleanupProvider(
+            status: status, context: .init(lookup: { _ in 0 }), session: makeStubSession(handler))
+        let unknownFailure = try await cleanupFailure(of: unknown)
+        XCTAssertEqual(unknownFailure, .localContextUnknown)
+        XCTAssertTrue(log.all.isEmpty)
+        let bounded = FoundryLocalCleanupProvider(
+            status: status, context: .init(lookup: { _ in 4096 }), session: makeStubSession(handler))
+        _ = try await bounded.clean(CleanupRequest(transcript: "hello"))
+        XCTAssertEqual(
+            log.all.first?.jsonBody["max_completion_tokens"] as? Int,
+            ContextBudget.cleanupOutputCeiling("hello"))
+    }
+
+    func testCapacityIsReadAgainAtSendRatherThanTrustedFromPlanning() async throws {
+        let changed = StubSwitch()
+        let log = RequestLog()
+        let provider = FoundryLocalCleanupProvider(
+            status: .init(lookup: { URL(string: "http://localhost:5273")! }),
+            context: .init(lookup: { _ in changed.isOn ? 256 : 4096 }),
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "never")
+            })
+        let planned = try await provider.contextForPlanning()
+        XCTAssertEqual(planned, 4096)
+        changed.turnOn()
+        let request = CleanupRequest(transcript: String(repeating: "text ", count: 100), maxOutputTokens: 128)
+        let failure = try await cleanupFailure(of: provider, request)
+        XCTAssertEqual(failure, .localRequestTooLarge)
+        XCTAssertTrue(log.all.isEmpty)
+    }
+
+    func testARefreshedEndpointMustPassTheCapacityGuardAgain() async throws {
+        let changed = StubSwitch()
+        let log = RequestLog()
+        let status = FakeFoundryStatus(endpoints: ["http://localhost:5001", "http://localhost:5002"])
+        let provider = FoundryLocalCleanupProvider(
+            status: status.source, context: .init(lookup: { _ in changed.isOn ? 64 : 4096 }),
+            session: makeStubSession { request in
+                log.record(request)
+                if log.all.count > 1 {
+                    changed.turnOn()
+                    throw URLError(.cannotConnectToHost)
+                }
+                return StubReply.completion(request, "Cleaned.")
+            })
+        let request = CleanupRequest(transcript: "hello", writingStylePrompt: "Fix spelling.", maxOutputTokens: 64)
+        _ = try await provider.clean(request)
+        let failure = try await cleanupFailure(of: provider, request)
+        XCTAssertEqual(failure, .localRequestTooLarge)
+        XCTAssertEqual(status.lookups, 2)
+        XCTAssertEqual(log.all.count, 2)
+        XCTAssertTrue(log.all.allSatisfy { $0.url?.port == 5001 })
+    }
+
     func testAnInjectedRemoteStatusCannotSendTheTranscript() async throws {
         let log = RequestLog()
         let provider = makeProvider(status: FakeFoundryStatus(endpoints: ["https://remote.example/v1"])) { request in
@@ -180,7 +326,8 @@ final class FoundryLocalCleanupProviderTests: XCTestCase {
         status: FakeFoundryStatus, clock: TestClock = TestClock(), _ handler: @escaping StubURLProtocol.Handler
     ) -> FoundryLocalCleanupProvider {
         FoundryLocalCleanupProvider(
-            modelAlias: "qwen2.5-1.5b", status: status.source, session: makeStubSession(handler),
+            modelAlias: "qwen2.5-1.5b", status: status.source, context: .init(lookup: { _ in 4096 }),
+            session: makeStubSession(handler),
             now: clock.monotonicNow)
     }
 
@@ -291,7 +438,8 @@ final class FoundryLocalCleanupProviderTests: XCTestCase {
         let sent = try XCTUnwrap(log.all.first)
         XCTAssertEqual(sent.url?.absoluteString, "http://127.0.0.1:5001/v1/chat/completions")
         XCTAssertNil(sent.header("Authorization"))
-        XCTAssertEqual(Set(sent.jsonBody.keys), ["model", "messages", "temperature", "stream"])
+        XCTAssertEqual(
+            Set(sent.jsonBody.keys), ["model", "messages", "temperature", "stream", "max_completion_tokens"])
         XCTAssertEqual(sent.jsonBody["model"] as? String, "qwen2.5-1.5b")
         XCTAssertEqual(sent.jsonBody["temperature"] as? Double, CleanupSampling.onDeviceTemperature)
     }

@@ -23,10 +23,19 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
     /// spike-free latency curve. See CLEANUP-MODEL-BENCHMARK.md.
     let modelAlias: String
     private let status: FoundryLocalStatusSource
+    private let context: FoundryLocalContextSource
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
     private let now: @Sendable () -> ContinuousClock.Instant
     private let endpoint = OSAllocatedUnfairLock<ResolvedEndpoint?>(initialState: nil)
+    var requiresOutputLimit: Bool { true }
+
+    func contextForPlanning() async throws -> Int? {
+        let reported = try await context.lookup(modelAlias)
+        try Task.checkCancellation()
+        guard reported > 0 else { throw CleanupProviderError.localContextUnknown }
+        return min(reported, ContextBudget.assumedContextTokens)
+    }
 
     private struct ResolvedEndpoint: Sendable {
         let completionsURL: URL
@@ -36,12 +45,14 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
     init(
         modelAlias: String = CleanupSettingsStore.defaultFoundryLocalModelAlias,
         status: FoundryLocalStatusSource = .live(),
+        context: FoundryLocalContextSource = .live(),
         timeout: TimeInterval = 30,
         session: URLSession = CleanupProviderFactory.cleanupSession,
         now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) {
         self.modelAlias = modelAlias
         self.status = status
+        self.context = context
         self.timeout = timeout
         self.transport = ChatCompletionsTransport(
             session: URLSession(
@@ -77,13 +88,68 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
     }
 
     private func send(_ request: CleanupRequest, to url: URL) async throws -> CleanupResponse {
+        let limit = try await contextForPlanning()
+        guard let limit else { throw CleanupProviderError.localContextUnknown }
+        let bounded = CleanupRequest(
+            transcript: request.transcript, writingStylePrompt: request.writingStylePrompt,
+            singleLineMode: request.singleLineMode, timeout: request.timeout,
+            maxOutputTokens: request.maxOutputTokens ?? ContextBudget.cleanupOutputCeiling(request.transcript))
+        guard ContextBudget.requestFits(bounded, contextTokens: limit) else {
+            throw CleanupProviderError.localRequestTooLarge
+        }
         let completion = try await transport.complete(
-            request, at: url, model: modelAlias, bearerToken: nil, temperature: CleanupSampling.onDeviceTemperature,
+            bounded, at: url, model: modelAlias, bearerToken: nil, temperature: CleanupSampling.onDeviceTemperature,
             defaultTimeout: timeout, provider: .foundryLocal)
         return CleanupResponse(
             cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: modelAlias)
     }
 
+}
+
+struct FoundryLocalContextSource: Sendable {
+    let lookup: @Sendable (String) async throws -> Int
+
+    static func live(environment: [String: String] = ProcessInfo.processInfo.environment) -> Self {
+        Self { model in
+            guard !model.isEmpty, !model.hasPrefix("-"),
+                let cli = FoundryLocalCLI.locate(environment: environment)
+            else { throw CleanupProviderError.localContextUnknown }
+            let outcome: ProcessRunner.Outcome
+            do {
+                outcome = try await ProcessRunner.run(
+                    cli, arguments: ["model", "info", model, "-o", "json"], timeout: FoundryLocalCLI.statusTimeout)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw CleanupProviderError.localContextUnknown
+            }
+            if outcome.terminationReason == .cancelled { throw CancellationError() }
+            guard outcome.terminationReason == .finished, outcome.exitStatus == 0 else {
+                throw CleanupProviderError.localContextUnknown
+            }
+            return try capacity(from: outcome.standardOutput.data, model: model)
+        }
+    }
+
+    static func capacity(from data: Data, model requested: String) throws -> Int {
+        struct Metadata: Decodable {
+            struct Model: Decodable {
+                let alias: String?
+                let id: String?
+                let type: String?
+                let contextLength: Int?
+            }
+            let model: Model
+        }
+        guard let reported = try? JSONDecoder().decode(Metadata.self, from: data).model,
+            reported.alias == requested || reported.id == requested,
+            reported.type?.lowercased() == "chat", let capacity = reported.contextLength, capacity > 0
+        else { throw CleanupProviderError.localContextUnknown }
+        return min(capacity, ContextBudget.assumedContextTokens)
+    }
+}
+
+extension FoundryLocalCleanupProvider {
     /// The endpoint to use now, and whether it came from an earlier lookup.
     private func completionsURL() async throws -> (url: URL, wasCached: Bool) {
         let checkedAt = now()

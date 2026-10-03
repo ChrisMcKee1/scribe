@@ -910,7 +910,7 @@ final class CleanupProviderCacheTests: XCTestCase {
     // MARK: - Test Connection's output ceiling
 
     /// Windows' readiness probe ceilings: 4096 for a Microsoft Foundry deployment, which may reason before it answers,
-    /// and 16 for the rest. A dictation carries no ceiling.
+    /// and 16 for the rest. Recognized local runtimes retain a dictation's output ceiling too.
     func testTheCheckCapsTheAnswerAsWindowsDoes() async throws {
         let cases: [(kind: CleanupProviderKind, ceiling: Int)] = [
             (.foundryLocal, 16), (.ollama, 16), (.openAICompatible, 16), (.microsoftFoundry, 4096),
@@ -936,7 +936,7 @@ final class CleanupProviderCacheTests: XCTestCase {
             let bodies = rig.requests.all.filter { $0.host != Self.entraHost }.map(\.jsonBody)
             XCTAssertEqual(bodies.count, 2, "\(kind)")
             XCTAssertEqual(bodies.first?["max_completion_tokens"] as? Int, ceiling, "\(kind)")
-            if kind == .ollama {
+            if kind == .ollama || kind == .foundryLocal {
                 XCTAssertEqual(bodies.last?["max_completion_tokens"] as? Int, 32)
             } else {
                 XCTAssertNil(bodies.last?["max_completion_tokens"], "\(kind): a dictation has no ceiling")

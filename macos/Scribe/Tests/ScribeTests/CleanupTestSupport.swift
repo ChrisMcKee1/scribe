@@ -709,7 +709,8 @@ extension CleanupProviderFactory {
             monotonicNow: clock.monotonicNow,
             localModelLifecycle: LocalModelLifecycle(
                 idle: .zero,
-                actions: .init(unloadModel: { _, _, _ in true }, unloadInstance: { _, _, _ in true })))
+                actions: .init(unloadModel: { _, _, _ in true }, unloadInstance: { _, _, _ in true })),
+            foundryLocalContext: .init(lookup: { _ in 4096 }))
     }
 }
 
