@@ -908,62 +908,61 @@ final class TranscriptionEngineTests: XCTestCase {
         let error = await transcriptionError {
             try await engine.transcribe(wavFileAt: directory.appendingPathComponent("recording.m4a"))
         }
-
-        func testWhisperOverridesWorkIndependentlyWithDiscoveredCounterparts() async throws {
-            let directory = try makeTemporaryDirectory(label: "asr-whisper-independent")
-            let arguments = directory.appendingPathComponent("arguments")
-            let whisper = try makeScript(
-                "printf '%s\\n' \"$@\" > '\(arguments.path)'; echo 'fallback words'",
-                in: directory, named: "whisper-cli")
-            let model = directory.appendingPathComponent("model with spaces.bin")
-            try Data([0]).write(to: model)
-            for overrides in [
-                ["SCRIBE_WHISPER_MODEL": model.path],
-                ["SCRIBE_WHISPER_CLI": whisper.path],
-                ["SCRIBE_WHISPER_MODEL": model.path, "SCRIBE_ASR_BACKEND": "whisper"],
-                ["SCRIBE_WHISPER_CLI": whisper.path, "SCRIBE_ASR_BACKEND": "whisper"],
-            ] {
-                let resolver = TranscriptionBackendResolver(
-                    environment: overrides, searchPath: [directory.path],
-                    whisperCliCandidates: [], whisperModelCandidates: [model.path])
-                let engine = TranscriptionEngine(
-                    resolver: resolver, scratch: ScratchAudioDirectory(url: directory.appendingPathComponent("scratch"))
-                )
-                let result = try await engine.transcribe(samples: tone, sampleRate: 16_000)
-                XCTAssertEqual(result.text, "fallback words")
-                XCTAssertEqual(result.backend, .whisperCpp)
-                let sent = try String(contentsOf: arguments, encoding: .utf8).split(separator: "\n").map(String.init)
-                XCTAssertEqual(Array(sent.prefix(2)), ["-m", model.path])
-                XCTAssertEqual(Array(sent.suffix(4)), ["-nt", "-np", "-l", "en"])
-                XCTAssertTrue(
-                    scratchFiles(ScratchAudioDirectory(url: directory.appendingPathComponent("scratch"))).isEmpty)
-            }
-        }
-
-        func testForcedWhisperDoesNotReplaceAnInvalidOverrideWithAnotherModelOrFoundry() throws {
-            let directory = try makeTemporaryDirectory(label: "asr-whisper-invalid")
-            _ = try makeScript("echo foundry", in: directory, named: "foundry")
-            let whisper = try makeScript("echo fallback", in: directory, named: "whisper-cli")
-            let model = directory.appendingPathComponent("model.bin")
-            try Data([0]).write(to: model)
-            for (key, issue) in [
-                ("SCRIBE_WHISPER_MODEL", TranscriptionBackendIssue.whisperModelNotFound),
-                ("SCRIBE_WHISPER_CLI", TranscriptionBackendIssue.whisperCliNotFound),
-            ] {
-                let resolver = TranscriptionBackendResolver(
-                    environment: [
-                        "SCRIBE_ASR_BACKEND": "whisper", key: directory.appendingPathComponent("missing").path,
-                    ],
-                    searchPath: [directory.path], whisperCliCandidates: [whisper.path],
-                    whisperModelCandidates: [model.path])
-                XCTAssertThrowsError(try resolver.resolve()) {
-                    XCTAssertEqual($0 as? TranscriptionError, .backendMissing(issue))
-                }
-            }
-        }
         XCTAssertEqual(error, .unsupportedAudioFile)
     }
 
+    func testWhisperOverridesWorkIndependentlyWithDiscoveredCounterparts() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-whisper-independent")
+        let arguments = directory.appendingPathComponent("arguments")
+        let whisper = try makeScript(
+            "printf '%s\\n' \"$@\" > '\(arguments.path)'; echo 'fallback words'",
+            in: directory, named: "whisper-cli")
+        let model = directory.appendingPathComponent("model with spaces.bin")
+        try Data([0]).write(to: model)
+        for overrides in [
+            ["SCRIBE_WHISPER_MODEL": model.path],
+            ["SCRIBE_WHISPER_CLI": whisper.path],
+            ["SCRIBE_WHISPER_MODEL": model.path, "SCRIBE_ASR_BACKEND": "whisper"],
+            ["SCRIBE_WHISPER_CLI": whisper.path, "SCRIBE_ASR_BACKEND": "whisper"],
+        ] {
+            let resolver = TranscriptionBackendResolver(
+                environment: overrides, searchPath: [directory.path],
+                whisperCliCandidates: [], whisperModelCandidates: [model.path])
+            let engine = TranscriptionEngine(
+                resolver: resolver, scratch: ScratchAudioDirectory(url: directory.appendingPathComponent("scratch"))
+            )
+            let result = try await engine.transcribe(samples: tone, sampleRate: 16_000)
+            XCTAssertEqual(result.text, "fallback words")
+            XCTAssertEqual(result.backend, .whisperCpp)
+            let sent = try String(contentsOf: arguments, encoding: .utf8).split(separator: "\n").map(String.init)
+            XCTAssertEqual(Array(sent.prefix(2)), ["-m", model.path])
+            XCTAssertEqual(Array(sent.suffix(4)), ["-nt", "-np", "-l", "en"])
+            XCTAssertTrue(
+                scratchFiles(ScratchAudioDirectory(url: directory.appendingPathComponent("scratch"))).isEmpty)
+        }
+    }
+
+    func testForcedWhisperDoesNotReplaceAnInvalidOverrideWithAnotherModelOrFoundry() throws {
+        let directory = try makeTemporaryDirectory(label: "asr-whisper-invalid")
+        _ = try makeScript("echo foundry", in: directory, named: "foundry")
+        let whisper = try makeScript("echo fallback", in: directory, named: "whisper-cli")
+        let model = directory.appendingPathComponent("model.bin")
+        try Data([0]).write(to: model)
+        for (key, issue) in [
+            ("SCRIBE_WHISPER_MODEL", TranscriptionBackendIssue.whisperModelNotFound),
+            ("SCRIBE_WHISPER_CLI", TranscriptionBackendIssue.whisperCliNotFound),
+        ] {
+            let resolver = TranscriptionBackendResolver(
+                environment: [
+                    "SCRIBE_ASR_BACKEND": "whisper", key: directory.appendingPathComponent("missing").path,
+                ],
+                searchPath: [directory.path], whisperCliCandidates: [whisper.path],
+                whisperModelCandidates: [model.path])
+            XCTAssertThrowsError(try resolver.resolve()) {
+                XCTAssertEqual($0 as? TranscriptionError, .backendMissing(issue))
+            }
+        }
+    }
     // MARK: - Reading a finished run
 
     private func outcome(
