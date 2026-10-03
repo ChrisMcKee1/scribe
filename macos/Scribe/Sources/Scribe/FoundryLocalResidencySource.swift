@@ -35,7 +35,9 @@ struct FoundryLocalResidencySource: Sendable {
             throw LocalModelReadinessError.unavailable
         }
         if outcome.terminationReason == .cancelled { throw CancellationError() }
-        guard outcome.terminationReason == .finished, outcome.exitStatus == 0 else {
+        guard outcome.terminationReason == .finished, outcome.exitStatus == 0,
+            outcome.terminationSignal == nil, !outcome.standardOutput.isTruncated
+        else {
             throw LocalModelReadinessError.unavailable
         }
         return outcome.standardOutput.data

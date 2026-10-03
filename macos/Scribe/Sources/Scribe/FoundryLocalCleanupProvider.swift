@@ -174,7 +174,9 @@ struct FoundryLocalContextSource: Sendable {
             }
 
             if outcome.terminationReason == .cancelled { throw CancellationError() }
-            guard outcome.terminationReason == .finished, outcome.exitStatus == 0 else {
+            guard outcome.terminationReason == .finished, outcome.exitStatus == 0,
+                outcome.terminationSignal == nil, !outcome.standardOutput.isTruncated
+            else {
                 throw CleanupProviderError.localContextUnknown
             }
             return try capacity(from: outcome.standardOutput.data, model: model)
@@ -260,6 +262,9 @@ struct FoundryLocalStatusSource: Sendable {
                 throw CleanupProviderError.endpointUnavailable(.foundryLocalStatusTimedOut)
             case .finished:
                 break
+            }
+            guard outcome.terminationSignal == nil, !outcome.standardOutput.isTruncated else {
+                throw CleanupProviderError.endpointUnavailable(.foundryLocalStatusUnreadable)
             }
             let base = try FoundryLocalStatus.baseURL(
                 fromStatusOutput: outcome.standardOutput.data, exitStatus: outcome.exitStatus)

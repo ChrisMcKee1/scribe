@@ -157,6 +157,72 @@ final class FoundryLocalStatusTests: XCTestCase {
         }
     }
 
+    func testDamagedManagementRepliesCannotAuthorizeEndpointsCapacityOrResidency() async throws {
+        for ending in ["kill -TERM \"$$\"", "head -c 1048577 /dev/zero | tr '\\000' ' '"] {
+            let foundry = try makeScript(
+                named: "foundry",
+                body: """
+                    case "$1" in
+                    status) echo '{"service":{"ready":true,"webUrls":["http://127.0.0.1:6123"]}}' ;;
+                    model)
+                      case "$2" in
+                      info) echo '{"model":{"alias":"qwen","id":"qwen-gpu:4","type":"Chat","cached":true,"contextLength":4096}}' ;;
+                      list) echo '{"models":[{"alias":"qwen","id":"qwen-gpu:4","type":"Chat"}]}' ;;
+                      load) echo '{"success":true}' ;;
+                      esac ;;
+                    esac
+                    \(ending)
+                    """)
+            let environment = ["SCRIBE_FOUNDRY_CLI": foundry.path]
+            do {
+                _ = try await FoundryLocalStatusSource.live(environment: environment).lookup()
+                XCTFail("Damaged status must not authorize an endpoint")
+            } catch {
+                XCTAssertEqual(
+                    error as? CleanupProviderError, .endpointUnavailable(.foundryLocalStatusUnreadable))
+            }
+            do {
+                _ = try await FoundryLocalContextSource.live(environment: environment).lookup("qwen")
+                XCTFail("Damaged metadata must not authorize capacity")
+            } catch {
+                XCTAssertEqual(error as? CleanupProviderError, .localContextUnknown)
+            }
+            do {
+                _ = try await FoundryLocalResidencySource.live(environment: environment).isLoaded("qwen")
+                XCTFail("Damaged listing must not confirm residency")
+            } catch {
+                XCTAssertEqual(error as? LocalModelReadinessError, .unavailable)
+            }
+        }
+    }
+
+    func testDamagedLoadConfirmationNeverReportsSuccess() async throws {
+        for ending in ["kill -TERM \"$$\"", "head -c 1048577 /dev/zero | tr '\\000' ' '"] {
+            let directory = try makeTemporaryDirectory(label: "foundry-load-reply")
+            let marker = directory.appendingPathComponent("load-started")
+            let foundry = try makeScript(
+                named: "foundry",
+                body: """
+                    if [ "$2" = info ]; then
+                      echo '{"model":{"alias":"qwen","id":"qwen-gpu:4","type":"Chat","cached":true}}'
+                    else
+                      touch '\(marker.path)'
+                      echo '{"success":true}'
+                      \(ending)
+                    fi
+                    """)
+            do {
+                try await FoundryLocalResidencySource.live(
+                    environment: ["SCRIBE_FOUNDRY_CLI": foundry.path]
+                ).loadCached("qwen")
+                XCTFail("A damaged load confirmation must not report success")
+            } catch {
+                XCTAssertEqual(error as? LocalModelReadinessError, .unavailable)
+            }
+            XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+        }
+    }
+
     func testALiveLookupThatFailsIsNotReady() async throws {
         let foundry = try makeScript(named: "foundry", body: "echo 'Service is not running' >&2\nexit 1")
         let status = FoundryLocalStatusSource.live(environment: [
@@ -173,6 +239,54 @@ final class FoundryLocalStatusTests: XCTestCase {
 }
 
 final class FoundryLocalCleanupProviderTests: XCTestCase {
+    func testDamagedLiveManagementRepliesSendNoCleanupText() async throws {
+        for damagedCommand in ["status", "info", "list"] {
+            for ending in ["kill -TERM \"$$\"", "head -c 1048577 /dev/zero | tr '\\000' ' '"] {
+                let foundry = try makeScript(
+                    named: "foundry",
+                    body: """
+                        case "$1" in
+                        status) echo '{"service":{"ready":true,"webUrls":["http://127.0.0.1:6123"]}}' ;;
+                        model)
+                          case "$2" in
+                          info) echo '{"model":{"alias":"qwen","id":"qwen-gpu:4","type":"Chat","cached":true,"contextLength":4096}}' ;;
+                          list) echo '{"models":[{"alias":"qwen","id":"qwen-gpu:4","type":"Chat"}]}' ;;
+                          esac ;;
+                        esac
+                        if [ "$1" = '\(damagedCommand)' ] || [ "$2" = '\(damagedCommand)' ]; then
+                          \(ending)
+                        fi
+                        """)
+                let environment = ["SCRIBE_FOUNDRY_CLI": foundry.path]
+                let log = RequestLog()
+                let provider = FoundryLocalCleanupProvider(
+                    modelAlias: "qwen",
+                    status: .live(environment: environment), context: .live(environment: environment),
+                    residency: .live(environment: environment), modelLane: AsyncLane(),
+                    session: makeStubSession { request in
+                        log.record(request)
+                        return StubReply.completion(request, "Unexpected.")
+                    })
+                do {
+                    _ = try await provider.clean(
+                        CleanupRequest(transcript: PrivacyCanary.transcript, maxOutputTokens: 64))
+                    XCTFail("Damaged management output must refuse cleanup")
+                } catch {
+                    switch damagedCommand {
+                    case "status":
+                        XCTAssertEqual(
+                            error as? CleanupProviderError, .endpointUnavailable(.foundryLocalStatusUnreadable))
+                    case "info":
+                        XCTAssertEqual(error as? CleanupProviderError, .localContextUnknown)
+                    default:
+                        XCTAssertEqual(error as? LocalModelReadinessError, .unavailable)
+                    }
+                }
+                XCTAssertTrue(log.all.isEmpty)
+            }
+        }
+    }
+
     func testCachedFoundryModelPlansAndAnswersABoundedSyntheticRequest() async throws {
         guard ProcessInfo.processInfo.environment["SCRIBE_REAL_FOUNDRY_CLEANUP"] == "1" else {
             throw XCTSkip("Opt in only with qwen2.5-1.5b already cached and loaded in Foundry Local.")

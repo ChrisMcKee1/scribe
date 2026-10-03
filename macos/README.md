@@ -49,6 +49,8 @@ Both backends refuse a signal-terminated recognizer even if it printed a complet
 successful run remains available and starts with the cold budget; Foundry's ordinary nonzero-exit JSON handling stays.
 An explicit non-null Foundry error also takes precedence over any text in that same reply. Error detail is never read
 into a log or shown as a transcript. Progress-prefixed Foundry replies are decoded without replacing damaged UTF-8 bytes.
+Foundry cleanup also refuses signal-terminated or truncated status, capacity and residency replies before trusting their
+JSON, so an incomplete management reply cannot authorize an endpoint, model load or text request.
 
 ## Build
 
