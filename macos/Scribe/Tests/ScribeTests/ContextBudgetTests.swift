@@ -3,6 +3,33 @@ import XCTest
 @testable import Scribe
 
 final class ContextBudgetTests: XCTestCase {
+    func testAuxiliaryFittingPreservesInputsAndReservesAnExactMinimumAnswer() throws {
+        let original = CleanupRequest(
+            transcript: "日本語", writingStylePrompt: "Give suggestions.",
+            singleLineMode: true, timeout: 7, maxOutputTokens: 2048)
+        let fixedCost =
+            ContextBudget.chatTemplateTokens + 64 + TokenEstimate.vocabulary(original.writingStylePrompt)
+            + TokenEstimate.transcript(original.transcript)
+        let context = fixedCost + ContextBudget.auxiliaryMinimumOutputTokens
+        let fitted = try ContextBudget.fitAuxiliary(original, contextTokens: context)
+        XCTAssertEqual(fitted.maxOutputTokens, 512)
+        XCTAssertEqual(fitted.transcript, original.transcript)
+        XCTAssertEqual(fitted.writingStylePrompt, original.writingStylePrompt)
+        XCTAssertEqual(fitted.singleLineMode, original.singleLineMode)
+        XCTAssertEqual(fitted.timeout, original.timeout)
+        XCTAssertTrue(ContextBudget.requestFits(fitted, contextTokens: context))
+        XCTAssertThrowsError(try ContextBudget.fitAuxiliary(original, contextTokens: context - 1))
+        XCTAssertEqual(
+            try ContextBudget.fitAuxiliary(original, contextTokens: 8192).maxOutputTokens, 2048)
+        XCTAssertThrowsError(
+            try ContextBudget.fitAuxiliary(
+                CleanupRequest(transcript: "short", maxOutputTokens: 511), contextTokens: 8192))
+        XCTAssertThrowsError(
+            try ContextBudget.fitAuxiliary(
+                CleanupRequest(transcript: String(repeating: "語", count: 4096), maxOutputTokens: 512),
+                contextTokens: 4096))
+    }
+
     func testPlanningNeverEnlargesTheConfiguredBudgetAndNeverTrustsUnknownCopies() throws {
         let empty = LocalServerState(reach: .reached, models: [], loaded: [])
         XCTAssertEqual(try ContextBudget.planningContext(empty, model: "model", ceiling: 4096), 4096)

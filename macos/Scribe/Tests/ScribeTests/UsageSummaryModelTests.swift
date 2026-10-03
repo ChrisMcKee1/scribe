@@ -32,6 +32,71 @@ private struct UnfinishedProviderSetup: LocalizedError {
 }
 
 final class UsageSummaryModelTests: XCTestCase {
+    func testTheProductionSummaryFitsItsAnswerToEachLocalAppsReportedContext() async throws {
+        let payload = "Dictations: 3"
+        let context =
+            ContextBudget.chatTemplateTokens + 64 + TokenEstimate.vocabulary(UsageInsight.systemPrompt)
+            + TokenEstimate.transcript(payload) + 700
+        for app in [LocalServerApp.ollama, .lmStudio] {
+            let fixture = makeCleanupStore()
+            fixture.store.isEnabled = true
+            fixture.store.providerKind = .openAICompatible
+            fixture.store.openAIBaseURL =
+                app == .ollama ? LocalAiServer.ollamaAddress : LocalAiServer.lmStudioAddress
+            fixture.store.openAIModel = "model"
+            fixture.store.selectedLocalApp = app
+            let requests = RequestLog()
+            let cache = CleanupProviderCache(
+                store: fixture.store, environment: [:],
+                factory: .testing(
+                    session: makeStubSession { request in
+                        requests.record(request)
+                        return StubReply.completion(request, "A summary.")
+                    },
+                    readLocalServer: { _, _ in
+                        LocalServerState(
+                            reach: .reached, models: [],
+                            loaded: [LocalServerLoadedModel("model", 0, contextTokens: context)])
+                    }))
+            let summary = try await UsageSummaryModel.summarizeWithConfiguredProvider(payload, cache: cache)
+            XCTAssertEqual(summary, "A summary.")
+            let sent = try XCTUnwrap(requests.all.first)
+            XCTAssertEqual(requests.count, 1)
+            XCTAssertEqual(sent.messageContents, [UsageInsight.systemPrompt, payload])
+            XCTAssertEqual(sent.jsonBody["max_completion_tokens"] as? Int, 700)
+            XCTAssertEqual(sent.jsonBody["max_tokens"] as? Int, 700)
+        }
+    }
+
+    func testTheProductionSummarySendsNothingWhenItsMinimumAnswerCannotFit() async throws {
+        let fixture = makeCleanupStore()
+        fixture.store.isEnabled = true
+        fixture.store.providerKind = .openAICompatible
+        fixture.store.openAIBaseURL = LocalAiServer.ollamaAddress
+        fixture.store.openAIModel = "model"
+        fixture.store.selectedLocalApp = .ollama
+        let requests = RequestLog()
+        let cache = CleanupProviderCache(
+            store: fixture.store, environment: [:],
+            factory: .testing(
+                session: makeStubSession { request in
+                    requests.record(request)
+                    return StubReply.completion(request, "Unused.")
+                },
+                readLocalServer: { _, _ in
+                    LocalServerState(
+                        reach: .reached, models: [],
+                        loaded: [LocalServerLoadedModel("model", 0, contextTokens: 512)])
+                }))
+        do {
+            _ = try await UsageSummaryModel.summarizeWithConfiguredProvider("Dictations: 3", cache: cache)
+            XCTFail("The minimum useful answer must fit before sending a payload")
+        } catch {
+            XCTAssertEqual(error as? CleanupProviderError, .localRequestTooLarge)
+        }
+        XCTAssertEqual(requests.count, 0)
+    }
+
     func testTheProductionSummaryBoundsOnlyRecognizedLocalAppOutput() async throws {
         for localApp in [true, false] {
             let fixture = makeCleanupStore()

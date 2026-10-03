@@ -192,6 +192,58 @@ final class AIDictionarySuggestionsTests: XCTestCase {
         XCTAssertNotNil(model.errorMessage)
     }
 
+    func testTheLiveServiceFitsSuggestionsAndRefusesAChangedPlanningRevision() async throws {
+        for changesDuringRead in [false, true] {
+            let fixture = makeCleanupStore()
+            let store = fixture.store
+            store.isEnabled = true
+            store.providerKind = .openAICompatible
+            store.openAIBaseURL = LocalAiServer.lmStudioAddress
+            store.openAIModel = "model"
+            store.selectedLocalApp = .lmStudio
+            let prompt = AIDictionarySuggestionModel.systemPrompt
+            let sample = "a p i"
+            let context =
+                ContextBudget.chatTemplateTokens + 64 + TokenEstimate.vocabulary(prompt)
+                + TokenEstimate.transcript(sample) + 700
+            let requests = RequestLog()
+            let cache = CleanupProviderCache(
+                store: store, environment: [:],
+                factory: .testing(
+                    session: makeStubSession { request in
+                        requests.record(request)
+                        return StubReply.completion(request, #"[{"spoken":"a p i","written":"API"}]"#)
+                    },
+                    readLocalServer: { _, _ in
+                        if changesDuringRead {
+                            store.isEnabled = false
+                            store.isEnabled = true
+                        }
+                        return LocalServerState(
+                            reach: .reached, models: [],
+                            loaded: [LocalServerLoadedModel("model", 0, contextTokens: context)])
+                    }))
+            let service = AIDictionarySuggestionService.backed(by: cache, operations: AuxiliaryOperations())
+            let admission = try XCTUnwrap(service.admit())
+            if changesDuringRead {
+                do {
+                    _ = try await admission.complete(prompt, sample)
+                    XCTFail("A changed-back revision cannot authorize fitted suggestions")
+                } catch {
+                    XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+                }
+                XCTAssertEqual(requests.count, 0)
+            } else {
+                let answer = try await admission.complete(prompt, sample)
+                XCTAssertEqual(answer, #"[{"spoken":"a p i","written":"API"}]"#)
+                let sent = try XCTUnwrap(requests.all.first)
+                XCTAssertEqual(requests.count, 1)
+                XCTAssertEqual(sent.messageContents, [prompt, sample])
+                XCTAssertEqual(sent.jsonBody["max_completion_tokens"] as? Int, 700)
+            }
+        }
+    }
+
     func testLiveAdapterBindsConsentToTheSettingsRevision() async throws {
         let fixture = makeCleanupStore()
         fixture.store.isEnabled = true

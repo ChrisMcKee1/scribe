@@ -99,12 +99,13 @@ final class CleanupProviderCache: Sendable {
     ) async throws -> CleanupResponse {
         try Task.checkCancellation()
         try admission.handoff.perform {}
-        let provider = try entry(for: admission.connection).provider
-        let response = try await CleanupSendHandoff.$current.withValue(admission.handoff) {
-            try await provider.clean(request)
+        let provider = AdmittedCleanupProvider(
+            provider: try entry(for: admission.connection).provider, handoff: admission.handoff)
+        var fitted = request
+        if let context = try await provider.contextForPlanning() {
+            fitted = try ContextBudget.fitAuxiliary(request, contextTokens: context)
         }
-        try Task.checkCancellation()
-        return try admission.handoff.perform { response }
+        return try await provider.clean(fitted)
     }
 
     /// Drops the cached provider and credential, and with them any token or secret held in memory, in one step. No

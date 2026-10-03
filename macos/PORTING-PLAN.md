@@ -165,6 +165,11 @@ real Mac.
   requests. Tests drive A to B to A during planning and during the actual pre-send residency read, and a
   settings change after delivery, through the live adapter. In-process settings ordering cannot retract bytes
   already delivered or prevent another app changing a shared model.
+  Revision-admitted one-off requests also fit their output to the reported local-app context, up to their caller's
+  limit, with a minimum of 512 tokens. Instructions and input are preserved, and an unknown size or insufficient
+  room refuses the request before user content is sent. Production summary and dictionary-suggestion service
+  tests pin lowered wire ceilings and changed-back planning refusal. Remote/generic requests are unchanged;
+  cold models still start from an estimate, and the transport independently guards the actual send.
   Saved-settings probes and dictation prompt planning explicitly carry that store's saved guardrails and writing
   style, with a nonempty profile style first, so the fit is measured against the prompt actually sent.
   Custom-service local tuning and app identity require the selected app's actual recognized address; stale app

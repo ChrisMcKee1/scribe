@@ -8,6 +8,7 @@ enum ContextBudget {
     static let chatTemplateTokens = 32
     static let readyingTranscriptTokens = 512
     static let readyingOutputTokens = 1152
+    static let auxiliaryMinimumOutputTokens = 512
 
     static func planningContext(_ state: LocalServerState, model: String, ceiling: Int) throws -> Int {
         guard state.reach == .reached else { throw CleanupProviderError.localContextUnknown }
@@ -54,13 +55,30 @@ enum ContextBudget {
     }
 
     static func requestFits(_ request: CleanupRequest, contextTokens: Int) -> Bool {
+        guard let room = outputRoom(request, contextTokens: contextTokens) else { return false }
+        return max(0, request.maxOutputTokens ?? 4096) <= room
+    }
+
+    static func fitAuxiliary(_ request: CleanupRequest, contextTokens: Int) throws -> CleanupRequest {
+        guard let room = outputRoom(request, contextTokens: contextTokens) else {
+            throw CleanupProviderError.localRequestTooLarge
+        }
+        let output = min(request.maxOutputTokens ?? 4096, room)
+        guard output >= auxiliaryMinimumOutputTokens else {
+            throw CleanupProviderError.localRequestTooLarge
+        }
+        return CleanupRequest(
+            transcript: request.transcript, writingStylePrompt: request.writingStylePrompt,
+            singleLineMode: request.singleLineMode, timeout: request.timeout, maxOutputTokens: output)
+    }
+
+    private static func outputRoom(_ request: CleanupRequest, contextTokens: Int) -> Int? {
         let room = contextTokens - chatTemplateTokens - margin(contextTokens)
-        guard room >= 0 else { return false }
+        guard room >= 0 else { return nil }
         let instructions = TokenEstimate.vocabulary(request.writingStylePrompt)
         let transcript = TokenEstimate.transcript(request.transcript)
-        let output = max(0, request.maxOutputTokens ?? 4096)
-        guard instructions <= room, transcript <= room - instructions else { return false }
-        return output <= room - instructions - transcript
+        guard instructions <= room, transcript <= room - instructions else { return nil }
+        return room - instructions - transcript
     }
 
     private static func vocabularyTokensFor(

@@ -12,8 +12,8 @@ struct CleanupRequest: Sendable {
     let singleLineMode: Bool
     /// How long this request may wait for an answer; `nil` keeps the provider's own limit.
     let timeout: TimeInterval?
-    /// The most output tokens the model may produce, sent as `max_completion_tokens`; `nil` sends no limit. Only Test
-    /// Connection sets one (`CleanupProviderCache.checkOutputCeiling(for:)`).
+    /// The most output tokens the model may produce. Local-app transports enforce a ceiling even when this is nil;
+    /// dictation, auxiliary requests and Test connection supply their own bounds.
     let maxOutputTokens: Int?
 
     init(

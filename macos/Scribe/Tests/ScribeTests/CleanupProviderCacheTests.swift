@@ -318,6 +318,7 @@ final class CleanupProviderCacheTests: XCTestCase {
         let fixture = makeCleanupStore()
         fixture.store.isEnabled = true
         configureOpenAICompatible(fixture.store)
+        fixture.store.openAIBaseURL = "https://remote.example/v1"
         let store = fixture.store
         let session = makeStubSession { request in
             store.isEnabled = false

@@ -267,6 +267,11 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   This hint cannot authorize a send or exclude a shared-model replacement. The live dictation adapter now
   binds planning, every actual send/retry and its reply to one saved-settings revision: an A to B to A change
   while reading context sends no user content, and a change after delivery discards the obsolete answer.
+  Usage summaries and dictionary suggestions also use that local planning hint to lower their answer ceiling,
+  without dropping any input or enlarging their requested limit. At least 512 output tokens must fit beside the
+  full instructions, sample and safety margin; otherwise nothing is sent and the existing error/fallback applies.
+  Unknown or remote services keep their existing requests. Final transport checks still refuse a context that
+  became smaller after planning; this does not make shared-model changes atomic.
   Dictation planning and a saved-settings Test connection use the instructions and writing style from their settings
   store, not a separate live defaults read. A nonempty app-profile style still takes precedence.
   Ollama/LM Studio tuning is bound to that app's recognized local address. A stale app selection beside a different
