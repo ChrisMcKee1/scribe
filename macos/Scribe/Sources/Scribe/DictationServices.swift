@@ -224,7 +224,7 @@ struct LiveDictationCleanup: DictationCleaning {
         // Detached, because a build reads the Keychain, and a Keychain read waits for the user whenever macOS asks
         // them to allow it; that wait must not hold the main actor.
         return try await Task.detached(priority: .userInitiated) {
-            try cache.provider()
+            try cache.admittedProvider()
         }.value
     }
 

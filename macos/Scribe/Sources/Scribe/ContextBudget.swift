@@ -9,6 +9,13 @@ enum ContextBudget {
     static let readyingTranscriptTokens = 512
     static let readyingOutputTokens = 1152
 
+    static func planningContext(_ state: LocalServerState, model: String, ceiling: Int) throws -> Int {
+        guard state.reach == .reached else { throw CleanupProviderError.localContextUnknown }
+        guard let held = state.loaded(for: model) else { return ceiling }
+        guard held.contextTokens > 0 else { throw CleanupProviderError.localContextUnknown }
+        return min(ceiling, held.contextTokens)
+    }
+
     static func cleanupOutputCeiling(_ text: String) -> Int {
         let words = text.split(whereSeparator: { $0.isWhitespace }).count
         let wordEstimate = Int(Double(words) * 2.5)

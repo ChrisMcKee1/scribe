@@ -200,6 +200,101 @@ final class CleanupProviderCacheTests: XCTestCase {
         XCTAssertNil(rig.requests.all.last?.jsonBody["keep_alive"])
     }
 
+    func testDictationAdmissionRefusesAConfigurationThatChangesBackDuringPlanning() async throws {
+        let fixture = makeCleanupStore()
+        let store = fixture.store
+        store.isEnabled = true
+        configureOpenAICompatible(store)
+        store.selectedLocalApp = .lmStudio
+        let log = RequestLog()
+        let factory = CleanupProviderFactory.testing(
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "Unused.")
+            },
+            readLocalServer: { _, _ in
+                let model = store.openAIModel
+                store.openAIModel = "changed"
+                store.openAIModel = model
+                return LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: [LocalServerLoadedModel("local-model", 0, contextTokens: 8192)])
+            })
+        let cache = CleanupProviderCache(store: store, environment: [:], factory: factory)
+        let provider = try cache.admittedProvider()
+        do {
+            _ = try await provider.contextForPlanning()
+            XCTFail("A changed-back revision cannot authorize a plan")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+        do {
+            _ = try await provider.clean(CleanupRequest(transcript: "private sample", maxOutputTokens: 32))
+            XCTFail("An obsolete admitted provider cannot send")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+        XCTAssertEqual(log.count, 0)
+    }
+
+    @MainActor
+    func testTheLiveDictationAdapterDropsAnAnswerAfterItsSettingsChange() async throws {
+        let rig = try makeRig()
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        rig.store.openAIBaseURL = "https://remote.example/v1"
+        let store = rig.store
+        let log = RequestLog()
+        let cache = CleanupProviderCache(
+            store: store, environment: [:],
+            factory: .testing(
+                session: makeStubSession { request in
+                    log.record(request)
+                    store.isEnabled = false
+                    return StubReply.completion(request, "Stale.")
+                }))
+        let provider = try await LiveDictationCleanup(cache: cache).provider()
+        do {
+            _ = try await provider.clean(CleanupRequest(transcript: "private sample"))
+            XCTFail("The actual dictation adapter must discard obsolete answers")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+        XCTAssertEqual(log.count, 1)
+    }
+
+    @MainActor
+    func testTheLiveDictationAdapterChecksTheRevisionAtTheActualLocalSend() async throws {
+        let fixture = makeCleanupStore()
+        let store = fixture.store
+        configureOpenAICompatible(store)
+        store.isEnabled = true
+        store.selectedLocalApp = .lmStudio
+        let log = RequestLog()
+        let factory = CleanupProviderFactory.testing(
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "Unused.")
+            },
+            readLocalServer: { _, _ in
+                store.isEnabled = false
+                store.isEnabled = true
+                return LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: [LocalServerLoadedModel("local-model", 0, contextTokens: 8192)])
+            })
+        let cache = CleanupProviderCache(store: store, environment: [:], factory: factory)
+        let provider = try await LiveDictationCleanup(cache: cache).provider()
+        do {
+            _ = try await provider.clean(
+                CleanupRequest(transcript: "private sample", writingStylePrompt: "Edit.", maxOutputTokens: 32))
+            XCTFail("Changing back while residency is read cannot authorize URLSession resume")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+        XCTAssertEqual(log.count, 0)
+    }
+
     func testOneOffAdmissionRefusesAConfigurationThatChangedBack() async throws {
         let rig = try makeRig()
         configureOpenAICompatible(rig.store)

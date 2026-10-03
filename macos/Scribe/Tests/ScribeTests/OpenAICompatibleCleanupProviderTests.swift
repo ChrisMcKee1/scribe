@@ -39,6 +39,41 @@ final class OpenAICompatibleEndpointTests: XCTestCase {
 }
 
 final class OpenAICompatibleCleanupProviderTests: XCTestCase {
+    func testLocalPlanningReadsTheCapturedAppAndKeyAndOnlyLowersItsBudget() async throws {
+        for app in [LocalServerApp.ollama, .lmStudio] {
+            for requested in [0, 32768] {
+                let provider = OpenAICompatibleCleanupProvider(
+                    model: "model", apiKey: "saved-key",
+                    serviceURL: URL(
+                        string: app == .ollama ? LocalAiServer.ollamaAddress : LocalAiServer.lmStudioAddress)!,
+                    localServerApp: app,
+                    localTuning: { LocalModelTuning(contextTokens: requested, sendWholeVocabulary: false) },
+                    readLocalServer: { endpoint, key in
+                        XCTAssertEqual(LocalAiServer.appAt(endpoint), app)
+                        XCTAssertEqual(key, "saved-key")
+                        return LocalServerState(
+                            reach: .reached, models: [],
+                            loaded: [LocalServerLoadedModel("model", 0, contextTokens: 1024)])
+                    })
+                let context = try await provider.contextForPlanning()
+                XCTAssertEqual(context, 1024)
+            }
+        }
+        let managed = ManagedOllamaCleanupProvider(
+            model: "model", contextTokens: 32768,
+            readLocalServer: { endpoint in
+                XCTAssertEqual(LocalAiServer.appAt(endpoint), .ollama)
+                return LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: [LocalServerLoadedModel("model", 0, contextTokens: 1024)])
+            })
+        let context = try await managed.contextForPlanning()
+        XCTAssertEqual(context, 1024)
+        let remote = makeProvider { request in StubReply.completion(request, "Unused.") }
+        let cloudContext = try await remote.contextForPlanning()
+        XCTAssertNil(cloudContext)
+    }
+
     func testPlainOllamaOwnSizeRetryStillEnforcesTheFieldOllamaReads() async throws {
         let log = RequestLog()
         let provider = OpenAICompatibleCleanupProvider(

@@ -86,6 +86,14 @@ final class CleanupProviderCache: Sendable {
         }
     }
 
+    func admittedProvider() throws -> any CleanupProvider {
+        let admission = try admitOneOff()
+        let provider = try entry(for: admission.connection).provider
+        return try admission.handoff.perform {
+            AdmittedCleanupProvider(provider: provider, handoff: admission.handoff)
+        }
+    }
+
     func completeOneOff(
         _ request: CleanupRequest, admission: OneOffAdmission
     ) async throws -> CleanupResponse {
@@ -600,6 +608,44 @@ final class CleanupProviderCache: Sendable {
         let kept = state.withLock { $0.publish(built, credential: madeCredential, since: snapshot) }
         ScribeLog.debug(.cleanup, "Built a cleanup provider", .name("provider", connection.kind))
         return kept
+    }
+}
+
+private struct AdmittedCleanupProvider: CleanupProvider {
+    let provider: any CleanupProvider
+    let handoff: CleanupSendHandoff
+    var id: String { provider.id }
+    var displayName: String { provider.displayName }
+    var usesLocalCleanupPrompt: Bool { provider.usesLocalCleanupPrompt }
+    var requiresOutputLimit: Bool { provider.requiresOutputLimit }
+
+    func contextForPlanning() async throws -> Int? {
+        try await whileCurrent { try await provider.contextForPlanning() }
+    }
+
+    func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
+        try await whileCurrent { try await provider.clean(request) }
+    }
+
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async throws -> LocalModelPreparationResult {
+        try await whileCurrent {
+            try await provider.prepareLocalModel(isCurrent: isCurrent, onStarting: onStarting)
+        }
+    }
+
+    private func whileCurrent<Value: Sendable>(
+        _ work: @Sendable () async throws -> Value
+    ) async throws -> Value {
+        try Task.checkCancellation()
+        try handoff.perform {}
+        let value = try await CleanupSendHandoff.$current.withValue(handoff) {
+            try await work()
+        }
+        try Task.checkCancellation()
+        return try handoff.perform { value }
     }
 }
 

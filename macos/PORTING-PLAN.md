@@ -153,8 +153,18 @@ real Mac.
   rate and reserves the separator. Non-spaced transcripts receive a character-aware output ceiling rather
   than a one-word allowance. Local-app usage summaries send an explicit 1,024-token limit; remote summaries
   keep their existing wire. Pipeline and actual admitted-summary tests pin the planning and requests.
-  Smaller learned contexts may still refuse the planned request; using those limits in glossary selection
-  and splitting oversized cleanup are not claimed complete.
+  A smaller context learned only after planning can still refuse the request; cold-limit discovery and
+  splitting oversized cleanup are not claimed complete.
+  Local-app providers now expose a fresh conservative planning limit from the matching held copy, capped by
+  the configured/assumed budget. Dictation fits its captured vocabulary to that smaller limit before sending;
+  missing residency or an unknown held size fails explicitly. No held copy uses only the configured estimate,
+  never a claim of observed size. The transport still validates the complete request independently. Planning
+  never enlarges default Ollama's 4,096-token assumption or adds remote management reads.
+  The live dictation adapter now returns a revision-admitted provider, not the unbound cached instance:
+  planning, actual URLSession resume/retry and returned text share the saved-settings handoff used by one-off
+  requests. Tests drive A to B to A during planning and during the actual pre-send residency read, and a
+  settings change after delivery, through the live adapter. In-process settings ordering cannot retract bytes
+  already delivered or prevent another app changing a shared model.
   Saved-settings probes and dictation prompt planning explicitly carry that store's saved guardrails and writing
   style, with a nonempty profile style first, so the fit is measured against the prompt actually sent.
   Custom-service local tuning and app identity require the selected app's actual recognized address; stale app

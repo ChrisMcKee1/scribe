@@ -29,6 +29,15 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
     private let readLocalServer: @Sendable (String) async -> LocalServerState
     var requiresOutputLimit: Bool { true }
 
+    func contextForPlanning() async throws -> Int? {
+        let state = await readLocalServer(lifecycleEndpoint)
+        try Task.checkCancellation()
+        let ceiling =
+            contextTokens > 0
+            ? transport.ollamaContextLimit(requested: contextTokens) : ContextBudget.assumedContextTokens
+        return try ContextBudget.planningContext(state, model: model, ceiling: ceiling)
+    }
+
     init(
         model: String = CleanupSettingsStore.defaultOllamaModel,
         baseURL: URL = ManagedOllamaCleanupProvider.defaultBaseURL,

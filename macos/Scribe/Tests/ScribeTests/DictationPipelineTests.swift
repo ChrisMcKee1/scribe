@@ -198,6 +198,7 @@ final class DictationPipelineTests: XCTestCase {
                     pattern: "spoken term \($0)",
                     replacement: "Canonical\($0)" + String(repeating: "x", count: 40))
             }
+
             harness.load(dictionary: dictionary)
             let store = makeCleanupStore().store
             store.providerKind = .openAICompatible
@@ -220,6 +221,47 @@ final class DictationPipelineTests: XCTestCase {
             XCTAssertTrue(request.transcript.contains("Canonical0"))
             XCTAssertTrue(ContextBudget.requestFits(request, contextTokens: ContextBudget.assumedContextTokens))
         }
+    }
+
+    func testSmallerReportedContextReducesTheGlossaryBeforeSendingAndKeepsMentionedTerms() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        harness.load(
+            dictionary: (0..<120).map {
+                DictionaryEntry(
+                    pattern: $0 == 119 ? "priority target" : "spoken term \($0)",
+                    replacement: "Term\($0)" + String(repeating: "x", count: 40))
+            })
+        let store = makeCleanupStore().store
+        store.providerKind = .ollama
+        store.ollamaContextTokens = 32768
+        store.ollamaSendWholeVocabulary = true
+        store.writingStyle = "Keep the words."
+        store.frontierPrompt = "Edit."
+        harness.cleanup.settings = store.snapshot()
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        provider.planningContext = 2048
+        harness.transcriber.defaultText = "priority target"
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+        let request = try XCTUnwrap(provider.requests.first)
+        XCTAssertTrue(request.writingStylePrompt.contains("Term119"))
+        XCTAssertFalse(request.writingStylePrompt.contains("Term100"))
+        XCTAssertTrue(ContextBudget.requestFits(request, contextTokens: 2048))
+    }
+
+    func testAnUnreadablePlanningContextSendsNothingAndKeepsNormalDictionaryFallback() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        loadRules(into: harness)
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        provider.planningError = .localContextUnknown
+        harness.transcriber.defaultText = "cube flow"
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+        XCTAssertEqual(provider.requests.count, 0)
+        XCTAssertEqual(harness.fakeInjector.texts, ["Kubeflow "])
+        XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .fellBack)
     }
 
     func testRemoteAddressWithAStaleAppSelectionDoesNotSendWholeVocabulary() async throws {

@@ -491,6 +491,12 @@ final class GatedCleanupProvider: CleanupProvider {
     nonisolated let displayName = "Gated cleanup"
     nonisolated let usesLocalCleanupPrompt = false
     private(set) var requests: [CleanupRequest] = []
+    var planningContext: Int?
+    var planningError: CleanupProviderError?
+    func contextForPlanning() async throws -> Int? {
+        if let planningError { throw planningError }
+        return planningContext
+    }
     var reply: (CleanupRequest) async throws -> String = { request in
         RecordingCleanupProvider.transcript(in: request)
     }

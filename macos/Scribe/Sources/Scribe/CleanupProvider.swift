@@ -63,6 +63,8 @@ protocol CleanupProvider: Sendable {
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse
     var requiresOutputLimit: Bool { get }
+    /// A conservative planning limit, never permission to send: the transport must check the actual request again.
+    func contextForPlanning() async throws -> Int?
 
     /// Checks and, only when needed, starts the local model for the configuration bound to this provider.
     func prepareLocalModel(
@@ -74,6 +76,7 @@ protocol CleanupProvider: Sendable {
 extension CleanupProvider {
     var usesLocalCleanupPrompt: Bool { false }
     var requiresOutputLimit: Bool { false }
+    func contextForPlanning() async throws -> Int? { nil }
 
     func prepareLocalModel(
         isCurrent: @escaping @MainActor @Sendable () async -> Bool,

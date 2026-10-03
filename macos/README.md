@@ -259,7 +259,14 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   The answer budget accounts for non-spaced text as well as words. Usage summaries on recognized local apps ask
   for at most 1,024 output tokens instead of an unspecified ceiling; a payload that still cannot fit is refused.
   Remote summary requests are unchanged. Smaller actual contexts remain protected by the transport guard, but
-  optimizing glossary selection to those smaller learned limits and splitting oversize cleanup remain open.
+  discovering a cold model's limit before planning and splitting oversize cleanup remain open.
+  Local-app providers now give dictation a fresh conservative planning limit from the matching loaded copy,
+  never larger than the selected or assumed context. Its glossary is reduced before the transport's final fit
+  check; mentioned terms keep priority. An unreadable state or a held copy without a size refuses cleanup.
+  No held copy uses only the configured estimate while fixed readying and the final transport guard confirm it.
+  This hint cannot authorize a send or exclude a shared-model replacement. The live dictation adapter now
+  binds planning, every actual send/retry and its reply to one saved-settings revision: an A to B to A change
+  while reading context sends no user content, and a change after delivery discards the obsolete answer.
   Dictation planning and a saved-settings Test connection use the instructions and writing style from their settings
   store, not a separate live defaults read. A nonempty app-profile style still takes precedence.
   Ollama/LM Studio tuning is bound to that app's recognized local address. A stale app selection beside a different

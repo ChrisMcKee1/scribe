@@ -964,6 +964,19 @@ final class DictationController {
         guard mayContinue else { return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil) }
 
         let settings = services.cleanup.currentSettings()
+        let vocabulary = services.rules.cleanupVocabulary
+        let context: Int?
+        do {
+            context = try await provider.contextForPlanning()
+        } catch {
+            if mayContinue {
+                ScribeLog.warning(
+                    .cleanup, "Local context could not be read, so the raw transcript is used",
+                    .integer("dictation", id.rawValue), .failure(error))
+            }
+            return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil)
+        }
+        guard mayContinue else { return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil) }
         let tuning = LocalModelTuning.forSettings(settings)
         let profileStyle = profile?.writingStylePrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedStyle =
@@ -976,11 +989,12 @@ final class DictationController {
             frontierPrompt: settings.frontierPrompt, localPrompt: settings.localPrompt)
         let outputCeiling = cleanupOutputCeiling(for: settings, transcript: sent)
         let glossary = cleanupGlossary(
-            vocabulary: services.rules.cleanupVocabulary,
+            vocabulary: vocabulary,
             rawDictation: raw,
             correctedText: sent,
             promptWithoutGlossary: promptWithoutGlossary,
             tuning: tuning,
+            observedContext: context,
             useLocalPrompt: provider.usesLocalCleanupPrompt,
             outputCeiling: outputCeiling)
         let request = CleanupRequest(
@@ -1030,6 +1044,7 @@ final class DictationController {
         correctedText: String,
         promptWithoutGlossary: String,
         tuning: LocalModelTuning,
+        observedContext: Int?,
         useLocalPrompt: Bool,
         outputCeiling: Int?
     ) -> String? {
@@ -1039,10 +1054,11 @@ final class DictationController {
             dictation: rawDictation)
 
         let selectedContext = ContextBudget.sanitize(tuning.contextTokens)
-        let context =
+        let configuredContext =
             selectedContext > 0
             ? selectedContext
             : (outputCeiling != nil ? ContextBudget.assumedContextTokens : 0)
+        let context = observedContext.map { min(configuredContext, $0) } ?? configuredContext
         guard context > 0, let outputCeiling else {
             return defaultGlossary
         }

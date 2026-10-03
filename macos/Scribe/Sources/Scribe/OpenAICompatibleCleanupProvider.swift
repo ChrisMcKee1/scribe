@@ -27,6 +27,18 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         localServerApp != .none
     }
 
+    func contextForPlanning() async throws -> Int? {
+        guard localServerApp != .none else { return nil }
+        let requested = ContextBudget.sanitize(localTuning().contextTokens)
+        let ceiling =
+            requested > 0
+            ? (localServerApp == .ollama ? transport.ollamaContextLimit(requested: requested) : requested)
+            : ContextBudget.assumedContextTokens
+        let state = await readLocalServer(serviceURL.absoluteString, apiKey)
+        try Task.checkCancellation()
+        return try ContextBudget.planningContext(state, model: model, ceiling: ceiling)
+    }
+
     init(
         id: String = "openai-compatible",
         displayName: String = "OpenAI-compatible endpoint",

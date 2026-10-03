@@ -3,6 +3,23 @@ import XCTest
 @testable import Scribe
 
 final class ContextBudgetTests: XCTestCase {
+    func testPlanningNeverEnlargesTheConfiguredBudgetAndNeverTrustsUnknownCopies() throws {
+        let empty = LocalServerState(reach: .reached, models: [], loaded: [])
+        XCTAssertEqual(try ContextBudget.planningContext(empty, model: "model", ceiling: 4096), 4096)
+        for size in [0, 512, 2048, 32768] {
+            let state = LocalServerState(
+                reach: .reached, models: [],
+                loaded: [LocalServerLoadedModel("model", 0, contextTokens: size)])
+            if size == 0 {
+                XCTAssertThrowsError(try ContextBudget.planningContext(state, model: "model", ceiling: 4096))
+            } else {
+                XCTAssertEqual(
+                    try ContextBudget.planningContext(state, model: "model", ceiling: 4096), min(4096, size))
+            }
+        }
+        XCTAssertThrowsError(try ContextBudget.planningContext(.failed, model: "model", ceiling: 4096))
+    }
+
     func testCleanupOutputReservesNonSpacedTextRatherThanCountingItAsOneWord() {
         let text = String(repeating: "語", count: 1000)
         XCTAssertGreaterThanOrEqual(ContextBudget.cleanupOutputCeiling(text), 1250 + 128)
