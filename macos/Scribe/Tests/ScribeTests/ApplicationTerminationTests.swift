@@ -10,6 +10,86 @@ import os
 /// Quit cancels that work and waits for it before it replies.
 @MainActor
 final class ApplicationTerminationTests: XCTestCase {
+    func testCancelledAuxiliaryCallerRejectsLateSuccessAfterSettlement() async {
+        let gate = SettingsTestGate()
+        let operations = AuxiliaryOperations()
+        let task = Task {
+            try await operations.run {
+                await gate.pass()
+                return 42
+            }
+        }
+        await gate.waitForArrival()
+        task.cancel()
+        XCTAssertEqual(operations.runningCount, 1)
+        await gate.open()
+        do {
+            _ = try await task.value
+            XCTFail("A cancelled operation must not return late success")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(operations.runningCount, 0)
+        do {
+            let value = try await operations.run { 43 }
+            XCTAssertEqual(value, 43)
+        } catch {
+            XCTFail("Cancellation must not close later admission")
+        }
+    }
+
+    func testQuitRejectsNoncooperativeLateAuxiliarySuccessAndDrains() async {
+        let gate = SettingsTestGate()
+        let operations = AuxiliaryOperations()
+        let task = Task {
+            try await operations.run {
+                await gate.pass()
+                return 42
+            }
+        }
+        await gate.waitForArrival()
+        operations.beginClosing()
+        XCTAssertEqual(operations.runningCount, 1)
+        await gate.open()
+        do {
+            _ = try await task.value
+            XCTFail("Quit must reject a cancelled operation's late result")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        await operations.waitUntilFinished()
+        XCTAssertEqual(operations.runningCount, 0)
+        let starts = SendableCounter()
+        do {
+            _ = try await operations.run { starts.increment() }
+            XCTFail("Quit must keep admission closed")
+        } catch {
+            XCTAssertEqual(error as? AuxiliaryOperations.Refusal, .closed)
+        }
+        XCTAssertEqual(starts.value, 0)
+    }
+
+    func testCancelledConnectionCallerCannotShowLateReachableResult() async {
+        let gate = SettingsTestGate()
+        let backing = CleanupSettingsBackingFake()
+        backing.stored.isEnabled = true
+        var access = backing.access
+        access.checkConnection = {
+            await gate.pass()
+            return CleanupConnectionCheck(reachable: true, message: "late successful connection")
+        }
+        let model = CleanupSettingsModel(
+            access: access, drafts: backing.drafts, center: backing.center, operations: AuxiliaryOperations())
+        let task = Task { await model.testConnection() }
+        await gate.waitForArrival()
+        task.cancel()
+        await gate.open()
+        await task.value
+        XCTAssertFalse(model.isTesting)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(model.statusMessage, "Test Connection was cancelled.")
+    }
+
     func testSettingsApprovalPrecedesShutdownAndCoalescesRepeatedRequests() async {
         let approval = ApplicationTerminationApproval()
         let entered = AudioTestSignalLatch()

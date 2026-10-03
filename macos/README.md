@@ -63,6 +63,8 @@ The manual update check examines its latest 100 releases and offers only the hig
 matching `Scribe-macOS-<version>.dmg`, never a Windows-only release. If none is listed it says so, rather than
 claiming the app is up to date. This neither checks the DMG's signature/architecture nor downloads or installs it.
 Leaving About or closing Settings cancels an in-flight manual check; its late result cannot replace a newer check.
+Settings' shared auxiliary-operation boundary also rejects successful answers that arrive after caller cancellation
+or Quit, while still waiting for the operation to settle so its supervised children can be reaped.
 
 ## Build
 
