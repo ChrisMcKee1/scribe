@@ -148,6 +148,13 @@ real Mac.
   A default below 4,096 can still overtake a pre-send reading, as can another app's replacement. This is a
   conservative estimate and post-answer safeguard, not an atomic runtime guarantee. Oversized cleanup
   splitting and using larger learned default contexts safely remain open.
+  Default local dictation planning now fits mentioned glossary terms beside instructions, wrapped text and
+  bounded output even with whole-vocabulary off. Its instruction estimate matches the transport's vocabulary
+  rate and reserves the separator. Non-spaced transcripts receive a character-aware output ceiling rather
+  than a one-word allowance. Local-app usage summaries send an explicit 1,024-token limit; remote summaries
+  keep their existing wire. Pipeline and actual admitted-summary tests pin the planning and requests.
+  Smaller learned contexts may still refuse the planned request; using those limits in glossary selection
+  and splitting oversized cleanup are not claimed complete.
   Saved-settings probes and dictation prompt planning explicitly carry that store's saved guardrails and writing
   style, with a nonempty profile style first, so the fit is measured against the prompt actually sent.
   Custom-service local tuning and app identity require the selected app's actual recognized address; stale app

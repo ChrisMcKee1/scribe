@@ -32,6 +32,38 @@ private struct UnfinishedProviderSetup: LocalizedError {
 }
 
 final class UsageSummaryModelTests: XCTestCase {
+    func testTheProductionSummaryBoundsOnlyRecognizedLocalAppOutput() async throws {
+        for localApp in [true, false] {
+            let fixture = makeCleanupStore()
+            fixture.store.isEnabled = true
+            fixture.store.providerKind = .openAICompatible
+            fixture.store.openAIBaseURL =
+                localApp ? LocalAiServer.ollamaAddress : "https://remote.example/v1"
+            fixture.store.openAIModel = "model"
+            fixture.store.selectedLocalApp = localApp ? .ollama : .none
+            let requests = RequestLog()
+            let factory = CleanupProviderFactory.testing(
+                session: makeStubSession { request in
+                    requests.record(request)
+                    return StubReply.completion(request, "A summary.")
+                },
+                readLocalServer: { _, _ in
+                    LocalServerState(
+                        reach: .reached, models: [],
+                        loaded: [LocalServerLoadedModel("model", 0, contextTokens: 4096)])
+                })
+            let cache = CleanupProviderCache(store: fixture.store, environment: [:], factory: factory)
+            let text = try await UsageSummaryModel.summarizeWithConfiguredProvider(
+                "Dictations: 3", cache: cache)
+            XCTAssertEqual(text, "A summary.")
+            XCTAssertEqual(requests.count, 1)
+            let sent = try XCTUnwrap(requests.all.first)
+            XCTAssertEqual(sent.messageContents, [UsageInsight.systemPrompt, "Dictations: 3"])
+            XCTAssertEqual(sent.jsonBody["max_completion_tokens"] as? Int, localApp ? 1024 : nil)
+            XCTAssertEqual(sent.jsonBody["max_tokens"] as? Int, localApp ? 1024 : nil)
+        }
+    }
+
     @MainActor
     private func makeModel(
         _ backing: UsageSummaryBackingFake,

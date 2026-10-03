@@ -190,6 +190,38 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertTrue(ContextBudget.requestFits(request, contextTokens: 32768))
     }
 
+    func testDefaultLocalContextFitsMentionedVocabularyWithoutTheWholeVocabularySwitch() async throws {
+        for app in [LocalServerApp.ollama, .lmStudio] {
+            let harness = makeHarness(rulesLoaded: false)
+            let dictionary = (0..<80).map {
+                DictionaryEntry(
+                    pattern: "spoken term \($0)",
+                    replacement: "Canonical\($0)" + String(repeating: "x", count: 40))
+            }
+            harness.load(dictionary: dictionary)
+            let store = makeCleanupStore().store
+            store.providerKind = .openAICompatible
+            store.selectedLocalApp = app
+            store.openAIBaseURL = app == .ollama ? LocalAiServer.ollamaAddress : LocalAiServer.lmStudioAddress
+            store.frontierPrompt = String(repeating: "Keep the words. ", count: 140)
+            store.localPrompt = store.frontierPrompt
+            store.writingStyle = "Keep the meaning."
+            harness.cleanup.settings = store.snapshot()
+            harness.cleanup.isEnabled = true
+            harness.transcriber.defaultText =
+                (0..<80).map { "spoken term \($0)" }.joined(separator: " ")
+            let provider = try XCTUnwrap(harness.cleanup.gated)
+            await harness.dictate()
+            await harness.waitUntilProcessed()
+            let request = try XCTUnwrap(provider.requests.first)
+            XCTAssertTrue(request.writingStylePrompt.contains(CleanupPrompt.glossaryHeader))
+            XCTAssertFalse(request.writingStylePrompt.contains("Canonical79"))
+            XCTAssertNotNil(request.maxOutputTokens)
+            XCTAssertTrue(request.transcript.contains("Canonical0"))
+            XCTAssertTrue(ContextBudget.requestFits(request, contextTokens: ContextBudget.assumedContextTokens))
+        }
+    }
+
     func testRemoteAddressWithAStaleAppSelectionDoesNotSendWholeVocabulary() async throws {
         let harness = makeHarness(rulesLoaded: false)
         harness.load(dictionary: [

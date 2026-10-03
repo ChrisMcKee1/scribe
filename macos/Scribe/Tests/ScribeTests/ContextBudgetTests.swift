@@ -3,6 +3,38 @@ import XCTest
 @testable import Scribe
 
 final class ContextBudgetTests: XCTestCase {
+    func testCleanupOutputReservesNonSpacedTextRatherThanCountingItAsOneWord() {
+        let text = String(repeating: "語", count: 1000)
+        XCTAssertGreaterThanOrEqual(ContextBudget.cleanupOutputCeiling(text), 1250 + 128)
+        XCTAssertEqual(ContextBudget.cleanupOutputCeiling(String(repeating: "語", count: 5000)), 4096)
+        let words = Array(repeating: "a", count: 100).joined(separator: " ")
+        XCTAssertGreaterThanOrEqual(ContextBudget.cleanupOutputCeiling(words), 250 + 128)
+    }
+
+    func testVocabularyRoomUsesTheSameConservativeInstructionRateAsTheSendGuard() {
+        for instructions in [
+            String(repeating: "a", count: 2600),
+            String(repeating: "語", count: 400),
+        ] {
+            let transcript = CleanupPrompt.wrapTranscript("Dictated words")
+            let context = 4096
+            let output = 256
+            let budget = ContextBudget.vocabularyTokens(
+                context, instructions: instructions, transcript: transcript, outputCeiling: output)
+            let margin = max(64, context * 3 / 100)
+            XCTAssertEqual(
+                budget,
+                context - ContextBudget.chatTemplateTokens - margin
+                    - TokenEstimate.vocabulary(instructions + "\n\n") - TokenEstimate.transcript(transcript) - output)
+            let glossary = String(repeating: "語", count: budget)
+            XCTAssertTrue(
+                ContextBudget.requestFits(
+                    CleanupRequest(
+                        transcript: transcript, writingStylePrompt: instructions + "\n\n" + glossary,
+                        maxOutputTokens: output), contextTokens: context))
+        }
+    }
+
     func testRequestFitReservesTheActualWrappedTextPromptAnswerAndMargin() {
         let context = 2048
         let prompt = String(repeating: "a", count: 260)

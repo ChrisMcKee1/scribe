@@ -254,6 +254,12 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   ceiling, not merely reserved in the estimate. Test connection never retries context-bound requests without
   an output limit or claims it did. This may refuse strict servers or thinking models that need that retry;
   unlimited output cannot be safely fitted into a bounded context.
+  Dictation now fits mentioned glossary terms to the assumed local context even when the whole-vocabulary switch
+  is off. Instructions use the same conservative rate as the send guard, including the glossary separator.
+  The answer budget accounts for non-spaced text as well as words. Usage summaries on recognized local apps ask
+  for at most 1,024 output tokens instead of an unspecified ceiling; a payload that still cannot fit is refused.
+  Remote summary requests are unchanged. Smaller actual contexts remain protected by the transport guard, but
+  optimizing glossary selection to those smaller learned limits and splitting oversize cleanup remain open.
   Dictation planning and a saved-settings Test connection use the instructions and writing style from their settings
   store, not a separate live defaults read. A nonempty app-profile style still takes precedence.
   Ollama/LM Studio tuning is bound to that app's recognized local address. A stale app selection beside a different

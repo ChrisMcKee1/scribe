@@ -9,6 +9,13 @@ enum ContextBudget {
     static let readyingTranscriptTokens = 512
     static let readyingOutputTokens = 1152
 
+    static func cleanupOutputCeiling(_ text: String) -> Int {
+        let words = text.split(whereSeparator: { $0.isWhitespace }).count
+        let wordEstimate = Int(Double(words) * 2.5)
+        let textEstimate = Int(ceil(Double(TokenEstimate.transcript(text)) * 1.25))
+        return min(max(max(wordEstimate, textEstimate) + 128, 64), 4096)
+    }
+
     static func sanitize(_ contextTokens: Int) -> Int {
         guard contextTokens > 0 else {
             return 0
@@ -58,7 +65,8 @@ enum ContextBudget {
             Int.min,
             min(
                 Int.max,
-                contextTokens - chatTemplateTokens - TokenEstimate.prose(instructions) - worstRequestTextCost
+                contextTokens - chatTemplateTokens - TokenEstimate.vocabulary(instructions + "\n\n")
+                    - worstRequestTextCost
                     - margin(contextTokens)))
     }
 

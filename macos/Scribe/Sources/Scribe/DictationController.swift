@@ -1042,7 +1042,7 @@ final class DictationController {
         let context =
             selectedContext > 0
             ? selectedContext
-            : (tuning.sendWholeVocabulary ? ContextBudget.assumedContextTokens : 0)
+            : (outputCeiling != nil ? ContextBudget.assumedContextTokens : 0)
         guard context > 0, let outputCeiling else {
             return defaultGlossary
         }
@@ -1069,14 +1069,8 @@ final class DictationController {
         case .none:
             return nil
         case .ollama, .lmStudio:
-            return estimateCleanupOutputTokens(transcript)
+            return ContextBudget.cleanupOutputCeiling(transcript)
         }
-    }
-
-    private func estimateCleanupOutputTokens(_ text: String) -> Int {
-        let words = text.split(whereSeparator: { $0.isWhitespace }).count
-        let estimate = Int(Double(words) * 2.5) + 128
-        return min(max(estimate, 64), 4096)
     }
 
     private func recognitionFailed(_ dictation: AdmittedDictation, _ error: any Error, report failure: PipelineReport) {
