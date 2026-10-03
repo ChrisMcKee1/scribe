@@ -187,6 +187,7 @@ enum CleanupProviderResolver {
             return ManagedOllamaCleanupProvider(
                 model: model,
                 keepAliveMinutes: connection.localModelIdleMinutes,
+                contextTokens: connection.localContextTokens,
                 lifecycle: lifecycle ?? factory.localModelLifecycle,
                 readLocalServer: { endpoint in await factory.readLocalServer(endpoint, nil) },
                 session: factory.session)

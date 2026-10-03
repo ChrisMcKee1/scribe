@@ -291,10 +291,13 @@ struct ChatCompletionsTransport: Sendable {
         contextTokens: Int,
         defaultTimeout: TimeInterval
     ) async throws -> Completion {
-        let chatURL = url.appendingPathComponent("chat")
-        if chatURL.scheme == nil {
+        guard LocalAiServer.appAt(url.absoluteString) == .ollama,
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else {
             throw CleanupProviderError.transport(URLError(.badURL))
         }
+        components.percentEncodedPath = "/api/chat"
+        guard let chatURL = components.url else { throw CleanupProviderError.transport(URLError(.badURL)) }
         var request = URLRequest(url: chatURL)
         request.httpMethod = "POST"
         request.timeoutInterval = cleanupRequest.timeout ?? defaultTimeout

@@ -216,6 +216,11 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   Management loads/unloads go to the configured address once, never raced across
   loopback aliases. Foundry Local cleanup and speech-memory release remain open work. Test connection waits
   180 s for a recognized local app (Ollama, LM Studio), 90 s for other custom endpoints.
+- A chosen Ollama context size uses its native `/api/chat` route, for managed Ollama as well as Ollama selected under
+  another AI service. Dictation, Test connection and the fixed readying request carry the same captured `num_ctx`,
+  `num_predict`, `think: false` and retention. With the app's own size selected, the existing Chat Completions path
+  stays unchanged. Readiness checks the configured `/v1` app address and a held copy's context, not an unrelated
+  default address or a different-size copy. Test connection uses its candidate size without saving it.
 - Dictionary's **Suggest with AI** asks before sending a bounded raw sample from the latest Try dictation report and
   suggestion instructions. It never reads saved history or sends expanded snippets/templates. Consent is tied to the
   saved cleanup configuration's revision: changing away and back still requires consent again. Every request/retry

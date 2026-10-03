@@ -161,7 +161,7 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
             CleanupRequest(transcript: "raw text", writingStylePrompt: "Be terse.", maxOutputTokens: 16))
 
         let sent = try XCTUnwrap(log.all.first)
-        XCTAssertEqual(sent.url?.path, "/v1/chat")
+        XCTAssertEqual(sent.url?.path, "/api/chat")
         XCTAssertEqual(sent.jsonBody["keep_alive"] as? String, "\(LocalModelDefaults.keepAliveMinutes)m")
         XCTAssertEqual(sent.jsonBody["think"] as? Bool, false)
         let options = try XCTUnwrap(sent.jsonBody["options"] as? [String: Any])
@@ -362,6 +362,56 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
 }
 
 final class ManagedOllamaCleanupProviderTests: XCTestCase {
+    func testAChosenContextUsesTheNativeOllamaRouteForDictation() async throws {
+        let log = RequestLog()
+        let provider = ManagedOllamaCleanupProvider(
+            model: "gemma4:e4b", contextTokens: 8192,
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.json(request, #"{"message":{"role":"assistant","content":"Cleaned."},"done":true}"#)
+            })
+        let answer = try await provider.clean(CleanupRequest(transcript: "raw", maxOutputTokens: 32))
+        XCTAssertEqual(answer.providerID, "managed-ollama")
+        let sent = try XCTUnwrap(log.all.first)
+        XCTAssertEqual(sent.url?.absoluteString, "http://127.0.0.1:11434/api/chat")
+        let options = try XCTUnwrap(sent.jsonBody["options"] as? [String: Any])
+        XCTAssertEqual(options["num_ctx"] as? Int, 8192)
+        XCTAssertEqual(options["num_predict"] as? Int, 32)
+        XCTAssertEqual(sent.jsonBody["think"] as? Bool, false)
+    }
+
+    @MainActor
+    func testReadinessChecksTheConfiguredAppAddressAndStartsAtTheChosenSize() async throws {
+        for heldContext in [4096, 8192] {
+            let log = RequestLog()
+            let endpointRead = LockedValue<String>()
+            let provider = ManagedOllamaCleanupProvider(
+                model: "gemma4:e4b", baseURL: URL(string: "http://localhost:11434/v1")!, contextTokens: 8192,
+                readLocalServer: { endpoint in
+                    endpointRead.set(endpoint)
+                    return LocalServerState(
+                        reach: .reached, models: [],
+                        loaded: [LocalServerLoadedModel("gemma4:e4b", 0, contextTokens: heldContext)])
+                },
+                session: makeStubSession { request in
+                    log.record(request)
+                    return StubReply.json(request, #"{"message":{"role":"assistant","content":"OK"},"done":true}"#)
+                })
+            let result = try await provider.prepareLocalModel(isCurrent: { true }, onStarting: {})
+            XCTAssertEqual(endpointRead.value, "http://localhost:11434/v1")
+            XCTAssertEqual(result, heldContext == 8192 ? .resident : .started)
+            if heldContext == 8192 {
+                XCTAssertTrue(log.all.isEmpty)
+            } else {
+                let sent = try XCTUnwrap(log.all.first)
+                XCTAssertEqual(sent.url?.path, "/api/chat")
+                let options = try XCTUnwrap(sent.jsonBody["options"] as? [String: Any])
+                XCTAssertEqual(options["num_ctx"] as? Int, 8192)
+                XCTAssertEqual(options["num_predict"] as? Int, 1)
+            }
+        }
+    }
+
     /// An on-device instruct model gets a low temperature, so it edits rather than paraphrases.
     func testOllamaGetsAnOnDeviceChatCompletionOnItsOwnPort() async throws {
         let log = RequestLog()

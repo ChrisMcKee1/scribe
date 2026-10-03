@@ -110,6 +110,10 @@ real Mac.
   time after active uses finish. A newer use withdraws it and carries the new retention itself; lengthening the time
   or choosing Never unloads nothing. Test connection uses 180 s for recognized local apps. Foundry Local and speech-memory release
   remain unimplemented, not inapplicable.
+  Managed Ollama now honors the captured context choice too: a chosen size sends dictation, readiness and Test
+  connection through Ollama's native `/api/chat`, not `/v1/chat`. The request carries `options.num_ctx`,
+  `options.num_predict`, `think: false` and the captured retention. The app's own size keeps Chat Completions.
+  Readiness inspects the configured `/v1` app address and requires the held copy's size to agree with the choice.
   Foundry Local cleanup now rejects any reported address outside literal loopback or `localhost`, and addresses
   with embedded credentials, query or fragment. Its ephemeral transport disables proxies, cookies and response
   caching and refuses redirects. Status parsing and the provider both enforce the destination before any text is sent.

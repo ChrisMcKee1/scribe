@@ -78,6 +78,40 @@ final class CleanupProviderCacheTests: XCTestCase {
     }
 
     @MainActor
+    func testManagedOllamaCandidateUsesItsSizeWithoutChangingSavedSettings() async throws {
+        let rig = try makeRig(reply: { request in
+            if request.url?.path == "/api/chat" {
+                return StubReply.json(request, #"{"message":{"role":"assistant","content":"OK"},"done":true}"#)
+            }
+            return StubReply.completion(request, "ok")
+        })
+        rig.store.providerKind = .ollama
+        rig.store.ollamaContextTokens = 4096
+        var settings = CleanupSettingsAccess.backed(by: rig.store, providers: rig.cache).load()
+        settings.ollamaContextTokens = 8192
+        let candidate = CleanupConnectionCandidate(
+            settings: settings, openAIApiKey: nil, azureClientSecret: nil, azureApiKey: nil,
+            writingStyle: "", frontierPrompt: "", localPrompt: "")
+        let check = await rig.cache.checkConnection(candidate: candidate)
+        XCTAssertTrue(check.reachable, check.message)
+        let candidateSend = try XCTUnwrap(rig.requests.all.first)
+        XCTAssertEqual(candidateSend.url?.path, "/api/chat")
+        XCTAssertEqual((candidateSend.jsonBody["options"] as? [String: Any])?["num_ctx"] as? Int, 8192)
+        XCTAssertEqual(rig.store.ollamaContextTokens, 4096)
+
+        let old = try rig.cache.provider()
+        rig.store.ollamaContextTokens = 16384
+        let new = try rig.cache.provider()
+        XCTAssertFalse((old as AnyObject) === (new as AnyObject))
+        _ = try await old.clean(CleanupRequest(transcript: "earlier snapshot"))
+        _ = try await new.clean(CleanupRequest(transcript: "new snapshot"))
+        let sizes = rig.requests.all.compactMap {
+            ($0.jsonBody["options"] as? [String: Any])?["num_ctx"] as? Int
+        }
+        XCTAssertEqual(sizes, [8192, 4096, 16384])
+    }
+
+    @MainActor
     func testLMStudioCandidateUsesItsOwnContextAppAndKeyWithoutSaving() async throws {
         let rig = try makeRig(
             reply: { request in
