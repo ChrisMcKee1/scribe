@@ -260,6 +260,26 @@ final class LocalServerClient: @unchecked Sendable {
         }
     }
 
+    func readLoadedContext(_ endpoint: String, modelID: String, apiKey: String? = nil) async -> Int {
+        guard let root = roots(for: endpoint, includeAliases: false).first, root.app == .ollama else { return 0 }
+        do {
+            var psRequest = request(.get, url: Self.relativeURL("/api/ps", to: root.url), apiKey: apiKey)
+            psRequest.timeoutInterval = Self.loadedTimeout
+            let (data, response) = try await send(psRequest)
+            guard (200..<300).contains(response.statusCode) else { return 0 }
+            let decoded = try JSONDecoder().decode(OllamaLoadedResponse.self, from: data)
+            let contexts = (decoded.models ?? []).compactMap { model -> Int? in
+                guard Self.sameModel(model.name ?? model.model, modelID),
+                    let context = model.contextLength, context > 0
+                else { return nil }
+                return min(context, Int(Int32.max))
+            }
+            return contexts.min() ?? 0
+        } catch {
+            return 0
+        }
+    }
+
     static func sameModel(_ first: String?, _ second: String?) -> Bool {
         guard let first = trimmed(first), let second = trimmed(second) else {
             return false

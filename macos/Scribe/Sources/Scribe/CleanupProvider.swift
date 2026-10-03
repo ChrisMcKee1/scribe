@@ -159,7 +159,7 @@ enum CleanupProviderError: Error, LocalizedError, FailureShapeDetailing, Equatab
             return
                 "The cleanup request does not fit the available context size. Use a shorter dictation or instructions."
         case .localContextUnknown:
-            return "Ollama did not report this model's context limit. Check the model and try again."
+            return "Ollama did not report this model's context limit or loaded size. Check the model and try again."
         case .localContextUnavailable(let outcome):
             switch outcome {
             case .busy:

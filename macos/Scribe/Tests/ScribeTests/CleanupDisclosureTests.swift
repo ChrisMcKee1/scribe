@@ -32,6 +32,7 @@ final class CleanupDisclosureTests: XCTestCase {
         XCTAssertTrue(text.contains("Neither request contains dictated text or vocabulary"))
         XCTAssertTrue(text.contains("each native request first asks Ollama for the model's context limit"))
         XCTAssertTrue(text.contains("only its model name and any key saved for that address"))
+        XCTAssertTrue(text.contains("its loaded size, without sending text"))
         XCTAssertTrue(text.contains("snippet templates"))
         XCTAssertTrue(text.contains("audio never leaves this Mac"))
     }

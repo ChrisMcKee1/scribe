@@ -276,6 +276,13 @@ This metadata request carries only the model name and any key saved for that
 address, not dictated text, instructions or vocabulary. Scribe caps the chosen
 size at that limit and refuses to send the text if the full request does not fit,
 or if Ollama does not report a limit.
+After the answer, Scribe reads Ollama's loaded-model list at that same address
+with no request body, only that address's saved key if any. A smaller reported
+context caps later requests by that provider. An answer whose request did not
+fit the observed context, or whose loaded size cannot be confirmed, is refused
+and Scribe keeps the recognized text. This check cannot prevent a first request
+from meeting a previously unknown runtime cap, nor exclude changes another app
+makes to the shared model while the requests run.
 
 AI cleanup never sends audio, your snippet templates, your dictation history, or
 the name of the focused application.

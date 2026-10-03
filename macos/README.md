@@ -229,8 +229,13 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   The smaller of that limit and the choice decides both `num_ctx` and the fit check, even below the size picker's
   minimum. Missing metadata refuses the text request with a reason rather than guessing. Readiness recognizes a
   model held at a previously learned cap instead of repeatedly starting it at an impossible size.
-  These are estimates, not tokenizer counts; learning a smaller runtime cap after a request and splitting oversize
-  dictations remain open work. The app's own size still keeps its previous Chat Completions behavior.
+  After a native answer, Scribe reads `/api/ps` at that same address with no body, only its saved key if any.
+  A smaller loaded size stays as a ceiling for that provider's later requests and its readiness checks. An answer
+  whose request did not fit the reported loaded size, or whose size cannot be confirmed, is refused and dictation
+  keeps the recognized text. The first request can still meet an unknown runtime cap, and another app can change
+  the shared model between requests; a residency reading cannot close that race.
+  These are estimates, not tokenizer counts; splitting oversize dictations remains open work.
+  The app's own size still keeps its previous Chat Completions behavior.
   Dictation planning and a saved-settings Test connection use the instructions and writing style from their settings
   store, not a separate live defaults read. A nonempty app-profile style still takes precedence.
   Ollama/LM Studio tuning is bound to that app's recognized local address. A stale app selection beside a different

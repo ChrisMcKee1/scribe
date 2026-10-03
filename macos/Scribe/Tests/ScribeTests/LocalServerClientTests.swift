@@ -128,6 +128,27 @@ final class LocalServerClientTests: XCTestCase {
         XCTAssertEqual(log.count, 1)
     }
 
+    func testLoadedContextReadsOnlyTheConfiguredServersMatchingModel() async {
+        let log = RequestLog()
+        let client = makeClient { request in
+            log.record(request)
+            XCTAssertEqual(request.url?.host(percentEncoded: false), "localhost")
+            XCTAssertEqual(request.url?.path, "/api/ps")
+            return StubReply.json(
+                request,
+                #"{"models":[{"name":"other","context_length":65536},{"name":"model:latest","context_length":2048},{"name":"model","context_length":1024}]}"#
+            )
+        }
+        let context = await client.readLoadedContext("http://localhost:11434/v1", modelID: "model")
+        XCTAssertEqual(context, 1024)
+        XCTAssertEqual(log.count, 1)
+        let missing = await client.readLoadedContext("http://localhost:11434/v1", modelID: "missing")
+        XCTAssertEqual(missing, 0)
+        let remote = await client.readLoadedContext("https://remote.example/v1", modelID: "model")
+        XCTAssertEqual(remote, 0)
+        XCTAssertEqual(log.count, 2)
+    }
+
     func testOllamaListsTheModelsItCanChatWithAndWhatEachLoadedOneTakes() async {
         let log = RequestLog()
         let client = makeClient { request in

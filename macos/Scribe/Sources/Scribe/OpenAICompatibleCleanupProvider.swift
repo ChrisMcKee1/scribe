@@ -281,7 +281,19 @@ enum OpenAICompatibleEndpoint {
 /// deployments reject fields they do not know (AGENTS.md, "Cloud cleanup stores nothing"). A Responses route, if one is
 /// ever added, has to send `store: false` and prove it with a wire test.
 struct ChatCompletionsTransport: Sendable {
-    private let learnedOllamaContext = OSAllocatedUnfairLock(initialState: 0)
+    private struct OllamaContext {
+        var endpoint: URL?
+        var model = ""
+        var requested = 0
+        var maximum = 0
+        var runtimeCap = 0
+
+        var limit: Int {
+            let modelLimit = maximum > 0 ? min(requested, maximum) : requested
+            return runtimeCap > 0 ? min(modelLimit, runtimeCap) : modelLimit
+        }
+    }
+    private let learnedOllamaContext = OSAllocatedUnfairLock(initialState: OllamaContext())
     struct Completion: Sendable {
         let text: String
         let latency: TimeInterval
@@ -290,7 +302,7 @@ struct ChatCompletionsTransport: Sendable {
     let session: URLSession
 
     func ollamaContextLimit(requested: Int) -> Int {
-        learnedOllamaContext.withLock { $0 > 0 ? min(requested, $0) : requested }
+        learnedOllamaContext.withLock { $0.requested == requested ? $0.limit : requested }
     }
 
     func completeOllama(
@@ -312,14 +324,20 @@ struct ChatCompletionsTransport: Sendable {
         guard ContextBudget.requestFits(cleanupRequest, contextTokens: contextTokens) else {
             throw CleanupProviderError.localRequestTooLarge
         }
-        let maximum = await LocalServerClient(session: session).readMaxContext(
+        let client = LocalServerClient(session: session)
+        let maximum = await client.readMaxContext(
             url.absoluteString, modelID: model, apiKey: bearerToken)
         try Task.checkCancellation()
-        learnedOllamaContext.withLock { $0 = maximum }
+        let effectiveContext = learnedOllamaContext.withLock {
+            if $0.endpoint != url || $0.model != model || $0.requested != contextTokens {
+                $0 = OllamaContext(endpoint: url, model: model, requested: contextTokens)
+            }
+            $0.maximum = maximum
+            return $0.limit
+        }
         guard maximum > 0 else {
             throw CleanupProviderError.localContextUnknown
         }
-        let effectiveContext = min(contextTokens, maximum)
         guard ContextBudget.requestFits(cleanupRequest, contextTokens: effectiveContext) else {
             throw CleanupProviderError.localRequestTooLarge
         }
@@ -371,6 +389,19 @@ struct ChatCompletionsTransport: Sendable {
         guard !text.isEmpty else {
             throw CleanupProviderError.invalidResponse(
                 decoded.doneReason == "length" ? .outputLimitReachedBeforeText : .emptyCompletion)
+        }
+
+        let loadedContext = await client.readLoadedContext(
+            url.absoluteString, modelID: model, apiKey: bearerToken)
+        try Task.checkCancellation()
+        guard loadedContext > 0 else { throw CleanupProviderError.localContextUnknown }
+        learnedOllamaContext.withLock {
+            guard $0.endpoint == url, $0.model == model, $0.requested == contextTokens else { return }
+            let observedCap = min(effectiveContext, loadedContext)
+            $0.runtimeCap = $0.runtimeCap > 0 ? min($0.runtimeCap, observedCap) : observedCap
+        }
+        guard ContextBudget.requestFits(cleanupRequest, contextTokens: min(effectiveContext, loadedContext)) else {
+            throw CleanupProviderError.localRequestTooLarge
         }
 
         let elapsed = started.duration(to: .now)

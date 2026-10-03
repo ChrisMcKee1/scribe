@@ -182,6 +182,9 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
                 if request.url?.path == "/api/show" {
                     return StubReply.json(request, #"{"model_info":{"gemma.context_length":32768}}"#)
                 }
+                if request.url?.path == "/api/ps" {
+                    return StubReply.json(request, #"{"models":[{"name":"gemma4:e4b","context_length":32768}]}"#)
+                }
                 log.record(request)
                 return StubReply.json(
                     request,
@@ -397,6 +400,94 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
 }
 
 final class ManagedOllamaCleanupProviderTests: XCTestCase {
+    @MainActor
+    func testBothNativePathsKeepASmallerRuntimeCapAndRefuseAnAnswerThatDidNotFit() async throws {
+        for managed in [true, false] {
+            let log = RequestLog()
+            let heldContext = LockedValue<Int>()
+            heldContext.set(2048)
+            let session = makeStubSession { request in
+                log.record(request)
+                switch request.url?.path {
+                case "/api/show":
+                    return StubReply.json(request, #"{"model_info":{"gemma.context_length":32768}}"#)
+                case "/api/ps":
+                    return StubReply.json(
+                        request, #"{"models":[{"name":"model","context_length":\#(heldContext.value ?? 0)}]}"#)
+                default:
+                    return StubReply.json(request, #"{"message":{"content":"Cleaned."},"done":true}"#)
+                }
+            }
+            let provider: any CleanupProvider =
+                managed
+                ? ManagedOllamaCleanupProvider(
+                    model: "model", contextTokens: 32768,
+                    readLocalServer: { _ in
+                        LocalServerState(
+                            reach: .reached, models: [],
+                            loaded: [LocalServerLoadedModel("model", 0, contextTokens: 2048)])
+                    }, session: session)
+                : OpenAICompatibleCleanupProvider(
+                    model: "model", serviceURL: URL(string: LocalAiServer.ollamaAddress)!,
+                    localServerApp: .ollama,
+                    localTuning: { LocalModelTuning(contextTokens: 32768, sendWholeVocabulary: false) },
+                    readLocalServer: { _, _ in
+                        LocalServerState(
+                            reach: .reached, models: [],
+                            loaded: [LocalServerLoadedModel("model", 0, contextTokens: 2048)])
+                    },
+                    session: session)
+            let request = CleanupRequest(transcript: "sample", writingStylePrompt: "Edit.", maxOutputTokens: 32)
+            _ = try await provider.clean(request)
+            _ = try await provider.clean(request)
+            let chats = log.all.filter { $0.url?.path == "/api/chat" }
+            XCTAssertEqual(chats.count, 2)
+            XCTAssertEqual((chats[0].jsonBody["options"] as? [String: Any])?["num_ctx"] as? Int, 32768)
+            XCTAssertEqual((chats[1].jsonBody["options"] as? [String: Any])?["num_ctx"] as? Int, 2048)
+            let sends = log.count
+            let readiness = try await provider.prepareLocalModel(isCurrent: { true }, onStarting: {})
+            XCTAssertEqual(readiness, .resident)
+            XCTAssertEqual(log.count, sends)
+            heldContext.set(64)
+            do {
+                _ = try await provider.clean(request)
+                XCTFail("An answer from an insufficient context must not be accepted")
+            } catch {
+                XCTAssertEqual(error as? CleanupProviderError, .localRequestTooLarge)
+            }
+            let count = log.all.filter { $0.url?.path == "/api/chat" }.count
+            do {
+                _ = try await provider.clean(request)
+                XCTFail("A known runtime cap must prevent the next text send")
+            } catch {
+                XCTAssertEqual(error as? CleanupProviderError, .localRequestTooLarge)
+            }
+            XCTAssertEqual(log.all.filter { $0.url?.path == "/api/chat" }.count, count)
+        }
+    }
+
+    func testMissingResidencyAfterAChatRefusesTheAnswer() async throws {
+        let provider = ManagedOllamaCleanupProvider(
+            model: "model", contextTokens: 8192,
+            session: makeStubSession { request in
+                switch request.url?.path {
+                case "/api/show":
+                    return StubReply.json(request, #"{"model_info":{"gemma.context_length":8192}}"#)
+                case "/api/ps":
+                    return StubReply.json(request, #"{"models":[]}"#)
+                default:
+                    return StubReply.json(request, #"{"message":{"content":"Unverified."},"done":true}"#)
+                }
+            })
+        do {
+            _ = try await provider.clean(
+                CleanupRequest(transcript: "sample", writingStylePrompt: "Edit.", maxOutputTokens: 32))
+            XCTFail("A model that disappeared cannot vouch for its answer's context")
+        } catch {
+            XCTAssertEqual(error as? CleanupProviderError, .localContextUnknown)
+        }
+    }
+
     func testBothNativePathsCapEachRequestToTheModelsReportedMaximum() async throws {
         for managed in [true, false] {
             let log = RequestLog()
@@ -408,6 +499,10 @@ final class ManagedOllamaCleanupProviderTests: XCTestCase {
                     XCTAssertEqual(RecordedRequest(request).jsonBody["model"] as? String, "model")
                     return StubReply.json(
                         request, #"{"model_info":{"gemma.context_length":\#(maximum.value ?? 0)}}"#)
+                }
+                if request.url?.path == "/api/ps" {
+                    return StubReply.json(
+                        request, #"{"models":[{"name":"model","context_length":\#(maximum.value ?? 0)}]}"#)
                 }
                 return StubReply.json(request, #"{"message":{"content":"Cleaned."},"done":true}"#)
             }
@@ -426,7 +521,8 @@ final class ManagedOllamaCleanupProviderTests: XCTestCase {
             maximum.set(1024)
             _ = try await provider.clean(
                 CleanupRequest(transcript: "sample", writingStylePrompt: "Edit.", maxOutputTokens: 32))
-            XCTAssertEqual((log.all.last?.jsonBody["options"] as? [String: Any])?["num_ctx"] as? Int, 1024)
+            let lastChat = log.all.last { $0.url?.path == "/api/chat" }
+            XCTAssertEqual((lastChat?.jsonBody["options"] as? [String: Any])?["num_ctx"] as? Int, 1024)
             do {
                 _ = try await provider.clean(
                     CleanupRequest(transcript: String(repeating: "語", count: 1100), maxOutputTokens: 32))
@@ -471,6 +567,9 @@ final class ManagedOllamaCleanupProviderTests: XCTestCase {
                 if request.url?.path == "/api/show" {
                     return StubReply.json(request, #"{"model_info":{"gemma.context_length":4096}}"#)
                 }
+                if request.url?.path == "/api/ps" {
+                    return StubReply.json(request, #"{"models":[{"name":"model","context_length":4096}]}"#)
+                }
                 return StubReply.json(request, #"{"message":{"content":"Cleaned."},"done":true}"#)
             })
         _ = try await provider.clean(CleanupRequest(transcript: "sample", maxOutputTokens: 32))
@@ -514,6 +613,9 @@ final class ManagedOllamaCleanupProviderTests: XCTestCase {
                 if request.url?.path == "/api/show" {
                     return StubReply.json(request, #"{"model_info":{"gemma.context_length":8192}}"#)
                 }
+                if request.url?.path == "/api/ps" {
+                    return StubReply.json(request, #"{"models":[{"name":"gemma4:e4b","context_length":8192}]}"#)
+                }
                 log.record(request)
                 return StubReply.json(request, #"{"message":{"role":"assistant","content":"Cleaned."},"done":true}"#)
             })
@@ -543,6 +645,9 @@ final class ManagedOllamaCleanupProviderTests: XCTestCase {
                 session: makeStubSession { request in
                     if request.url?.path == "/api/show" {
                         return StubReply.json(request, #"{"model_info":{"gemma.context_length":8192}}"#)
+                    }
+                    if request.url?.path == "/api/ps" {
+                        return StubReply.json(request, #"{"models":[{"name":"gemma4:e4b","context_length":8192}]}"#)
                     }
                     log.record(request)
                     return StubReply.json(request, #"{"message":{"role":"assistant","content":"OK"},"done":true}"#)

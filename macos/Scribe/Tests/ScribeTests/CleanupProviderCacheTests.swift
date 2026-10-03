@@ -95,6 +95,9 @@ final class CleanupProviderCacheTests: XCTestCase {
             if request.url?.path == "/api/show" {
                 return StubReply.json(request, #"{"model_info":{"gemma.context_length":32768}}"#)
             }
+            if request.url?.path == "/api/ps" {
+                return StubReply.json(request, #"{"models":[{"name":"qwen2.5:3b","context_length":32768}]}"#)
+            }
             if request.url?.path == "/api/chat" {
                 return StubReply.json(request, #"{"message":{"role":"assistant","content":"OK"},"done":true}"#)
             }

@@ -121,8 +121,12 @@ real Mac.
   address's key. An unreadable or absent limit refuses text instead of assuming the choice is supported; readiness
   recognizes a copy held at the learned cap. Tests cover both paths, a maximum changing between requests, a limit
   below the picker's minimum, missing metadata and refusal without a chat send.
-  Runtime caps learned after a request, the app's own size and oversized-dictation splitting remain explicit gaps;
-  refusal preserves recognized text instead of silently losing instructions.
+  After each native answer, `/api/ps` at the same configured address supplies the matching model's loaded size,
+  with no request body. A smaller observed size caps later sends and readiness for that provider. A request that
+  did not fit that size, or an unconfirmed size, refuses the answer and keeps recognized text. Both routes have
+  tests for a smaller runtime cap, later no-send refusal and readiness without a restart. The first request can
+  meet an unknown cap, and an external app can change the shared model between the requests; the reading is not
+  an atomic guarantee. The app's own size and oversized-dictation splitting remain explicit gaps.
   Saved-settings probes and dictation prompt planning explicitly carry that store's saved guardrails and writing
   style, with a nonempty profile style first, so the fit is measured against the prompt actually sent.
   Custom-service local tuning and app identity require the selected app's actual recognized address; stale app
