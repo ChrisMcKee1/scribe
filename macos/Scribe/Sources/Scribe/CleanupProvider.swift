@@ -99,6 +99,28 @@ enum CleanupSampling {
 
 // MARK: - Failures
 
+enum FoundryLocalSetupText {
+    #if arch(arm64)
+        static let appleSiliconBuild = true
+    #else
+        static let appleSiliconBuild = false
+    #endif
+
+    static func installationHint(appleSilicon: Bool = appleSiliconBuild) -> String {
+        if appleSilicon {
+            return "Install Foundry Local with 'brew install microsoft/foundrylocal/foundrylocal', "
+                + "or set SCRIBE_FOUNDRY_CLI."
+        }
+        return "Foundry Local's current macOS runtime requires Apple Silicon. "
+            + "On an Intel Mac, use whisper.cpp for speech and another app or service for AI cleanup. "
+            + "On Apple Silicon, use Scribe's native arm64 build."
+    }
+
+    static var missing: String {
+        "Foundry Local was not found. " + installationHint()
+    }
+}
+
 /// Why a cleanup provider could not clean, in a form that is safe to log.
 ///
 /// No case carries text a user, an endpoint or a tool wrote: no response body, no `az` output, no URL, tenant, client
@@ -359,8 +381,7 @@ enum CleanupEndpointProblem: Error, Equatable, Sendable {
     var message: String {
         switch self {
         case .foundryLocalNotInstalled:
-            return "Foundry Local is not installed. Install it with "
-                + "'brew install microsoft/foundrylocal/foundrylocal', or set SCRIBE_FOUNDRY_CLI."
+            return FoundryLocalSetupText.missing
         case .foundryLocalLaunchFailed:
             return "Scribe could not start the foundry command to find Foundry Local's service."
         case .foundryLocalNotReady:

@@ -185,8 +185,8 @@ struct CleanupProviderSettingsSection: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text(
-                    "Runs fully on-device via Foundry Local. Requires "
-                        + "'brew install microsoft/foundrylocal/foundrylocal'; the model downloads on first use."
+                    "Runs fully on-device via Foundry Local. "
+                        + FoundryLocalSetupText.installationHint() + " The model downloads on first use."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

@@ -20,6 +20,13 @@ permission/device combinations still need checks (see Tests below).
   trusted (`brew trust`), while installing by the full name trusts that one formula
 - Optional: [Ollama](https://ollama.com) as an alternative local AI cleanup provider
 
+The current Microsoft [Homebrew formula](https://github.com/microsoft/homebrew-foundrylocal/blob/main/Formula/foundrylocal.rb)
+requires `arm64`, and its 0.10.3 macOS release has Apple Silicon assets only. Intel CI proves Scribe's executable and
+tests build, not that its default recognizer can run. Intel Macs need the documented whisper.cpp fallback below;
+Foundry Local cleanup is not available through that official runtime, so use another cleanup app or service instead.
+The setup hints are build-aware: an x86_64 build never recommends the incompatible Foundry Homebrew install. Runtime
+discovery and explicit executable overrides remain unchanged.
+
 ## Build
 
 ```bash

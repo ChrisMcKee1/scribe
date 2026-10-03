@@ -38,8 +38,7 @@ enum TranscriptionError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .backendMissing(.foundryCliNotFound):
-            return "Scribe could not find Foundry Local. Install it with "
-                + "`brew install microsoft/foundrylocal/foundrylocal`, or set SCRIBE_FOUNDRY_CLI."
+            return FoundryLocalSetupText.missing
         case .backendMissing(.whisperCliNotFound):
             return "Could not find whisper-cli. Install whisper-cpp or set SCRIBE_WHISPER_CLI."
         case .backendMissing(.whisperModelNotFound):

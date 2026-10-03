@@ -3,6 +3,25 @@ import XCTest
 @testable import Scribe
 
 final class FoundryLocalStatusTests: XCTestCase {
+    func testSetupGuidanceDoesNotRecommendAnArmOnlyInstallToIntelBuilds() {
+        let intel = FoundryLocalSetupText.installationHint(appleSilicon: false)
+        XCTAssertTrue(intel.contains("requires Apple Silicon"))
+        XCTAssertTrue(intel.contains("whisper.cpp"))
+        XCTAssertTrue(intel.contains("native arm64 build"))
+        XCTAssertFalse(intel.contains("brew install"))
+        let native = FoundryLocalSetupText.installationHint(appleSilicon: true)
+        XCTAssertTrue(native.contains("brew install microsoft/foundrylocal/foundrylocal"))
+        XCTAssertTrue(native.contains("SCRIBE_FOUNDRY_CLI"))
+        XCTAssertEqual(CleanupEndpointProblem.foundryLocalNotInstalled.message, FoundryLocalSetupText.missing)
+        XCTAssertEqual(
+            TranscriptionError.backendMissing(.foundryCliNotFound).errorDescription, FoundryLocalSetupText.missing)
+        #if arch(arm64)
+            XCTAssertTrue(FoundryLocalSetupText.appleSiliconBuild)
+        #else
+            XCTAssertFalse(FoundryLocalSetupText.appleSiliconBuild)
+        #endif
+    }
+
     func testContextMetadataMustNameTheChatModelAndNeverEnlargesTheBudget() throws {
         for (reported, expected) in [(512, 512), (2048, 2048), (32768, 4096)] {
             let json = #"{"model":{"alias":"qwen","type":"Chat","contextLength":\#(reported)}}"#

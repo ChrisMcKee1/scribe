@@ -176,8 +176,8 @@ struct SettingsAdvancedPage: View {
     private func refreshSpeechModelList() async {
         guard let cliURL = TranscriptionBackendResolver.live().foundryExecutable() else {
             speechModelCatalogLoaded = false
-            speechModelCatalogProblem = "Foundry Local is not installed."
-            speechModelStatus = "Foundry Local is not installed. Model availability cannot be checked."
+            speechModelCatalogProblem = FoundryLocalSetupText.missing
+            speechModelStatus = FoundryLocalSetupText.missing + " Model availability cannot be checked."
             return
         }
         do {
@@ -229,7 +229,7 @@ struct SettingsAdvancedPage: View {
     @MainActor
     private func downloadSelectedSpeechModel() async {
         guard let cliURL = TranscriptionBackendResolver.live().foundryExecutable() else {
-            speechModelStatus = "Foundry Local is not installed."
+            speechModelStatus = FoundryLocalSetupText.missing
             return
         }
         isDownloadingSpeechModel = true
