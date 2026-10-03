@@ -22,8 +22,6 @@ struct DiagnosticsSettingsTab: View {
     @StateObject private var model: DiagnosticsSettingsModel
     let persistenceStore: PersistenceStore
 
-    private static let newIssueURL = URL(string: "https://github.com/x3nc0n/scribe/issues/new")!
-
     init(persistenceStore: PersistenceStore) {
         self.persistenceStore = persistenceStore
         _model = StateObject(wrappedValue: DiagnosticsSettingsModel(access: .live(persistenceStore)))
@@ -64,7 +62,7 @@ struct DiagnosticsSettingsTab: View {
                 }
                 Spacer()
                 Button("Report a problem") {
-                    NSWorkspace.shared.open(Self.newIssueURL)
+                    NSWorkspace.shared.open(ScribeRepository.newIssueURL)
                 }
             }
             Divider()

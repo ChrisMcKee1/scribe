@@ -18,10 +18,6 @@ struct SettingsAboutPage: View {
 struct AboutView: View {
     let persistenceStore: PersistenceStore
 
-    private static let repoURL = URL(string: "https://github.com/x3nc0n/scribe")!
-    private static let privacyPolicyURL = URL(string: "https://github.com/x3nc0n/scribe/blob/main/PRIVACY.md")!
-    private static let newIssueURL = URL(string: "https://github.com/x3nc0n/scribe/issues/new")!
-
     @State private var updateChecker = UpdateChecker()
     @State private var updateCheckResult: UpdateCheckResult?
     @State private var isCheckingForUpdate = false
@@ -107,6 +103,8 @@ struct AboutView: View {
             return "You're up to date (version \(current))."
         case .updateAvailable(let current, let latest, _):
             return "Version \(latest) is available (you have \(current))."
+        case .noMacRelease:
+            return "No stable macOS download was found in the latest 100 GitHub releases."
         case .failed(let message):
             return message
         }
@@ -139,7 +137,7 @@ struct AboutView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 Button("Read privacy policy") {
-                    NSWorkspace.shared.open(Self.privacyPolicyURL)
+                    NSWorkspace.shared.open(ScribeRepository.privacyURL)
                 }
             }
         }
@@ -157,7 +155,7 @@ struct AboutView: View {
                 }
                 Spacer()
                 Button("Open GitHub to star") {
-                    NSWorkspace.shared.open(Self.repoURL)
+                    NSWorkspace.shared.open(ScribeRepository.url)
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -183,10 +181,10 @@ struct AboutView: View {
                 VStack(spacing: 8) {
                     SaveDiagnosticsButton()
                     Button("Report an issue") {
-                        NSWorkspace.shared.open(Self.newIssueURL)
+                        NSWorkspace.shared.open(ScribeRepository.newIssueURL)
                     }
                     Button("View source") {
-                        NSWorkspace.shared.open(Self.repoURL)
+                        NSWorkspace.shared.open(ScribeRepository.url)
                     }
                 }
             }

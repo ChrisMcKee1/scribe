@@ -58,6 +58,11 @@ catalog, status or download state, and an explicit download keeps the model sele
 Ollama and LM Studio model-list refreshes likewise accept only the latest request for each app. Cancelled reads do not
 publish late model or context data, and older replies cannot clear a newer refresh's loading state.
 
+About and Diagnostics link to the maintainer's `ChrisMcKee1/scribe` repository for source, privacy and support.
+The manual update check examines its latest 100 releases and offers only the highest stable version with a
+matching `Scribe-macOS-<version>.dmg`, never a Windows-only release. If none is listed it says so, rather than
+claiming the app is up to date. This neither checks the DMG's signature/architecture nor downloads or installs it.
+
 ## Build
 
 ```bash
