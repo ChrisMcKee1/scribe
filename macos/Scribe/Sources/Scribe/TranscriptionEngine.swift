@@ -612,12 +612,12 @@ final class TranscriptionEngine: Sendable {
             // Foundry reports success and its structured errors as JSON on standard output, and some failures
             // still exit 0, so the reply is read before the exit status is trusted.
             if let reply = FoundryReply.find(in: outcome.standardOutput.data) {
+                if reply.reportsError {
+                    throw TranscriptionError.backendReportedError
+                }
                 let text = reply.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if !text.isEmpty {
                     return text
-                }
-                if reply.reportsError {
-                    throw TranscriptionError.backendReportedError
                 }
                 if reply.text != nil {
                     throw TranscriptionError.emptyOutput
@@ -690,7 +690,8 @@ private struct FoundryReply: Decodable {
         if let reply = try? decoder.decode(FoundryReply.self, from: data) {
             return reply
         }
-        let lines = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline)
+        guard let output = String(data: data, encoding: .utf8) else { return nil }
+        let lines = output.split(whereSeparator: \.isNewline)
         for line in lines.reversed() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix("{"), let reply = try? decoder.decode(FoundryReply.self, from: Data(trimmed.utf8))

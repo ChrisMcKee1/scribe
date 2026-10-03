@@ -1038,6 +1038,58 @@ final class TranscriptionEngineTests: XCTestCase {
         }
     }
 
+    func testFoundryErrorWinsOverTextInTheSameReplyWithoutReadingErrorDetails() throws {
+        for errorJSON in ["{}", "\"failure\"", "false", "0"] {
+            for prefix in ["", "Loading model\n"] {
+                let reply = prefix + "{\"text\":\"partial words\",\"error\":\(errorJSON)}"
+                XCTAssertThrowsError(
+                    try TranscriptionEngine.transcript(from: outcome(stdout: reply), kind: .foundryLocal)
+                ) {
+                    XCTAssertEqual($0 as? TranscriptionError, .backendReportedError)
+                }
+            }
+        }
+        XCTAssertEqual(
+            try TranscriptionEngine.transcript(
+                from: outcome(stdout: "{\"text\":\"complete\",\"error\":null}"), kind: .foundryLocal),
+            "complete")
+    }
+
+    func testFoundryMixedErrorAndTextRefusesTheRecordingAndDeletesScratch() async throws {
+        let recorder = recordScribeLog()
+        let directory = try makeTemporaryDirectory(label: "asr-mixed-error")
+        let script = try makeScript(
+            """
+            printf '{"text":"%s","error":{"message":"%s"}}\\n' \
+            '\(PrivacyCanary.transcript)' '\(PrivacyCanary.secret)'
+            """, in: directory, named: "foundry")
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch"))
+        let engine = makeEngine(foundry: script, scratch: scratch)
+        let error = await transcriptionError { try await engine.transcribe(samples: self.tone, sampleRate: 16_000) }
+        XCTAssertEqual(error, .backendReportedError)
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+        PrivacyCanary.assertAbsent(from: recorder.publicText)
+    }
+
+    func testFoundryRefusesDamagedUTF8InWholeOrProgressPrefixedReplies() throws {
+        for prefix in ["", "Loading model\n"] {
+            let valid = prefix + "{\"text\":\"caf\u{00E9}\"}"
+            XCTAssertEqual(
+                try TranscriptionEngine.transcript(from: outcome(stdout: valid), kind: .foundryLocal), "caf\u{00E9}")
+            let data = Data((prefix + "{\"text\":\"caf").utf8) + Data([0xFF]) + Data("\"}".utf8)
+            let result = ProcessRunner.Outcome(
+                terminationReason: .finished, exitStatus: 0, terminationSignal: nil,
+                standardOutput: ProcessRunner.CapturedOutput(
+                    data: data, totalByteCount: data.count, reachedEndOfFile: true),
+                standardError: ProcessRunner.CapturedOutput(
+                    data: Data(), totalByteCount: 0, reachedEndOfFile: true),
+                duration: .milliseconds(1))
+            XCTAssertThrowsError(try TranscriptionEngine.transcript(from: result, kind: .foundryLocal)) {
+                XCTAssertEqual($0 as? TranscriptionError, .malformedOutput)
+            }
+        }
+    }
+
     func testWhisperRefusesInvalidUTF8InsteadOfReplacingLostTranscriptBytes() {
         let result = ProcessRunner.Outcome(
             terminationReason: .finished, exitStatus: 0, terminationSignal: nil,
