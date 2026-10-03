@@ -141,8 +141,8 @@ final class LocalModelLifecycle: Sendable {
             if first { lifecycle.endUse() }
         }
 
-        /// A second lease on the same model that outlives this one, for a load that is abandoned by its caller.
-        fileprivate func extend() -> Lease {
+        /// Commits a load's extended use only while this is the sole use and shutdown has not begun.
+        fileprivate func extend() -> Lease? {
             lifecycle.extendUse()
         }
 
@@ -252,9 +252,12 @@ final class LocalModelLifecycle: Sendable {
         return try await beginUse(target)
     }
 
-    private func extendUse() -> Lease {
-        state.withLock { $0.uses += 1 }
-        return Lease(self)
+    private func extendUse() -> Lease? {
+        state.withLock {
+            guard !$0.releasesClosing, $0.uses == 1 else { return nil }
+            $0.uses += 1
+            return Lease(self)
+        }
     }
 
     private func endUse() {
@@ -629,7 +632,7 @@ final class LocalModelLifecycle: Sendable {
         }
         guard lease.isSoleUse, !Task.isCancelled else { return .busy }
 
-        let settleLease = lease.extend()
+        guard let settleLease = lease.extend() else { return .unavailable }
         let candidate = Self.candidate
         let done = LifecycleGate()
         let outcome = OSAllocatedUnfairLock(initialState: LMStudioContextOutcome.busy)

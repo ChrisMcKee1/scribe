@@ -97,6 +97,45 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testShutdownDuringResizeUnloadPreventsTheReplacementLoad() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock, idle: .zero)
+        let finishUnload = LifecycleGate()
+        fake.barrier = finishUnload
+        let loaded = StubSwitch()
+        let lease = try await lifecycle.beginUse(lmTarget())
+        let listing = LocalServerState(
+            reach: .reached, models: [],
+            loaded: [
+                LocalServerLoadedModel(
+                    "m", 1, contextTokens: 4096, instanceID: "wrong-size", remainingTTLSeconds: 5)
+            ], failureDetail: nil)
+        let resize = Task {
+            await lifecycle.reconcileLMStudio(
+                target: lmTarget(), contextTokens: 8192, lease: lease,
+                read: { _, _ in listing },
+                load: { _, _, _ in
+                    loaded.turnOn()
+                    return "replacement"
+                })
+        }
+        try await fake.instanceStarted.wait()
+        let shutdown = Task { await lifecycle.release(.shutdown, target: nil) }
+        await clock.waitForSleepers(1)
+        XCTAssertGreaterThanOrEqual(clock.pending, 1)
+        finishUnload.open()
+        let result = await resize.value
+        lease.end()
+        _ = await shutdown.value
+        XCTAssertEqual(result, .unavailable)
+        XCTAssertFalse(loaded.isOn)
+        XCTAssertEqual(fake.instances.map(\.id), ["wrong-size"])
+        XCTAssertTrue(fake.models.isEmpty)
+        XCTAssertEqual(lifecycle.useCount, 0)
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+    }
+
     func testTheLateSettlementRetirementHasItsOwnShutdownBoundAndKeepsRefusedOwnership() async throws {
         let fake = FakeUnloads()
         let clock = ManualClock()
