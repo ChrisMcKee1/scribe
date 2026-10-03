@@ -602,6 +602,9 @@ final class TranscriptionEngine: Sendable {
         case .finished:
             break
         }
+        if let signal = outcome.terminationSignal {
+            throw TranscriptionError.terminatedBySignal(signal)
+        }
         guard !outcome.standardOutput.isTruncated else { throw TranscriptionError.malformedOutput }
 
         switch kind {

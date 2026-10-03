@@ -1074,6 +1074,38 @@ final class TranscriptionEngineTests: XCTestCase {
         XCTAssertEqual(deadlines.deadline(audioSeconds: .nan, warm: true), .seconds(30))
     }
 
+    func testSignalTerminatedRecognizersNeverYieldACompleteLookingPrefix() {
+        for kind in [TranscriptionBackendKind.foundryLocal, .whisperCpp] {
+            for signal in [SIGTERM, SIGKILL, SIGABRT] {
+                let text = kind == .foundryLocal ? "{\"text\":\"prefix\"}" : "prefix"
+                XCTAssertThrowsError(
+                    try TranscriptionEngine.transcript(
+                        from: outcome(status: nil, signal: signal, stdout: text), kind: kind)
+                ) {
+                    XCTAssertEqual($0 as? TranscriptionError, .terminatedBySignal(signal))
+                }
+            }
+        }
+    }
+
+    func testFoundryKilledAfterPrintingJSONRefusesTextAndRemovesScratch() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-signal-prefix")
+        let script = try makeScript(
+            """
+            printf '{"text":"prefix"}\\n'
+            kill -TERM "$$"
+            """, in: directory, named: "foundry")
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch"))
+        let engine = makeEngine(foundry: script, scratch: scratch)
+        let error = await transcriptionError { try await engine.transcribe(samples: self.tone, sampleRate: 16_000) }
+        XCTAssertEqual(error, .terminatedBySignal(SIGTERM))
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+        try writeScript("printf '{\"text\":\"complete\"}'", at: script)
+        let recovered = try await engine.transcribe(samples: tone, sampleRate: 16_000)
+        XCTAssertEqual(recovered.text, "complete")
+        XCTAssertTrue(recovered.diagnostics.usedColdBudget)
+    }
+
     // MARK: - Privacy
 
     /// The transcript, the recognizer's own words and the recording's path must never reach a log line, and the

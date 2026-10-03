@@ -45,6 +45,8 @@ These variables belong to that launch, not a persistent Finder setting. The fall
 resolution, arguments, transcription and scratch cleanup, not actual whisper.cpp or Intel speech accuracy.
 Neither backend accepts truncated captured stdout as a complete transcript. Whisper also refuses invalid UTF-8
 instead of replacing missing text bytes. The existing bounded output capture remains unchanged.
+Both backends refuse a signal-terminated recognizer even if it printed a complete-looking reply first. A subsequent
+successful run remains available and starts with the cold budget; Foundry's ordinary nonzero-exit JSON handling stays.
 
 ## Build
 
