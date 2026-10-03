@@ -57,11 +57,20 @@ final class LocalAppSettingsModel: ObservableObject {
 
     @Published private(set) var freeMemoryNotice: String?
 
-    private let client: LocalServerClient
+    private let read: @Sendable (String) async -> LocalServerState
+    private var refreshOwners: [LocalServerApp: UUID] = [:]
     private let lifecycle: LocalModelLifecycle
 
     init(client: LocalServerClient = LocalServerClient(), lifecycle: LocalModelLifecycle = .shared) {
-        self.client = client
+        self.read = { await client.read($0) }
+        self.lifecycle = lifecycle
+    }
+
+    init(
+        read: @escaping @Sendable (String) async -> LocalServerState,
+        lifecycle: LocalModelLifecycle = .shared
+    ) {
+        self.read = read
         self.lifecycle = lifecycle
     }
 
@@ -73,12 +82,21 @@ final class LocalAppSettingsModel: ObservableObject {
     }
 
     func refresh(for app: LocalServerApp, endpoint: String?) async {
-        guard app != .none, let endpoint else {
+        guard app != .none, let endpoint, !Task.isCancelled else {
             return
         }
+        let owner = UUID()
+        refreshOwners[app] = owner
         loading.insert(app)
-        defer { loading.remove(app) }
-        states[app] = await client.read(endpoint)
+        defer {
+            if refreshOwners[app] == owner {
+                refreshOwners[app] = nil
+                loading.remove(app)
+            }
+        }
+        let state = await read(endpoint)
+        guard refreshOwners[app] == owner, !Task.isCancelled else { return }
+        states[app] = state
     }
 
     func unload(for app: LocalServerApp, endpoint: String?, model: String) async {

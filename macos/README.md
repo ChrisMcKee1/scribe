@@ -55,6 +55,8 @@ The speech model picker likewise rejects damaged catalog output and option-shape
 terminated by a signal is a failure; long progress output alone does not invalidate a successful download.
 Leaving the Advanced page cancels its model setup work. A late result from that visit cannot replace a newer visit's
 catalog, status or download state, and an explicit download keeps the model selected when it was clicked.
+Ollama and LM Studio model-list refreshes likewise accept only the latest request for each app. Cancelled reads do not
+publish late model or context data, and older replies cannot clear a newer refresh's loading state.
 
 ## Build
 
