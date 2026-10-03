@@ -256,7 +256,7 @@ final class LocalModelLifecycle: Sendable {
 
     private func extendUse() -> Lease? {
         state.withLock {
-            guard !$0.releasesClosing, $0.uses == 1 else { return nil }
+            guard !Task.isCancelled, !$0.releasesClosing, $0.uses == 1 else { return nil }
             $0.uses += 1
             return Lease(self)
         }
@@ -545,6 +545,7 @@ final class LocalModelLifecycle: Sendable {
     func forgetUnlisted(endpoint: String, model: String, listed: Set<String>, ifUnchangedSince revision: UInt64? = nil)
     {
         state.withLock { state in
+            guard !Task.isCancelled else { return }
             if let revision, state.revision != revision { return }
             state.copies.removeAll { copy in
                 Self.sameServer(copy.endpoint, endpoint) && !listed.contains(copy.instanceID)
@@ -566,11 +567,13 @@ final class LocalModelLifecycle: Sendable {
         read: @escaping @Sendable (_ endpoint: String, _ apiKey: String?) async -> LocalServerState,
         load: @escaping @Sendable (_ endpoint: String, _ model: String, _ contextTokens: Int) async -> String?
     ) async -> LMStudioContextOutcome {
+        guard !Task.isCancelled else { return .busy }
         let refusedKey = "\(target.endpoint)|\(target.model)|\(contextTokens)"
         guard let revision = state.withLock({ state in state.releasesClosing ? nil : state.revision }) else {
             return .unavailable
         }
         let observed = await read(target.endpoint, target.apiKey)
+        guard !Task.isCancelled else { return .busy }
         guard observed.reach == .reached || observed.reach == .notRunning else { return .unavailable }
         if observed.reach == .reached {
             let listed = Set(observed.loaded.compactMap { $0.instanceID })
@@ -579,7 +582,7 @@ final class LocalModelLifecycle: Sendable {
         let held = observed.reach == .reached ? observed.loaded(for: target.model) : nil
         if observed.reach == .reached {
             let retirement = state.withLock { state -> (LifecycleGate, [Copy])? in
-                guard !state.releasesClosing,
+                guard !Task.isCancelled, !state.releasesClosing,
                     state.uses == 1, state.revision == revision, state.inFlightUnload == nil
                 else { return nil }
                 let copies = state.copies.filter {
@@ -609,7 +612,7 @@ final class LocalModelLifecycle: Sendable {
         }
         if let held, held.remainingTTLSeconds == nil { return .ready }
         let change = state.withLock { state -> LifecycleGate? in
-            guard !state.releasesClosing,
+            guard !Task.isCancelled, !state.releasesClosing,
                 state.uses == 1, state.revision == revision, state.inFlightUnload == nil
             else { return nil }
             let gate = LifecycleGate()

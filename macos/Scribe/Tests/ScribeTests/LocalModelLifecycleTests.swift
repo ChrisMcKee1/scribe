@@ -97,6 +97,62 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testACancelledReconciliationReadsAndChangesNothing() async throws {
+        let lifecycle = make(idle: .zero)
+        let lease = try await lifecycle.beginUse(lmTarget())
+        let work = Task {
+            _ = withUnsafeCurrentTask { $0?.cancel() }
+            return await lifecycle.reconcileLMStudio(
+                target: lmTarget(), contextTokens: 8192, lease: lease,
+                read: { _, _ in
+                    XCTFail("Cancelled reconciliation cannot read the app")
+                    return .notRunning.reached
+                },
+                load: { _, _, _ in
+                    XCTFail("Cancelled reconciliation cannot load")
+                    return "never"
+                })
+        }
+        let result = await work.value
+        lease.end()
+        XCTAssertEqual(result, .busy)
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+        XCTAssertEqual(lifecycle.useCount, 0)
+    }
+
+    func testACancelledResidencyReadCannotForgetTrackedOwnership() async throws {
+        let fake = FakeUnloads()
+        let lifecycle = make(fake, idle: .zero)
+        try await owned(lifecycle, "kept")
+        let began = LifecycleGate()
+        let resume = LifecycleGate()
+        let lease = try await lifecycle.beginUse(lmTarget())
+        let work = Task {
+            await lifecycle.reconcileLMStudio(
+                target: lmTarget(), contextTokens: 8192, lease: lease,
+                read: { _, _ in
+                    began.open()
+                    try? await resume.wait()
+                    return LocalServerState(reach: .reached, models: [], loaded: [], failureDetail: nil)
+                },
+                load: { _, _, _ in
+                    XCTFail("A cancelled read cannot start a resize")
+                    return "never"
+                })
+        }
+        try await began.wait()
+        work.cancel()
+        let result = await work.value
+        resume.open()
+        lease.end()
+        XCTAssertEqual(result, .busy)
+        XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["kept"])
+        XCTAssertTrue(fake.instances.isEmpty)
+        let released = await lifecycle.release(.shutdown, target: nil)
+        XCTAssertEqual(released, .released)
+        XCTAssertEqual(fake.instances.map(\.id), ["kept"])
+    }
+
     func testShutdownCancellationKeepsOnlyTheCopiesNotConfirmedFreed() async throws {
         let clock = ManualClock()
         let secondStarted = LifecycleGate()
