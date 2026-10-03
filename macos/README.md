@@ -410,6 +410,8 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   Independent caches keep independent lifetimes, without changing saved settings.
   Recording readiness after closure reports cancellation, not "not applicable"; a Foundry residency
   read spanning closure cannot proceed to a load.
+  Cancelling recording readiness also seals its displayed state and awaited result: a backend's
+  late successful answer cannot turn it back into "Starting local model" or permit cleanup.
  - An LM Studio load that finishes after shutdown's wait still records its instance, ends its
   change barrier and extended use, then makes one separately bounded shutdown retirement attempt.
   It unloads only tracked instance ids, never an ordinary shared model. A refusal or timeout keeps

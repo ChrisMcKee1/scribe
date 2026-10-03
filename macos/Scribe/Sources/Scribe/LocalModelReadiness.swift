@@ -95,8 +95,9 @@ final class LocalModelPreparation {
                     guard let self, !Task.isCancelled else { return }
                     self.set(.starting)
                 })
-            self?.set(.finished(result))
-            return result
+            let finalResult: LocalModelPreparationResult = Task.isCancelled ? .cancelled : result
+            self?.set(.finished(finalResult))
+            return finalResult
         }
     }
 
