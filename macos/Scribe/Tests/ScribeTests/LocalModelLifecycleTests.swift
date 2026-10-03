@@ -97,6 +97,62 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testShutdownCancellationKeepsOnlyTheCopiesNotConfirmedFreed() async throws {
+        let clock = ManualClock()
+        let secondStarted = LifecycleGate()
+        let blocked = LifecycleGate()
+        let lifecycle = LocalModelLifecycle(
+            idle: .zero,
+            actions: .init(
+                unloadModel: { _, _, _ in
+                    XCTFail("Shutdown cannot unload an ordinary model")
+                    return false
+                },
+                unloadInstance: { _, id, _ in
+                    if id == "freed" { return true }
+                    secondStarted.open()
+                    try? await blocked.wait()
+                    return false
+                }),
+            sleeper: clock.sleeper, now: clock.now)
+        try await owned(lifecycle, "freed")
+        try await owned(lifecycle, "owed")
+        let shutdown = Task { await lifecycle.release(.shutdown, target: nil) }
+        try await secondStarted.wait()
+        await clock.waitForSleepers(1)
+        XCTAssertGreaterThanOrEqual(clock.pending, 1)
+        clock.fire()
+        let result = await shutdown.value
+        XCTAssertEqual(result, .failed)
+        XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["owed"])
+        XCTAssertEqual(lifecycle.useCount, 0)
+    }
+
+    func testShutdownDeadlineStopsKeyFallbackAndRemainingCopiesAndClearsTheBarrier() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock, idle: .zero)
+        try await owned(lifecycle, "first", key: "original")
+        try await owned(lifecycle, "second")
+        fake.requiredKey = "original"
+        fake.barrier = LifecycleGate()
+        let shutdown = Task { await lifecycle.release(.shutdown, target: nil) }
+        try await fake.instanceStarted.wait()
+        await clock.waitForSleepers(1)
+        XCTAssertGreaterThanOrEqual(clock.pending, 1)
+        clock.fire()
+        let result = await shutdown.value
+        XCTAssertEqual(result, .failed)
+        XCTAssertEqual(fake.instances.map(\.id), ["first"])
+        XCTAssertEqual(Set(lifecycle.ownedCopies.map(\.instanceID)), ["first", "second"])
+        fake.barrier = nil
+        fake.requiredKey = nil
+        let retry = await lifecycle.release(.shutdown, target: nil)
+        XCTAssertEqual(retry, .released, "The cancelled unload must release its barrier and lane")
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+        XCTAssertTrue(fake.models.isEmpty)
+    }
+
     func testACancelledUseDoesNotWithdrawTheOwedIdleRetirement() async throws {
         let fake = FakeUnloads()
         let clock = ManualClock()

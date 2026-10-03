@@ -418,6 +418,8 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   Replacement-load admission is checked atomically when its extended lease is taken. If shutdown
   begins while a wrong-size copy is unloading, reconciliation starts no replacement load.
   A request already cancelled cannot take a local-model lease or withdraw an owed idle retirement.
+  Cancelled releases stop before trying another key or instance. Their barrier always ends,
+  confirmed frees are retained, and unconfirmed copies stay recorded for a later release.
 - Foundry Local cleanup now reads its selected chat model's supported `model info` metadata for context planning
   and again before each send, including an endpoint-refresh retry. The reported capacity only lowers a conservative
   4,096-token ceiling. Missing, invalid or mismatched capacity refuses cleanup explicitly, preserving ordinary

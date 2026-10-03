@@ -417,6 +417,7 @@ final class LocalModelLifecycle: Sendable {
         wanted: @Sendable () -> Bool
     ) async throws -> LocalModelReleaseOutcome {
         while true {
+            try Task.checkCancellation()
             let gate = state.withLock { state -> LifecycleGate? in
                 guard state.uses > 0 else { return nil }
                 let gate = LifecycleGate()
@@ -471,11 +472,21 @@ final class LocalModelLifecycle: Sendable {
             case .stop(let outcome): return outcome
             case .go(let explicit, let copies, let gate):
                 var freed: [Copy] = []
+                defer {
+                    let freedNow = freed
+                    state.withLock { state in
+                        state.copies.removeAll { freedNow.contains($0) }
+                    }
+                    finishChange(gate)
+                }
                 var modelFreed = false
                 if let explicit {
+                    try Task.checkCancellation()
                     let key = currentKey(at: explicit.endpoint, fallback: explicit.apiKey)
+                    try Task.checkCancellation()
                     modelFreed = await actions.unloadModel(explicit.endpoint, explicit.model, key)
                     if !modelFreed, key != explicit.apiKey {
+                        try Task.checkCancellation()
                         modelFreed = await actions.unloadModel(explicit.endpoint, explicit.model, explicit.apiKey)
                     }
                 }
@@ -487,6 +498,7 @@ final class LocalModelLifecycle: Sendable {
                         freed.append(copy)
                         continue
                     }
+                    try Task.checkCancellation()
                     let currentKey =
                         target.flatMap { Self.sameServer(copy.endpoint, $0.endpoint) ? $0.apiKey : nil }
                     if await unload(copy, currentKey: currentKey) {
@@ -504,12 +516,7 @@ final class LocalModelLifecycle: Sendable {
                         }
                     } ?? false
                 let failed = copyFailed || (explicit != nil && !modelFreed && !modelCopyFreed)
-                let freedNow = freed
-                state.withLock { state in
-                    state.copies.removeAll { copy in freedNow.contains(copy) }
-                    state.inFlightUnload = nil
-                }
-                gate.open()
+                try Task.checkCancellation()
                 if failed {
                     ScribeLog.warning(
                         .cleanup, "A local model could not be unloaded", .count("owed", copies.count - freed.count))
@@ -522,9 +529,11 @@ final class LocalModelLifecycle: Sendable {
 
     /// The key saved now first, then the one the copy was loaded with.
     private func unload(_ copy: Copy, currentKey: String?) async -> Bool {
+        guard !Task.isCancelled else { return false }
         let key = self.currentKey(at: copy.endpoint, fallback: currentKey)
+        guard !Task.isCancelled else { return false }
         if await actions.unloadInstance(copy.endpoint, copy.instanceID, key) { return true }
-        if copy.loadedKey != key,
+        if !Task.isCancelled, copy.loadedKey != key,
             await actions.unloadInstance(copy.endpoint, copy.instanceID, copy.loadedKey)
         {
             return true
