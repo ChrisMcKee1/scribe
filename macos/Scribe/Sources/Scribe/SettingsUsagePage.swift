@@ -98,8 +98,14 @@ struct UsageInsightsSettingsTab: View {
                     }
                 }
             } else {
-                Text("No dictations in this window yet.")
-                    .foregroundStyle(.secondary)
+                Text(
+                    model.load.state == .loading || model.load.state == .unloaded
+                        ? "Reading usage for the selected period..."
+                        : model.load.state == .failed
+                            ? "Usage could not be read. Choose Refresh to try again."
+                            : "No dictations in this window yet."
+                )
+                .foregroundStyle(.secondary)
             }
 
             Spacer()

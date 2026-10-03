@@ -53,7 +53,15 @@ final class DiagnosticsSettingsModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var load = SettingsSectionLoad()
     /// How many days the window reaches back. The tab reads the window again when this changes.
-    @Published var windowDays: Double = 7
+    @Published var windowDays: Double = 7 {
+        didSet {
+            guard windowDays != oldValue else { return }
+            load.invalidate()
+            stats = nil
+            capped = false
+            errorMessage = nil
+        }
+    }
 
     private let access: DiagnosticsSettingsAccess
     private let now: @MainActor () -> Date
@@ -71,6 +79,9 @@ final class DiagnosticsSettingsModel: ObservableObject {
     func reload() async {
         guard !Task.isCancelled else { return }
         let ticket = load.begin()
+        stats = nil
+        capped = false
+        errorMessage = nil
         let since = now().addingTimeInterval(-windowDays * 86_400)
         do {
             let window = try await access.loadWindow(since)

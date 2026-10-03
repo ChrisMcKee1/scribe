@@ -167,7 +167,7 @@ struct DiagnosticsSettingsTab: View {
                     metricSummary("AI cleanup", snapshot.cleanupMs)
                     metricSummary("Recognition plus AI cleanup", snapshot.combinedMs)
                 } else {
-                    Text("No dictations in this window yet.").cardDescription()
+                    Text(speedSummaryText).cardDescription()
                 }
             }
             .padding(.top, 8)
@@ -175,6 +175,14 @@ struct DiagnosticsSettingsTab: View {
     }
 
     private var speedSummaryText: String {
+        switch model.load.state {
+        case .unloaded, .loading:
+            return "Reading speed figures for the selected window..."
+        case .failed:
+            return "Speed figures could not be read. Select a window to try again."
+        case .loaded:
+            break
+        }
         guard let snapshot = model.stats else {
             return "No dictations in the selected window yet."
         }

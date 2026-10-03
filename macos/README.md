@@ -67,6 +67,8 @@ Settings' shared auxiliary-operation boundary also rejects successful answers th
 or Quit, while still waiting for the operation to settle so its supervised children can be reaped.
 Usage and Diagnostics reads belong to the visible page and selected period. Leaving the page cancels its read;
 a cancelled read cannot publish late totals, latency figures or coverage flags.
+Changing the period withdraws its old results immediately, before the next read begins. Loading and failed reads
+are named explicitly rather than showing the previous period's figures or claiming an unread period is empty.
 Diagnostics also shows the newest 20 dictation problems from this session, including AI cleanup falling back and
 incomplete typing. The list keeps only timestamps and fixed outcome categories, never dictated text or service error
 details. It clears with history, is not saved to disk, and is not included in diagnostics exports.

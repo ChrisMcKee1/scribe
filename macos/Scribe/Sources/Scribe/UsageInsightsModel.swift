@@ -41,7 +41,15 @@ final class UsageInsightsModel: ObservableObject {
     @Published private(set) var statusMessage: String?
     @Published private(set) var load = SettingsSectionLoad()
     /// How many days the period reaches back. The tab reads the period again when this changes.
-    @Published var windowDays: Double = 30
+    @Published var windowDays: Double = 30 {
+        didSet {
+            guard windowDays != oldValue else { return }
+            load.invalidate()
+            snapshot = nil
+            periodCapped = false
+            loadError = nil
+        }
+    }
 
     private let access: UsageInsightsAccess
     private let onChanged: @MainActor () -> Void
@@ -68,6 +76,9 @@ final class UsageInsightsModel: ObservableObject {
     func reload() async {
         guard !Task.isCancelled else { return }
         let ticket = load.begin()
+        snapshot = nil
+        periodCapped = false
+        loadError = nil
         let now = self.now()
         let since = now.addingTimeInterval(-windowDays * 86_400)
         do {

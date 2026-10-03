@@ -45,6 +45,51 @@ final class DiagnosticsAndUsageModelTests: XCTestCase {
     // MARK: - Diagnostics
 
     @MainActor
+    func testChangingDiagnosticsWindowWithdrawsItsReadBeforeTheReplacementStarts() async {
+        let gate = SettingsTestGate()
+        let model = DiagnosticsSettingsModel(
+            access: DiagnosticsSettingsAccess(loadWindow: { _ in
+                await gate.pass()
+                return Self.window(dictations: 3, capped: true)
+            }))
+        let old = Task { await model.reload() }
+        await gate.waitForArrival()
+        model.windowDays = 30
+        XCTAssertEqual(model.load.state, .unloaded)
+        await gate.open()
+        await old.value
+        XCTAssertNil(model.stats)
+        XCTAssertFalse(model.capped)
+        XCTAssertEqual(model.load.state, .unloaded)
+    }
+
+    @MainActor
+    func testDiagnosticsRefreshFailureCannotKeepOldFiguresOrCoverage() async {
+        let gates = StorageTestCallGates(count: 2)
+        let model = DiagnosticsSettingsModel(
+            access: DiagnosticsSettingsAccess(loadWindow: { _ in
+                let call = await gates.pass()
+                if call == 1 { throw StorageTestFailure(message: "new window failed") }
+                return Self.window(dictations: 3, capped: true)
+            }))
+        let first = Task { await model.reload() }
+        await gates.gate(0).waitForArrival()
+        await gates.gate(0).open()
+        await first.value
+        XCTAssertEqual(model.stats?.count, 3)
+        XCTAssertTrue(model.capped)
+        let second = Task { await model.reload() }
+        await gates.gate(1).waitForArrival()
+        XCTAssertNil(model.stats)
+        XCTAssertNil(model.coverageNote)
+        await gates.gate(1).open()
+        await second.value
+        XCTAssertEqual(model.load.state, .failed)
+        XCTAssertEqual(model.errorMessage, "new window failed")
+        XCTAssertNil(model.stats)
+    }
+
+    @MainActor
     func testCancelledDiagnosticsAdmissionStartsNoRead() async {
         let reads = SendableCounter()
         let model = DiagnosticsSettingsModel(
@@ -184,6 +229,55 @@ final class DiagnosticsAndUsageModelTests: XCTestCase {
     }
 
     // MARK: - Usage Insights
+
+    @MainActor
+    func testChangingUsagePeriodWithdrawsItsReadBeforeTheReplacementStarts() async {
+        let gate = SettingsTestGate()
+        let model = UsageInsightsModel(
+            access: UsageInsightsAccess(
+                loadReport: { _, _ in
+                    await gate.pass()
+                    return Self.report(dictations: 3, capped: true)
+                }, addTerm: { _ in false }),
+            onChanged: {})
+        let old = Task { await model.reload() }
+        await gate.waitForArrival()
+        model.windowDays = 90
+        XCTAssertEqual(model.load.state, .unloaded)
+        await gate.open()
+        await old.value
+        XCTAssertNil(model.snapshot)
+        XCTAssertFalse(model.periodCapped)
+        XCTAssertEqual(model.load.state, .unloaded)
+    }
+
+    @MainActor
+    func testUsageRefreshFailureCannotKeepOldTotalsOrCoverage() async {
+        let gates = StorageTestCallGates(count: 2)
+        let model = UsageInsightsModel(
+            access: UsageInsightsAccess(
+                loadReport: { _, _ in
+                    let call = await gates.pass()
+                    if call == 1 { throw StorageTestFailure(message: "new period failed") }
+                    return Self.report(dictations: 3, capped: true)
+                }, addTerm: { _ in false }),
+            onChanged: {})
+        let first = Task { await model.reload() }
+        await gates.gate(0).waitForArrival()
+        await gates.gate(0).open()
+        await first.value
+        XCTAssertEqual(model.snapshot?.dictations, 3)
+        XCTAssertTrue(model.periodCapped)
+        let second = Task { await model.reload() }
+        await gates.gate(1).waitForArrival()
+        XCTAssertNil(model.snapshot)
+        XCTAssertNil(model.coverageNote)
+        await gates.gate(1).open()
+        await second.value
+        XCTAssertEqual(model.load.state, .failed)
+        XCTAssertEqual(model.loadError, "new period failed")
+        XCTAssertNil(model.snapshot)
+    }
 
     @MainActor
     func testCancelledUsageAdmissionStartsNoRead() async {
