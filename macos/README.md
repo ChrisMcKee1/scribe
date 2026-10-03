@@ -65,6 +65,8 @@ claiming the app is up to date. This neither checks the DMG's signature/architec
 Leaving About or closing Settings cancels an in-flight manual check; its late result cannot replace a newer check.
 Settings' shared auxiliary-operation boundary also rejects successful answers that arrive after caller cancellation
 or Quit, while still waiting for the operation to settle so its supervised children can be reaped.
+Usage and Diagnostics reads belong to the visible page and selected period. Leaving the page cancels its read;
+a cancelled read cannot publish late totals, latency figures or coverage flags.
 
 ## Build
 

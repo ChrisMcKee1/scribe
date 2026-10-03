@@ -69,10 +69,12 @@ final class DiagnosticsSettingsModel: ObservableObject {
     }
 
     func reload() async {
+        guard !Task.isCancelled else { return }
         let ticket = load.begin()
         let since = now().addingTimeInterval(-windowDays * 86_400)
         do {
             let window = try await access.loadWindow(since)
+            try Task.checkCancellation()
             guard load.publish(ticket) else {
                 return
             }
@@ -83,7 +85,7 @@ final class DiagnosticsSettingsModel: ObservableObject {
             guard load.fail(ticket) else {
                 return
             }
-            errorMessage = error.localizedDescription
+            errorMessage = Task.isCancelled ? "Diagnostics refresh was cancelled." : error.localizedDescription
         }
     }
 }

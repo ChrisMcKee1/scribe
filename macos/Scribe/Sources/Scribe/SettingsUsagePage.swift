@@ -24,6 +24,7 @@ struct SettingsUsagePage: View {
 struct UsageInsightsSettingsTab: View {
     @StateObject private var model: UsageInsightsModel
     @StateObject private var summaryModel = UsageSummaryModel()
+    @State private var refreshID = UUID()
 
     init(persistenceStore: PersistenceStore, onChanged: @escaping @MainActor () -> Void) {
         _model = StateObject(wrappedValue: UsageInsightsModel(access: .live(persistenceStore), onChanged: onChanged))
@@ -48,11 +49,11 @@ struct UsageInsightsSettingsTab: View {
                 .frame(width: 260)
                 .onChange(of: model.windowDays) { _ in
                     summaryModel.reset()
-                    Task { await model.reload() }
+                    refreshID = UUID()
                 }
                 Button("Refresh") {
                     summaryModel.reset()
-                    Task { await model.reload() }
+                    refreshID = UUID()
                 }
             }
             .id("usage.period")
@@ -103,8 +104,8 @@ struct UsageInsightsSettingsTab: View {
 
             Spacer()
         }
-        .onAppear {
-            Task { await model.reload() }
+        .task(id: refreshID) {
+            await model.reload()
         }
         .onDisappear {
             summaryModel.cancelInFlight()

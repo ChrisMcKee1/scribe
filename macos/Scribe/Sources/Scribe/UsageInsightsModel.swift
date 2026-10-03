@@ -66,11 +66,13 @@ final class UsageInsightsModel: ObservableObject {
     }
 
     func reload() async {
+        guard !Task.isCancelled else { return }
         let ticket = load.begin()
         let now = self.now()
         let since = now.addingTimeInterval(-windowDays * 86_400)
         do {
             let report = try await access.loadReport(since, now)
+            try Task.checkCancellation()
             guard load.publish(ticket) else {
                 return
             }
@@ -81,7 +83,7 @@ final class UsageInsightsModel: ObservableObject {
             guard load.fail(ticket) else {
                 return
             }
-            loadError = error.localizedDescription
+            loadError = Task.isCancelled ? "Usage refresh was cancelled." : error.localizedDescription
         }
     }
 

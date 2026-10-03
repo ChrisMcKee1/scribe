@@ -45,8 +45,8 @@ struct DiagnosticsSettingsTab: View {
             SettingsGroupHeader("Where Scribe keeps your data")
             SettingsCard(searchID: "diagnostics.data-file") { dataFileCard }
         }
-        .onAppear {
-            Task { await model.reload() }
+        .task(id: model.windowDays) {
+            await model.reload()
         }
     }
 
@@ -121,9 +121,6 @@ struct DiagnosticsSettingsTab: View {
                     .labelsHidden()
                     .pickerStyle(.segmented)
                     .frame(width: 260)
-                }
-                .onChange(of: model.windowDays) { _ in
-                    Task { await model.reload() }
                 }
             }
 
