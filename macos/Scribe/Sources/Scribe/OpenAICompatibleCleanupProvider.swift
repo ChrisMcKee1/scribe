@@ -199,6 +199,7 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
                     request,
                     at: serviceURL,
                     model: model,
+                    bearerToken: apiKey,
                     keepAlive: keepAlive,
                     contextTokens: contextTokens,
                     defaultTimeout: timeout)
@@ -288,6 +289,7 @@ struct ChatCompletionsTransport: Sendable {
         _ cleanupRequest: CleanupRequest,
         at url: URL,
         model: String,
+        bearerToken: String? = nil,
         keepAlive: String?,
         contextTokens: Int,
         defaultTimeout: TimeInterval
@@ -307,6 +309,9 @@ struct ChatCompletionsTransport: Sendable {
         request.timeoutInterval = cleanupRequest.timeout ?? defaultTimeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let bearerToken, !bearerToken.isEmpty {
+            request.setValue("Bearer \(bearerToken)", forHTTPHeaderField: "Authorization")
+        }
         request.httpBody = try JSONEncoder().encode(
             OllamaChatRequest(
                 model: model,

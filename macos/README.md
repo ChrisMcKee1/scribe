@@ -218,8 +218,8 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   180 s for a recognized local app (Ollama, LM Studio), 90 s for other custom endpoints.
 - A chosen Ollama context size uses its native `/api/chat` route, for managed Ollama as well as Ollama selected under
   another AI service. Dictation, Test connection and the fixed readying request carry the same captured `num_ctx`,
-  `num_predict`, `think: false` and retention. With the app's own size selected, the existing Chat Completions path
-  stays unchanged. Readiness checks the configured `/v1` app address and a held copy's context, not an unrelated
+  `num_predict`, `think: false` and retention, plus any key saved for that address. With the app's own size selected,
+  the existing Chat Completions path stays unchanged. Readiness checks the configured `/v1` app address and a held copy's context, not an unrelated
   default address or a different-size copy. Test connection uses its candidate size without saving it.
   Before a chosen-size Ollama request is sent, Scribe conservatively estimates the full prompt, the actual wrapped
   transcript, the output limit, chat-template room and margin. A request that does not fit fails without being sent;

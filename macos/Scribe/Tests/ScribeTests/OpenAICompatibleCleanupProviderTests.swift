@@ -173,10 +173,12 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
         let log = RequestLog()
         let provider = OpenAICompatibleCleanupProvider(
             model: "gemma4:e4b",
+            apiKey: "test-key",
             completionsURL: URL(string: "http://127.0.0.1:11434/v1/chat/completions")!,
             localServerApp: .ollama,
             localTuning: { LocalModelTuning(contextTokens: 32768, sendWholeVocabulary: false) },
             session: makeStubSession { request in
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-key")
                 log.record(request)
                 return StubReply.json(
                     request,
