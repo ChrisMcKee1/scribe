@@ -247,8 +247,10 @@ final class LocalServerClient: @unchecked Sendable {
                 }
                 var maximum = 0
                 for (key, value) in info where key.hasSuffix(".context_length") {
-                    let length = Self.int64(value)
-                    if length > 0 {
+                    if let number = value as? NSNumber,
+                        number !== kCFBooleanTrue, number !== kCFBooleanFalse,
+                        let length = Int64(number.stringValue), length > 0
+                    {
                         let limit = min(Int(length), Int(Int32.max))
                         maximum = maximum > 0 ? min(maximum, limit) : limit
                     }

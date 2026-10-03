@@ -449,6 +449,8 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   Finite sample bits are preserved without clipping or noise filtering. This does not add model-backed VAD.
 - A capture rate must be an integer representable in the WAV header without changing it, never a truncated fractional
   rate. Empty captures also refuse recognition, rather than accepting invented text from a recognizer.
+- Ollama model capacity metadata must be a positive in-range integer, not a boolean, fractional or overflowing number.
+  An unusable capacity refuses native text requests rather than guessing or truncating it.
 - A nonempty capture at a valid sample rate whose samples are all exactly zero is refused before recording
   scratch storage, model-cache discovery or decoding, at short lengths too. Signed zero counts as zero;
   even the smallest normal nonzero sample still reaches decoding. This prevents recognizer hallucinations

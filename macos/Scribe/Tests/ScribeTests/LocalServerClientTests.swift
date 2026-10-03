@@ -139,6 +139,26 @@ final class LocalServerClientTests: XCTestCase {
                 #"{"models":[{"name":"other","context_length":65536},{"name":"model:latest","context_length":2048},{"name":"model","context_length":1024}]}"#
             )
         }
+
+        func testOllamaContextMetadataNeverTruncatesOrWrapsMalformedNumericLimits() async {
+            for value in [
+                "true", "false", "4096.5", "-4096", "0", "18446744073709551617", "18446744073709559808", "1e100",
+                "\"4096\"",
+            ] {
+                let client = makeClient { request in
+                    StubReply.json(request, "{\"model_info\":{\"model.context_length\":\(value)}}")
+                }
+                let context = await client.readMaxContext("http://localhost:11434/v1", modelID: "model")
+                XCTAssertEqual(context, 0, value)
+            }
+            for (value, expected) in [("4096", 4096), ("9223372036854775807", Int(Int32.max))] {
+                let client = makeClient { request in
+                    StubReply.json(request, "{\"model_info\":{\"model.context_length\":\(value)}}")
+                }
+                let context = await client.readMaxContext("http://localhost:11434/v1", modelID: "model")
+                XCTAssertEqual(context, expected)
+            }
+        }
         let context = await client.readLoadedContext("http://localhost:11434/v1", modelID: "model")
         XCTAssertEqual(context, 1024)
         XCTAssertEqual(log.count, 1)

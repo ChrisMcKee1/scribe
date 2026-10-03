@@ -952,6 +952,26 @@ final class ManagedOllamaCleanupProviderTests: XCTestCase {
         XCTAssertTrue(log.all.allSatisfy { $0.url?.path == "/api/show" && $0.messageContents.isEmpty })
     }
 
+    func testMalformedContextNumbersCannotAuthorizeNativeTextRequests() async throws {
+        for value in ["true", "4096.5", "18446744073709551617", "18446744073709559808", "1e100"] {
+            let log = RequestLog()
+            let provider = ManagedOllamaCleanupProvider(
+                contextTokens: 8192,
+                session: makeStubSession { request in
+                    log.record(request)
+                    return StubReply.json(request, "{\"model_info\":{\"model.context_length\":\(value)}}")
+                })
+            do {
+                _ = try await provider.clean(CleanupRequest(transcript: "private sample", maxOutputTokens: 32))
+                XCTFail("Malformed context cannot authorize a text request")
+            } catch {
+                XCTAssertEqual(error as? CleanupProviderError, .localContextUnknown)
+            }
+            XCTAssertFalse(log.all.isEmpty)
+            XCTAssertTrue(log.all.allSatisfy { $0.url?.path == "/api/show" && $0.messageContents.isEmpty })
+        }
+    }
+
     @MainActor
     func testReadinessReusesTheCappedSizeAfterTheModelAnswered() async throws {
         let log = RequestLog()
