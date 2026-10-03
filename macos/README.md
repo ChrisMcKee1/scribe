@@ -370,7 +370,13 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   coverage and the 30-second maximum, then checks both unique-word overlap (at least 0.6) and repeated-word
   retention (at least 0.8). The second check cannot pass on just the first repetition. On cached Parakeet v2
   here, all twelve cases had 1.0 unique overlap and 0.90 to 1.0 retention, including four chunks at 90 seconds.
-  These are controlled repeated-phrase measurements, not competing-speech or real-room validation.
+  These are controlled repeated-phrase measurements, not real-room validation.
+- Varied real-ASR coverage joins four different committed passages into 75.78 seconds, clean and with 10 dB
+  white noise: three production chunks retained 1.0 and 0.995 of expected word occurrences here, with every
+  passage at 1.0 unique-word overlap. Stereo competing-voice cases put a second fixture 20 dB below the primary
+  voice on the other channel, on both sides. Production capture equaled the exact arithmetic downmix, and the
+  primary voice scored 1.0 overlap and retention on both. This tests a quieter competing voice, not equal-level
+  speakers, speaker separation, arbitrary background media or real microphones.
 - Foundry Local cleanup now reads its selected chat model's supported `model info` metadata for context planning
   and again before each send, including an endpoint-refresh retry. The reported capacity only lowers a conservative
   4,096-token ceiling. Missing, invalid or mismatched capacity refuses cleanup explicitly, preserving ordinary
