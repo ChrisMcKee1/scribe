@@ -669,11 +669,11 @@ final class LocalModelLifecycle: Sendable {
             }
         }
         guard contextTokens > 0 else { return .ready }
-        guard !state.withLock({ $0.refused.contains(refusedKey) }) else { return .loadRefused }
         if let held, held.contextTokens == contextTokens {
             state.withLock { _ = $0.refused.remove(refusedKey) }
             return .ready
         }
+        guard !state.withLock({ $0.refused.contains(refusedKey) }) else { return .loadRefused }
         if let held, held.remainingTTLSeconds == nil { return .ready }
         let change = state.withLock { state -> LifecycleGate? in
             guard !Task.isCancelled, !state.releasesClosing,

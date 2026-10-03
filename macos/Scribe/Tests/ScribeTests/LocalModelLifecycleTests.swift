@@ -1555,6 +1555,42 @@ final class LocalModelLifecycleTests: XCTestCase {
         XCTAssertEqual(loads.value, 2)
     }
 
+    func testObservingTheRequestedSizeClearsAnEarlierLoadRefusal() async throws {
+        let lifecycle = make()
+        let loads = Counter()
+        let lease = try await lifecycle.beginUse(target())
+        let refused = await lifecycle.reconcileLMStudio(
+            target: target(), contextTokens: 8192, lease: lease,
+            read: { _, _ in .notRunning.reached },
+            load: { _, _, _ in
+                loads.bump()
+                return nil
+            })
+        XCTAssertEqual(refused, .loadRefused)
+        let held = LocalServerState(
+            reach: .reached, models: [],
+            loaded: [LocalServerLoadedModel("m", 1, contextTokens: 8192, instanceID: "hand", remainingTTLSeconds: nil)],
+            failureDetail: nil)
+        let ready = await lifecycle.reconcileLMStudio(
+            target: target(), contextTokens: 8192, lease: lease, read: { _, _ in held },
+            load: { _, _, _ in
+                loads.bump()
+                return nil
+            })
+        XCTAssertEqual(ready, .ready)
+        XCTAssertEqual(loads.value, 1, "observing a suitable copy must not load another")
+        let retry = await lifecycle.reconcileLMStudio(
+            target: target(), contextTokens: 8192, lease: lease,
+            read: { _, _ in .notRunning.reached },
+            load: { _, _, _ in
+                loads.bump()
+                return nil
+            })
+        XCTAssertEqual(retry, .loadRefused)
+        XCTAssertEqual(loads.value, 2, "after the suitable copy disappears the old refusal no longer applies")
+        lease.end()
+    }
+
     func testACopyAtAnotherSizeIsReplacedOnlyWhileTheLeaseIsTheOnlyUse() async throws {
         let fake = FakeUnloads()
         let lifecycle = make(fake)

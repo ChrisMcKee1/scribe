@@ -261,6 +261,8 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   and key, not the saved settings; a refused load, unreadable residency or concurrent use fails that test before a
   completion is sent. A copy loaded by hand is tested as it is and never replaced for the test. Only an instance id
   returned by LM Studio establishes ownership, never an invented id from the model name.
+  A refused context size is not repeatedly loaded, but observing a copy at the requested size clears that refusal:
+  the suitable copy is used without another load, and a later disappearance permits a fresh load attempt.
   A copy loaded solely for an unsaved Test connection candidate is retired by its instance id after that check,
   including a load that lands after cancellation. It is kept when those settings became the saved configuration.
   Saving or rotating its key does not change which local copy those settings use. Retirement tries the key saved for
