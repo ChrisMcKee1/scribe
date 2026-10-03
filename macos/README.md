@@ -236,6 +236,10 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   the shared model between requests; a residency reading cannot close that race.
   These are estimates, not tokenizer counts; splitting oversize dictations remains open work.
   The app's own size still keeps its previous Chat Completions behavior.
+  A chosen LM Studio size is checked against the matching copy's reported loaded context after reconciliation,
+  before a completion sends text. A smaller manual or busy copy is used only when the full request fits it; a
+  missing size or unreadable residency refuses the text request with a reason. A requested size alone never
+  authorizes the send. Another app can still change that shared copy between the reading and the completion.
   Dictation planning and a saved-settings Test connection use the instructions and writing style from their settings
   store, not a separate live defaults read. A nonempty app-profile style still takes precedence.
   Ollama/LM Studio tuning is bound to that app's recognized local address. A stale app selection beside a different

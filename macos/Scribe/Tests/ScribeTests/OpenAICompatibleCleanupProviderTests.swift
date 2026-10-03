@@ -207,6 +207,114 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
         XCTAssertEqual(options["num_predict"] as? Int, 16)
     }
 
+    func testLMStudioUsesAManualCopysActualContextAndRefusesUnknownOrOversizedRequests() async throws {
+        for context in [0, 512, 4096] {
+            let log = RequestLog()
+            let provider = OpenAICompatibleCleanupProvider(
+                model: "model", serviceURL: URL(string: LocalAiServer.lmStudioAddress)!,
+                localServerApp: .lmStudio,
+                localTuning: { LocalModelTuning(contextTokens: 32768, sendWholeVocabulary: false) },
+                loadLocalContext: { _, _, _ in
+                    XCTFail("A manual copy must never be resized")
+                    return nil
+                },
+                readLocalServer: { _, _ in
+                    LocalServerState(
+                        reach: .reached, models: [],
+                        loaded: [LocalServerLoadedModel("model", 0, contextTokens: context, instanceID: "manual")])
+                },
+                session: makeStubSession { request in
+                    log.record(request)
+                    return StubReply.completion(request, "Cleaned.")
+                })
+            do {
+                let answer = try await provider.clean(
+                    CleanupRequest(
+                        transcript: String(repeating: "語", count: 600), writingStylePrompt: "Edit.",
+                        maxOutputTokens: 64))
+                XCTAssertEqual(context, 4096)
+                XCTAssertEqual(answer.cleanedText, "Cleaned.")
+            } catch {
+                XCTAssertEqual(
+                    error as? CleanupProviderError, context == 0 ? .localContextUnknown : .localRequestTooLarge)
+            }
+            XCTAssertEqual(log.count, context == 4096 ? 1 : 0)
+        }
+    }
+
+    func testAnUnavailableLMStudioResidencyReadingRefusesTheTextSend() async throws {
+        let log = RequestLog()
+        let provider = OpenAICompatibleCleanupProvider(
+            model: "model", serviceURL: URL(string: LocalAiServer.lmStudioAddress)!,
+            localServerApp: .lmStudio,
+            localTuning: { LocalModelTuning(contextTokens: 32768, sendWholeVocabulary: false) },
+            readLocalServer: { _, _ in .failed },
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "Never.")
+            })
+        do {
+            _ = try await provider.clean(
+                CleanupRequest(transcript: "sample", writingStylePrompt: "Edit.", maxOutputTokens: 64))
+            XCTFail("A requested context does not prove the copy's size")
+        } catch {
+            XCTAssertEqual(error as? CleanupProviderError, .localContextUnknown)
+        }
+        XCTAssertEqual(log.count, 0)
+    }
+
+    func testABusyLMStudioCopyIsFittedAsItIsWithoutResizingUnderAnotherUse() async throws {
+        let lifecycle = LocalModelLifecycle(
+            idle: .zero,
+            actions: .init(
+                unloadModel: { _, _, _ in
+                    XCTFail("A busy model cannot be unloaded")
+                    return false
+                },
+                unloadInstance: { _, _, _ in
+                    XCTFail("A busy copy cannot be unloaded")
+                    return false
+                }))
+        let target = LocalModelTarget(
+            endpoint: LocalAiServer.lmStudioAddress, model: "model", app: .lmStudio, apiKey: nil)
+        let otherUse = try await lifecycle.beginUse(target)
+        defer { otherUse.end() }
+        let log = RequestLog()
+        let provider = OpenAICompatibleCleanupProvider(
+            model: "model", serviceURL: URL(string: target.endpoint)!,
+            localServerApp: .lmStudio, lifecycle: lifecycle,
+            localTuning: { LocalModelTuning(contextTokens: 32768, sendWholeVocabulary: false) },
+            loadLocalContext: { _, _, _ in
+                XCTFail("Another use must keep this copy from being resized")
+                return nil
+            },
+            readLocalServer: { _, _ in
+                LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: [
+                        LocalServerLoadedModel(
+                            "model", 0, contextTokens: 512, instanceID: "busy-copy", remainingTTLSeconds: 600)
+                    ])
+            },
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "Cleaned.")
+            })
+        do {
+            _ = try await provider.clean(
+                CleanupRequest(
+                    transcript: String(repeating: "語", count: 600), writingStylePrompt: "Edit.",
+                    maxOutputTokens: 64))
+            XCTFail("The requested size cannot replace a busy copy's actual size")
+        } catch {
+            XCTAssertEqual(error as? CleanupProviderError, .localRequestTooLarge)
+        }
+        let answer = try await provider.clean(
+            CleanupRequest(transcript: "sample", writingStylePrompt: "Edit.", maxOutputTokens: 64))
+        XCTAssertEqual(answer.cleanedText, "Cleaned.")
+        XCTAssertEqual(log.count, 1)
+    }
+
     func testALMStudioContextSizeLoadsTheModelBeforeChatCompletions() async throws {
         let log = RequestLog()
         let load = LMStudioLoadBox()
@@ -218,6 +326,17 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
             loadLocalContext: { endpoint, model, contextTokens in
                 await load.record(endpoint: endpoint, model: model, context: contextTokens)
                 return "instance-1"
+            },
+            readLocalServer: { _, _ in
+                let loaded = await load.value
+                return LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: loaded == nil
+                        ? []
+                        : [
+                            LocalServerLoadedModel(
+                                "google/gemma-4-e2b", 0, contextTokens: 16384, instanceID: "instance-1")
+                        ])
             },
             session: makeStubSession { request in
                 log.record(request)

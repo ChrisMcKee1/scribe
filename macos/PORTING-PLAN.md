@@ -127,6 +127,11 @@ real Mac.
   tests for a smaller runtime cap, later no-send refusal and readiness without a restart. The first request can
   meet an unknown cap, and an external app can change the shared model between the requests; the reading is not
   an atomic guarantee. The app's own size and oversized-dictation splitting remain explicit gaps.
+  For LM Studio with a chosen size, the provider reads the matching loaded copy after reconciliation and fits
+  the full prompt, transcript and output to that reported size before completion. Manual or busy copies at a
+  smaller size no longer inherit the requested budget. An absent size or unreadable residency refuses text.
+  Tests cover a manual copy kept as-is, smaller-size no-send refusal, unknown residency and a newly loaded copy
+  confirmed before Test connection. External changes between the reading and send remain possible.
   Saved-settings probes and dictation prompt planning explicitly carry that store's saved guardrails and writing
   style, with a nonempty profile style first, so the fit is measured against the prompt actually sent.
   Custom-service local tuning and app identity require the selected app's actual recognized address; stale app

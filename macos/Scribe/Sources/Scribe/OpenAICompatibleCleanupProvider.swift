@@ -195,6 +195,16 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
                         throw CleanupProviderError.localContextUnavailable(outcome)
                     }
                 }
+                if localServerApp == .lmStudio, contextTokens > 0 {
+                    let observed = await readLocalServer(serviceURL.absoluteString, apiKey)
+                    try Task.checkCancellation()
+                    guard observed.reach == .reached, let held = observed.loaded(for: model),
+                        held.contextTokens > 0
+                    else { throw CleanupProviderError.localContextUnknown }
+                    guard ContextBudget.requestFits(request, contextTokens: held.contextTokens) else {
+                        throw CleanupProviderError.localRequestTooLarge
+                    }
+                }
             }
 
             if localServerApp == .ollama, contextTokens > 0 {

@@ -131,14 +131,22 @@ final class CleanupProviderCacheTests: XCTestCase {
 
     @MainActor
     func testLMStudioCandidateUsesItsOwnContextAppAndKeyWithoutSaving() async throws {
+        let loaded = LockedValue<Bool>()
         let rig = try makeRig(
             reply: { request in
                 if request.url?.path == "/api/v1/chat" {
+                    loaded.set(true)
                     return StubReply.json(request, status: 200, #"{"model_instance_id":"candidate-copy"}"#)
                 }
                 return StubReply.completion(request, "ok")
             },
-            readLocalServer: { _, _ in LocalServerState(reach: .reached, models: [], loaded: []) })
+            readLocalServer: { _, _ in
+                LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: loaded.value == true
+                        ? [LocalServerLoadedModel("local-model", 0, contextTokens: 8192, instanceID: "candidate-copy")]
+                        : [])
+            })
         configureOpenAICompatible(rig.store)
         rig.store.selectedLocalApp = .none
         rig.store.lmStudioContextTokens = 4096
