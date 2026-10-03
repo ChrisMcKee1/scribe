@@ -82,6 +82,32 @@ final class ScratchAudioTests: XCTestCase {
         XCTAssertFalse(exists(scratch.url))
     }
 
+    func testNonfiniteSamplesAreRefusedBeforeCreatingTheScratchDirectory() throws {
+        let root = try makeTemporaryDirectory(label: "scratch-nonfinite")
+        let scratch = ScratchAudioDirectory(url: root.appendingPathComponent("asr", isDirectory: true))
+        for sample in [Float.nan, .infinity, -.infinity] {
+            XCTAssertThrowsError(try scratch.writeRecording(samples: [0.1, sample], sampleRate: 16_000)) {
+                XCTAssertEqual($0 as? ScratchAudioError, ScratchAudioError(operation: .invalidAudio, errno: EINVAL))
+            }
+            XCTAssertFalse(exists(scratch.url))
+        }
+    }
+
+    func testFiniteSampleBitsAreWrittenWithoutClampingOrFiltering() throws {
+        let root = try makeTemporaryDirectory(label: "scratch-finite")
+        let scratch = ScratchAudioDirectory(url: root.appendingPathComponent("asr", isDirectory: true))
+        let samples: [Float] = [
+            -0.0, .leastNonzeroMagnitude, .leastNormalMagnitude, -.greatestFiniteMagnitude, .greatestFiniteMagnitude,
+        ]
+        let file = try scratch.writeRecording(samples: samples, sampleRate: 16_000)
+        defer { scratch.remove(file) }
+        let data = try Data(contentsOf: file.url)
+        let bits = data.dropFirst(44).withUnsafeBytes { raw in
+            (0..<samples.count).map { raw.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self) }
+        }
+        XCTAssertEqual(bits, samples.map(\.bitPattern))
+    }
+
     func testTheSweepRemovesOnlyAbandonedRecordingsOfProcessesThatAreGone() throws {
         let root = try makeTemporaryDirectory(label: "scratch")
         let directory = root.appendingPathComponent("asr", isDirectory: true)

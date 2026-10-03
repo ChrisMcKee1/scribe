@@ -445,6 +445,8 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   refuses readiness instead of reporting a successful start; no text is sent and no shared model is unloaded.
 - Context planning caps oversized metadata at the supported ceiling and refuses nonpositive context or negative output
   limits. Extreme integer values cannot overflow the budget arithmetic; ordinary vocabulary budgets stay identical.
+- Captures with NaN or infinite samples, or invalid rates, refuse before model discovery, chunk planning or scratch I/O.
+  Finite sample bits are preserved without clipping or noise filtering. This does not add model-backed VAD.
 - A nonempty capture at a valid sample rate whose samples are all exactly zero is refused before recording
   scratch storage, model-cache discovery or decoding, at short lengths too. Signed zero counts as zero;
   even the smallest normal nonzero sample still reaches decoding. This prevents recognizer hallucinations

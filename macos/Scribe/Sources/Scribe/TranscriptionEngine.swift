@@ -323,6 +323,14 @@ final class TranscriptionEngine: Sendable {
     func transcribe(samples: [Float], sampleRate: Double) async throws -> TranscriptionResult {
         let backend = try resolveBackend()
         guard !Task.isCancelled else { throw TranscriptionError.cancelled }
+        do {
+            try ScratchAudioDirectory.validateRecording(samples: samples, sampleRate: sampleRate)
+        } catch let error as ScratchAudioError {
+            ScribeLog.error(
+                .transcription, "Capture audio is invalid", .name("step", error.operation),
+                .integer("errno", error.errno))
+            throw TranscriptionError.audioWriteFailed(errno: error.errno)
+        }
         if sampleRate.isFinite, sampleRate > 0, !samples.isEmpty, samples.allSatisfy({ $0 == 0 }) {
             ScribeLog.warning(
                 .transcription, "Capture contains only digital silence", .count("samples", samples.count))
