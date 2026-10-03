@@ -4,6 +4,17 @@ import XCTest
 @testable import Scribe
 
 final class DegradedAudioScenarioTests: XCTestCase {
+    func testRepeatedSpeechCoverageCannotPassOnOnlyTheFirstRepetition() {
+        let expected = "Send the report. Send the report. Send the report."
+        XCTAssertEqual(ScenarioText.wordOverlap(expected: expected, actual: "Send the report."), 1)
+        XCTAssertEqual(
+            ScenarioText.retainedWordShare(expected: expected, actual: "Send the report."), 1.0 / 3, accuracy: 0.001)
+        XCTAssertEqual(ScenarioText.retainedWordShare(expected: expected, actual: expected.uppercased()), 1)
+        XCTAssertEqual(ScenarioText.retainedWordShare(expected: "", actual: "words"), 0)
+        XCTAssertEqual(ScenarioText.retainedWordShare(expected: "one two", actual: "unrelated unrelated"), 0)
+        XCTAssertEqual(ScenarioText.retainedWordShare(expected: "one two", actual: "one one one"), 0.5)
+    }
+
     func testSeededNoiseHasTheMeasuredSNRAndNeverChangesDuration() throws {
         let clip = try ScenarioLibrary.shared().clip("sentence")
         for snr in [0.0, 10, 20] {

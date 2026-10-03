@@ -141,4 +141,61 @@ final class RealRecognizerScenarioTests: XCTestCase {
         }
         report.write()
     }
+
+    func testDurationAndDegradationSweepKeepsRepeatedSpeechAcrossChunkSeams() async throws {
+        guard ProcessInfo.processInfo.environment["SCRIBE_REAL_ASR"] == "1" else {
+            throw XCTSkip("Set SCRIBE_REAL_ASR=1 with the cached Foundry speech model for the duration sweep.")
+        }
+        let clip = try ScenarioLibrary.shared().clip("sentence")
+        let gap = [Float](repeating: 0, count: clip.sampleRate / 4)
+        let unit = clip.samples + gap
+        let scratch = try makeScenarioDirectory("asr-duration")
+        let engine = TranscriptionEngine(
+            scratch: ScratchAudioDirectory(url: scratch.appendingPathComponent("asr", isDirectory: true)))
+        XCTAssertEqual(try engine.resolveBackend().kind, .foundryLocal)
+        let report = ScenarioReport("real-asr-duration")
+        for seconds in [5, 20, 45, 90] {
+            let targetSamples = seconds * clip.sampleRate
+            let repetitions = targetSamples / unit.count
+            XCTAssertGreaterThan(repetitions, 0)
+            guard repetitions > 0 else { continue }
+            var clean: [Float] = []
+            for _ in 0..<repetitions { clean += unit }
+            clean += [Float](repeating: 0, count: targetSamples - clean.count)
+            let expected = Array(repeating: clip.text, count: repetitions).joined(separator: " ")
+            let reflected = ScenarioAudio.reflected(clean, sampleRate: clip.sampleRate)
+            let signals = [
+                ("clean", clean),
+                ("noise-10db", ScenarioAudio.added(clean, ScenarioAudio.noiseAtSNR(clean, snrDb: 10, seed: 81))),
+                (
+                    "reflections-noise-0db",
+                    ScenarioAudio.added(reflected, ScenarioAudio.noiseAtSNR(reflected, snrDb: 0, seed: 82))
+                ),
+            ]
+            for (condition, samples) in signals {
+                let name = "\(seconds)s-\(condition)"
+                XCTAssertEqual(samples.count, targetSamples)
+                let spans = TranscriptionChunker.plan(samples: samples, sampleRate: clip.sampleRate)
+                XCTAssertEqual(spans.reduce(0) { $0 + $1.count }, samples.count)
+                XCTAssertTrue(spans.allSatisfy { $0.count <= TranscriptionChunker.maxChunkSeconds * clip.sampleRate })
+                XCTAssertEqual(spans.first?.lowerBound, 0)
+                XCTAssertEqual(spans.last?.upperBound, samples.count)
+                for (left, right) in zip(spans, spans.dropFirst()) {
+                    XCTAssertEqual(left.upperBound, right.lowerBound)
+                }
+                let clock = ContinuousClock()
+                let began = clock.now
+                let result = try await engine.transcribe(samples: samples, sampleRate: Double(clip.sampleRate))
+                let overlap = ScenarioText.wordOverlap(expected: expected, actual: result.text)
+                let retained = ScenarioText.retainedWordShare(expected: expected, actual: result.text)
+                report.note("\(name).overlap", value: overlap, digits: 3)
+                report.note("\(name).retained", value: retained, digits: 3)
+                report.note("\(name).chunks", count: spans.count)
+                report.note("\(name).ms", value: ScenarioReport.milliseconds(began.duration(to: clock.now)), digits: 0)
+                XCTAssertGreaterThanOrEqual(overlap, ScenarioText.minimumOverlap, name)
+                XCTAssertGreaterThanOrEqual(retained, 0.8, "\(name): repeated speech was lost")
+            }
+        }
+        report.write()
+    }
 }

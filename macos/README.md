@@ -365,6 +365,12 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   deterministic tests even when real-ASR is off. No new model is downloaded by these added tests. The
   workflow's optional real speech recognition job does the same on a hosted runner, only when it is dispatched by
   hand; it fits one, with the model taking about 700 MB of disk and Foundry Local about 1.1 GB of memory.
+- The opt-in real-ASR suite also sweeps exactly 5, 20, 45 and 90 seconds of repeated committed speech, clean,
+  with 10 dB white noise, and with early reflections plus 0 dB white noise. It pins contiguous complete chunk
+  coverage and the 30-second maximum, then checks both unique-word overlap (at least 0.6) and repeated-word
+  retention (at least 0.8). The second check cannot pass on just the first repetition. On cached Parakeet v2
+  here, all twelve cases had 1.0 unique overlap and 0.90 to 1.0 retention, including four chunks at 90 seconds.
+  These are controlled repeated-phrase measurements, not competing-speech or real-room validation.
 - Foundry Local cleanup now reads its selected chat model's supported `model info` metadata for context planning
   and again before each send, including an endpoint-refresh retry. The reported capacity only lowers a conservative
   4,096-token ceiling. Missing, invalid or mismatched capacity refuses cleanup explicitly, preserving ordinary

@@ -321,6 +321,21 @@ enum ScenarioText {
         let actualWords = Set(ScenarioPrivacy.words(actual))
         return Double(expectedWords.filter { actualWords.contains($0) }.count) / Double(expectedWords.count)
     }
+
+    static func retainedWordShare(expected: String, actual: String) -> Double {
+        let expectedWords = ScenarioPrivacy.words(expected)
+        guard !expectedWords.isEmpty else { return 0 }
+        var remaining: [String: Int] = [:]
+        for word in ScenarioPrivacy.words(actual) { remaining[word, default: 0] += 1 }
+        var found = 0
+        for word in expectedWords {
+            if let count = remaining[word], count > 0 {
+                found += 1
+                remaining[word] = count - 1
+            }
+        }
+        return Double(found) / Double(expectedWords.count)
+    }
 }
 
 extension XCTestCase {
