@@ -392,6 +392,10 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   still govern every attempt: a new use, Never or a longer retention withdraws it. Each retry goes through
   the existing drain/commit barrier and destination-scoped saved-key lookup. Free memory stays a one-shot
   action that reports failure; this does not add automatic retirement of Foundry's shared models.
+- Shutdown permanently stops the local lifecycle's automatic-release scheduler, cancels its pending task
+  and advances its generation before the bounded final release. Neither a pending retry, a later lease end
+  nor a retention change can rearm automatic unloads afterward. An unload already committed still follows
+  the existing barrier and bound; shutdown does not retract a request already sent to the local app.
 - Foundry Local cleanup now reads its selected chat model's supported `model info` metadata for context planning
   and again before each send, including an endpoint-refresh retry. The reported capacity only lowers a conservative
   4,096-token ceiling. Missing, invalid or mismatched capacity refuses cleanup explicitly, preserving ordinary

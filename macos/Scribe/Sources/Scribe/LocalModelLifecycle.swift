@@ -164,6 +164,7 @@ final class LocalModelLifecycle: Sendable {
         var idle: Duration = .zero
         var isPaused = false
         var idleSince: ContinuousClock.Instant?
+        var automaticReleasesStopped = false
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -272,6 +273,7 @@ final class LocalModelLifecycle: Sendable {
     /// and carries the new retention itself. Other changes recalculate owned-copy countdowns from the last use.
     func setIdle(_ idle: Duration) {
         let changed = state.withLock { state -> Bool in
+            guard !state.automaticReleasesStopped else { return false }
             guard state.idle != idle else { return false }
             let shorter = idle > .zero && (state.idle == .zero || idle < state.idle)
             state.idle = idle
@@ -296,6 +298,7 @@ final class LocalModelLifecycle: Sendable {
     private func scheduleIdleReleaseIfOwed() {
         let sleeper = self.sleeper
         state.withLock { state in
+            guard !state.automaticReleasesStopped else { return }
             let idle = state.idle
             guard state.uses == 0 else { return }
             let paused = state.isPaused
@@ -342,6 +345,14 @@ final class LocalModelLifecycle: Sendable {
         candidateID: UUID? = nil,
         wanted: @escaping @Sendable () -> Bool = { true }
     ) async -> LocalModelReleaseOutcome {
+        if reason == .shutdown {
+            state.withLock {
+                $0.automaticReleasesStopped = true
+                $0.idleTask?.cancel()
+                $0.idleTask = nil
+                $0.idleGeneration &+= 1
+            }
+        }
         let revision = state.withLock { $0.revision }
         return await release(
             reason, target: target, decidedAt: revision, generation: nil, candidateID: candidateID, wanted: wanted)

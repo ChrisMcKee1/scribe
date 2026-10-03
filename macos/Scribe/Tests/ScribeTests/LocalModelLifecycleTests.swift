@@ -97,6 +97,41 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testShutdownWithdrawsAutomaticRetryAndLaterLeaseCompletionCannotRestartIt() async throws {
+        for paused in [false, true] {
+            let fake = FakeUnloads()
+            fake.modelResult = false
+            fake.instanceResult = false
+            let clock = ManualClock()
+            let lifecycle = make(fake, clock: clock)
+            try await owned(lifecycle, "i1")
+            if paused {
+                lifecycle.notePause(true)
+                let use = try await lifecycle.beginUse(target())
+                use.end()
+            } else {
+                await clock.waitForSleepers(1)
+                clock.fire()
+            }
+            await clock.waitForSleepers(1)
+            XCTAssertEqual(clock.durations.last, .seconds(30))
+            let shutdown = await lifecycle.release(.shutdown, target: nil)
+            XCTAssertEqual(shutdown, .failed)
+            let models = fake.models.count
+            let instances = fake.instances.count
+            fake.modelResult = true
+            fake.instanceResult = true
+            let late = try await lifecycle.beginUse(target())
+            late.end()
+            lifecycle.setIdle(.seconds(1))
+            clock.fire()
+            for _ in 0..<500 { await Task.yield() }
+            XCTAssertEqual(fake.models.count, models)
+            XCTAssertEqual(fake.instances.count, instances)
+            XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["i1"])
+        }
+    }
+
     func testRetirementTriesTheRotatedSavedKeyBeforeTheOriginalLoadedKey() async throws {
         let fake = FakeUnloads()
         fake.requiredKey = "rotated"
