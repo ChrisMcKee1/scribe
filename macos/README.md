@@ -439,6 +439,8 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   checks a synthetic bounded completion only when the default `qwen2.5-1.5b` is already cached.
 - A residency read that returns after local-model shutdown began cannot erase tracked LM Studio ownership.
   Reconciliation stops, and copies still owed remain available to a later bounded shutdown retirement.
+- An LM Studio load that settles during shutdown, or whose caller was cancelled, cannot report ready.
+  Its late copy is still recorded and retired through the existing bounded release path.
 - A cold Foundry cleanup load checks capacity again after residency is confirmed. Unknown or insufficient metadata
   refuses readiness instead of reporting a successful start; no text is sent and no shared model is unloaded.
 - A nonempty capture at a valid sample rate whose samples are all exactly zero is refused before recording

@@ -738,6 +738,7 @@ final class LocalModelLifecycle: Sendable {
         _ = settle
         // A cancelled caller returns here at once; the load keeps its lease and records its copy when it lands.
         try? await done.wait()
+        guard !Task.isCancelled, !state.withLock({ $0.releasesClosing }) else { return .busy }
         return outcome.withLock { $0 }
     }
 

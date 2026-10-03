@@ -528,7 +528,8 @@ final class LocalModelLifecycleTests: XCTestCase {
         await clock.waitForSleepers(1)
         XCTAssertGreaterThanOrEqual(clock.pending, 1)
         clock.fire()
-        _ = await caller.value
+        let result = await caller.value
+        XCTAssertEqual(result, .busy, "A load settled and retired during shutdown cannot report ready")
         XCTAssertEqual(fake.instances.map(\.id), ["still-owed"])
         XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["still-owed"])
         XCTAssertEqual(lifecycle.useCount, 0)
@@ -1497,19 +1498,22 @@ final class LocalModelLifecycleTests: XCTestCase {
         let fake = FakeUnloads()
         let lifecycle = make(fake)
         let barrier = LifecycleGate()
+        let began = LifecycleGate()
         let lease = try await lifecycle.beginUse(target())
         let caller = Task {
             await lifecycle.reconcileLMStudio(
                 target: lmTarget(), contextTokens: 8192, lease: lease,
                 read: { _, _ in .notRunning.reached },
                 load: { _, _, _ in
+                    began.open()
                     try? await barrier.wait()
                     return "late"
                 })
         }
-        for _ in 0..<200 { await Task.yield() }
+        try await began.wait()
         caller.cancel()
-        _ = await caller.value
+        let cancelledResult = await caller.value
+        XCTAssertEqual(cancelledResult, .busy)
         lease.end()
         XCTAssertEqual(lifecycle.useCount, 1, "the abandoned load still counts as a use")
         let release = Task { await lifecycle.release(.freeMemory, target: lmTarget()) }
