@@ -262,6 +262,8 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertEqual(provider.requests.count, 0)
         XCTAssertEqual(harness.fakeInjector.texts, ["Kubeflow "])
         XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .fellBack)
+        XCTAssertEqual(harness.reports.problems.count, 1)
+        XCTAssertTrue(harness.reports.problems[0].cleanupFellBack)
     }
 
     func testOversizedLocalCleanupUsesOneGlossaryAndAppliesHeldTemplatesOnlyAfterJoining() async throws {

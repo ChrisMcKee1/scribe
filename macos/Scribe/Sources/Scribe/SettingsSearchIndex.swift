@@ -260,6 +260,9 @@ enum SettingsSearchIndex {
             ["logs", "zip", "support", "data"]),
         entry("diagnostics.logs", .diagnostics, "diagnostics.data", "Logs", ["unified logging", "console"]),
         entry(
+            "diagnostics.problems", .diagnostics, "diagnostics.data", "Recent dictation problems",
+            ["failure", "failed", "AI cleanup", "typing", "session"]),
+        entry(
             "diagnostics.speed", .diagnostics, "diagnostics.speed", "How long each step takes",
             ["p50", "p95", "latency", "rtf", "performance"]),
         entry("diagnostics.window", .diagnostics, "diagnostics.speed", "Window", ["period", "range", "speed"]),

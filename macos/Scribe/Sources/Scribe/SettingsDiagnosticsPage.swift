@@ -3,12 +3,13 @@ import SwiftUI
 
 struct SettingsDiagnosticsPage: View {
     let persistenceStore: PersistenceStore
+    let pipelineReportStore: PipelineReportStore
 
     var body: some View {
         SettingsPage(
             title: "Diagnostics", subtitle: "Get help, see what went wrong, and check how fast dictation runs."
         ) {
-            DiagnosticsSettingsTab(persistenceStore: persistenceStore)
+            DiagnosticsSettingsTab(persistenceStore: persistenceStore, pipelineReportStore: pipelineReportStore)
         }
     }
 }
@@ -20,10 +21,12 @@ struct SettingsDiagnosticsPage: View {
 /// aggregation used by `Scribe --diagnostics` for headless verification.
 struct DiagnosticsSettingsTab: View {
     @StateObject private var model: DiagnosticsSettingsModel
+    @ObservedObject var pipelineReportStore: PipelineReportStore
     let persistenceStore: PersistenceStore
 
-    init(persistenceStore: PersistenceStore) {
+    init(persistenceStore: PersistenceStore, pipelineReportStore: PipelineReportStore) {
         self.persistenceStore = persistenceStore
+        self.pipelineReportStore = pipelineReportStore
         _model = StateObject(wrappedValue: DiagnosticsSettingsModel(access: .live(persistenceStore)))
     }
 
@@ -84,12 +87,25 @@ struct DiagnosticsSettingsTab: View {
                 "Scribe writes shape-only app events to Apple unified logging and local daily files. Logs are kept for seven days, with soft limits of 16 MB a day and 64 MB total. Dictation text is never included."
             )
             .cardDescription()
-            Text("AI cleanup problems").cardTitle()
+            Text("Recent dictation problems").cardTitle()
                 .padding(.top, 8)
             Text(
-                "Cleanup failures are surfaced on the dictation result and in the pipeline report for this session. There is not yet a stored macOS failure list like Windows has."
+                "The newest \(PipelineReportStore.problemLimit) problems from this session, newest first. Only the time and outcome are kept here, not your words or service error details. Clearing history clears this list. It is not saved or exported."
             )
             .cardDescription()
+            if pipelineReportStore.problems.isEmpty {
+                Text("No dictation problems reported this session.")
+                    .cardDescription()
+            } else {
+                ForEach(pipelineReportStore.problems) { problem in
+                    Divider()
+                    Text(problem.capturedAt, style: .time)
+                        .font(.callout.weight(.semibold))
+                    ForEach(problem.messages, id: \.self) { message in
+                        Text(message).cardDescription()
+                    }
+                }
+            }
         }
     }
 

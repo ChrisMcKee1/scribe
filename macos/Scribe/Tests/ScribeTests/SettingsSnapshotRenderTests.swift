@@ -41,10 +41,16 @@ final class SettingsSnapshotRenderTests: XCTestCase {
             settings: DictionaryLibrarySettings(defaults: defaults.defaults),
             persistenceStore: persistenceStore)
         let drafts = SettingsDrafts()
+        let reports = PipelineReportStore()
+        var problem = PipelineReport(
+            dictationID: 1, capturedAt: Date(), trigger: .menu, stopReason: .menu, captureDuration: 3)
+        problem.cleanupOutcome = .fellBack
+        problem.failureStage = .injection
+        reports.publish(problem)
         let dependencies = SnapshotDependencies(
             persistenceStore: persistenceStore,
             overlayPanelController: OverlayPanelController(),
-            pipelineReportStore: PipelineReportStore(),
+            pipelineReportStore: reports,
             dictionaryLibraryService: libraryService,
             drafts: drafts,
             defaults: defaults.defaults,
@@ -403,7 +409,8 @@ private struct SnapshotSettingsShell: View {
         case .advanced:
             SettingsAdvancedPage(newlineStore: AdvancedDictationSettingsStore(defaults: dependencies.defaults))
         case .diagnostics:
-            SettingsDiagnosticsPage(persistenceStore: dependencies.persistenceStore)
+            SettingsDiagnosticsPage(
+                persistenceStore: dependencies.persistenceStore, pipelineReportStore: dependencies.pipelineReportStore)
         case .about:
             SettingsAboutPage(persistenceStore: dependencies.persistenceStore)
         }

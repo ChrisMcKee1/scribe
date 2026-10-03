@@ -259,7 +259,7 @@ struct SettingsView: View {
         case .advanced:
             SettingsAdvancedPage()
         case .diagnostics:
-            SettingsDiagnosticsPage(persistenceStore: persistenceStore)
+            SettingsDiagnosticsPage(persistenceStore: persistenceStore, pipelineReportStore: pipelineReportStore)
         case .about:
             SettingsAboutPage(persistenceStore: persistenceStore)
         }
