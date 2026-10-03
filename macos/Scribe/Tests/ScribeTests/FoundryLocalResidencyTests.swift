@@ -4,6 +4,81 @@ import XCTest
 @testable import Scribe
 
 final class FoundryLocalResidencyTests: XCTestCase {
+    func testReadinessDeadlineCancelsAnInFlightLoadAndTheNextRequestCanUseTheLane() async throws {
+        let store = makeCleanupStore().store
+        store.isEnabled = true
+        let load = HeldWork()
+        let resident = StubSwitch()
+        let log = RequestLog()
+        var factory = CleanupProviderFactory.testing(
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "Cleaned.")
+            },
+            foundryStatus: .init(lookup: { URL(string: "http://localhost:5273")! }))
+        factory.foundryLocalResidency = .init(
+            isLoaded: { _ in resident.isOn },
+            loadCached: { _ in try await load.hold() })
+        let cache = CleanupProviderCache(
+            store: store, environment: [:], factory: factory,
+            readinessTimer: { _ in
+                await load.waitUntilStarted()
+                throw OperationDeadlineError.exceeded(seconds: 30)
+            })
+        let result = await cache.prepareLocalModel(isCurrent: { true }, onStarting: {})
+        XCTAssertEqual(result, .timedOut)
+        XCTAssertTrue(load.sawCancellation)
+        XCTAssertTrue(log.all.isEmpty)
+        resident.turnOn()
+        let provider = try cache.admittedProvider()
+        _ = try await provider.clean(
+            CleanupRequest(transcript: "hello", writingStylePrompt: "Fix spelling.", maxOutputTokens: 64))
+        XCTAssertEqual(log.all.count, 1)
+    }
+
+    func testCancelledCompletionWaitingBehindALoadNeverInspectsOrSends() async throws {
+        let lane = AsyncLane()
+        let hold = HeldWork()
+        let holder = Task { try await lane.run { try await hold.hold() } }
+        await hold.waitUntilStarted()
+        let inspected = StubSwitch()
+        let log = RequestLog()
+        let provider = FoundryLocalCleanupProvider(
+            modelAlias: "qwen", status: .init(lookup: { URL(string: "http://localhost:5273")! }),
+            context: .init(lookup: { _ in 4096 }),
+            residency: .init(
+                isLoaded: { _ in
+                    inspected.turnOn()
+                    return true
+                },
+                loadCached: { _ in XCTFail("Queued cancellation must not load") }),
+            modelLane: lane,
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "never")
+            })
+        let waiting = Task {
+            try await provider.clean(
+                CleanupRequest(transcript: "hello", writingStylePrompt: "Fix spelling.", maxOutputTokens: 64))
+        }
+        await lane.waitUntilWaiting(atLeast: 1)
+        waiting.cancel()
+        if case .failure(let error) = await waiting.result {
+            XCTAssertTrue(error is CancellationError)
+        } else {
+            XCTFail("Queued cancellation must fail")
+        }
+        XCTAssertEqual(lane.waitingCount, 0)
+        XCTAssertFalse(inspected.isOn)
+        XCTAssertTrue(log.all.isEmpty)
+        holder.cancel()
+        _ = await holder.result
+        _ = try await provider.clean(
+            CleanupRequest(transcript: "hello", writingStylePrompt: "Fix spelling.", maxOutputTokens: 64))
+        XCTAssertTrue(inspected.isOn)
+        XCTAssertEqual(log.all.count, 1)
+    }
+
     func testLoadReplyRequiresExplicitBooleanSuccess() throws {
         XCTAssertNoThrow(try FoundryLocalResidencySource.confirmLoadReply(Data(#"{"success":true}"#.utf8)))
         for reply in ["{}", #"{"success":false}"#, #"{"success":"true"}"#, "not json"] {

@@ -377,6 +377,10 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   voice on the other channel, on both sides. Production capture equaled the exact arithmetic downmix, and the
   primary voice scored 1.0 overlap and retention on both. This tests a quieter competing voice, not equal-level
   speakers, speaker separation, arbitrary background media or real microphones.
+- Foundry startup cancellation regressions fire the recording-readiness deadline while a load is held and
+  cancel a direct completion queued behind another load. Both send no text, cancel/remove the waiting work,
+  and allow the next admitted completion to use the lane. These are scripted cancellation checks, not proof
+  that a daemon load already accepted by Foundry is undone or that Scribe owns the model it loaded.
 - Foundry Local cleanup now reads its selected chat model's supported `model info` metadata for context planning
   and again before each send, including an endpoint-refresh retry. The reported capacity only lowers a conservative
   4,096-token ceiling. Missing, invalid or mismatched capacity refuses cleanup explicitly, preserving ordinary
