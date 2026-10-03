@@ -56,7 +56,8 @@ enum ContextBudget {
 
     static func requestFits(_ request: CleanupRequest, contextTokens: Int) -> Bool {
         guard let room = outputRoom(request, contextTokens: contextTokens) else { return false }
-        return max(0, request.maxOutputTokens ?? 4096) <= room
+        let output = request.maxOutputTokens ?? 4096
+        return output >= 0 && output <= room
     }
 
     static func fitAuxiliary(_ request: CleanupRequest, contextTokens: Int) throws -> CleanupRequest {
@@ -73,6 +74,8 @@ enum ContextBudget {
     }
 
     private static func outputRoom(_ request: CleanupRequest, contextTokens: Int) -> Int? {
+        guard contextTokens > 0 else { return nil }
+        let contextTokens = min(contextTokens, maximumSize)
         let room = contextTokens - chatTemplateTokens - margin(contextTokens)
         guard room >= 0 else { return nil }
         let instructions = TokenEstimate.vocabulary(request.writingStylePrompt)
@@ -86,17 +89,18 @@ enum ContextBudget {
         instructions: String,
         worstRequestTextCost: Int
     ) -> Int {
-        max(
-            Int.min,
-            min(
-                Int.max,
-                contextTokens - chatTemplateTokens - TokenEstimate.vocabulary(instructions + "\n\n")
-                    - worstRequestTextCost
-                    - margin(contextTokens)))
+        guard contextTokens > 0 else { return Int.min }
+        let contextTokens = min(contextTokens, maximumSize)
+        let room = contextTokens - chatTemplateTokens - margin(contextTokens)
+        let instructionsRoom = room.subtractingReportingOverflow(TokenEstimate.vocabulary(instructions + "\n\n"))
+        guard !instructionsRoom.overflow else { return Int.min }
+        let vocabularyRoom = instructionsRoom.partialValue.subtractingReportingOverflow(worstRequestTextCost)
+        return vocabularyRoom.overflow ? Int.min : vocabularyRoom.partialValue
     }
 
     private static func requestTextCost(_ transcript: String, outputCeiling: Int) -> Int {
-        TokenEstimate.transcript(transcript) + max(0, outputCeiling)
+        let sum = TokenEstimate.transcript(transcript).addingReportingOverflow(max(0, outputCeiling))
+        return sum.overflow ? Int.max : sum.partialValue
     }
 
     private static func margin(_ contextTokens: Int) -> Int {

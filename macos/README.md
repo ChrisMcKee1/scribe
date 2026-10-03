@@ -443,6 +443,8 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   Its late copy is still recorded and retired through the existing bounded release path.
 - A cold Foundry cleanup load checks capacity again after residency is confirmed. Unknown or insufficient metadata
   refuses readiness instead of reporting a successful start; no text is sent and no shared model is unloaded.
+- Context planning caps oversized metadata at the supported ceiling and refuses nonpositive context or negative output
+  limits. Extreme integer values cannot overflow the budget arithmetic; ordinary vocabulary budgets stay identical.
 - A nonempty capture at a valid sample rate whose samples are all exactly zero is refused before recording
   scratch storage, model-cache discovery or decoding, at short lengths too. Signed zero counts as zero;
   even the smallest normal nonzero sample still reaches decoding. This prevents recognizer hallucinations

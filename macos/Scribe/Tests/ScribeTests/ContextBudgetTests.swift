@@ -3,6 +3,57 @@ import XCTest
 @testable import Scribe
 
 final class ContextBudgetTests: XCTestCase {
+    func testExtremeContextAndOutputValuesCannotOverflowOrEnlargeTheSupportedBudget() throws {
+        let request = CleanupRequest(transcript: "hello", writingStylePrompt: "Fix spelling.", maxOutputTokens: 64)
+        for context in [Int.min, -1, 0] {
+            XCTAssertFalse(ContextBudget.requestFits(request, contextTokens: context))
+            XCTAssertThrowsError(try ContextBudget.fitAuxiliary(request, contextTokens: context))
+            XCTAssertEqual(
+                ContextBudget.vocabularyTokens(context, instructions: "rules", transcript: "hello", outputCeiling: 64),
+                Int.min)
+        }
+        XCTAssertEqual(
+            try ContextBudget.fitAuxiliary(
+                CleanupRequest(transcript: "hello", maxOutputTokens: Int.max), contextTokens: Int.max
+            ).maxOutputTokens,
+            try ContextBudget.fitAuxiliary(
+                CleanupRequest(transcript: "hello", maxOutputTokens: Int.max),
+                contextTokens: ContextBudget.maximumSize
+            ).maxOutputTokens)
+        for context in [1, 4096, ContextBudget.maximumSize, Int.max] {
+            XCTAssertFalse(
+                ContextBudget.requestFits(
+                    CleanupRequest(transcript: "hello", maxOutputTokens: Int.max), contextTokens: context))
+            XCTAssertFalse(
+                ContextBudget.requestFits(
+                    CleanupRequest(transcript: "hello", maxOutputTokens: -1), contextTokens: context))
+            XCTAssertLessThan(
+                ContextBudget.vocabularyTokens(
+                    context, instructions: "rules", transcript: "hello", outputCeiling: Int.max),
+                0)
+        }
+        XCTAssertEqual(
+            ContextBudget.vocabularyRoom(Int.max, instructions: "rules"),
+            ContextBudget.vocabularyRoom(ContextBudget.maximumSize, instructions: "rules"))
+    }
+
+    func testSupportedVocabularyBudgetsKeepThePreviousArithmeticExactly() {
+        for context in stride(from: 1, through: ContextBudget.maximumSize, by: 7919) {
+            for output in [0, 64, 4096, ContextBudget.maximumSize] {
+                let instructions = "Rewrite the dictated words."
+                let transcript = "日本語 and dictated words"
+                let expected =
+                    context - ContextBudget.chatTemplateTokens
+                    - TokenEstimate.vocabulary(instructions + "\n\n")
+                    - TokenEstimate.transcript(transcript) - output - max(64, context * 3 / 100)
+                XCTAssertEqual(
+                    ContextBudget.vocabularyTokens(
+                        context, instructions: instructions, transcript: transcript, outputCeiling: output),
+                    expected)
+            }
+        }
+    }
+
     func testAuxiliaryFittingPreservesInputsAndReservesAnExactMinimumAnswer() throws {
         let original = CleanupRequest(
             transcript: "日本語", writingStylePrompt: "Give suggestions.",
