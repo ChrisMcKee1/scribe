@@ -408,6 +408,11 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   later attempts send nothing and late successful replies are refused. Foundry planning resumed after
   closure cannot start a model load. This does not retract requests or daemon work already started.
   Independent caches keep independent lifetimes, without changing saved settings.
+ - An LM Studio load that finishes after shutdown's wait still records its instance, ends its
+  change barrier and extended use, then makes one separately bounded shutdown retirement attempt.
+  It unloads only tracked instance ids, never an ordinary shared model. A refusal or timeout keeps
+  ownership recorded and starts no automatic retry. If the process exits before settlement, the
+  daemon can still keep the copy; this is best-effort cleanup, not a guarantee of released memory.
 - Foundry Local cleanup now reads its selected chat model's supported `model info` metadata for context planning
   and again before each send, including an endpoint-refresh retry. The reported capacity only lowers a conservative
   4,096-token ceiling. Missing, invalid or mismatched capacity refuses cleanup explicitly, preserving ordinary

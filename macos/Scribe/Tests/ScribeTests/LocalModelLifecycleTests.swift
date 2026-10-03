@@ -97,6 +97,94 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testTheLateSettlementRetirementHasItsOwnShutdownBoundAndKeepsRefusedOwnership() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock, idle: .zero)
+        let began = LifecycleGate()
+        let finishLoad = LifecycleGate()
+        let blockedUnload = LifecycleGate()
+        fake.barrier = blockedUnload
+        let lease = try await lifecycle.beginUse(lmTarget())
+        let caller = Task {
+            await lifecycle.reconcileLMStudio(
+                target: lmTarget(), contextTokens: 8192, lease: lease,
+                read: { _, _ in .notRunning.reached },
+                load: { _, _, _ in
+                    began.open()
+                    try? await finishLoad.wait()
+                    return "still-owed"
+                })
+        }
+        try await began.wait()
+        lease.end()
+        let shutdown = Task { await lifecycle.release(.shutdown, target: nil) }
+        await clock.waitForSleepers(1)
+        XCTAssertGreaterThanOrEqual(clock.pending, 1)
+        clock.fire()
+        _ = await shutdown.value
+        finishLoad.open()
+        try await fake.instanceStarted.wait()
+        await clock.waitForSleepers(1)
+        XCTAssertGreaterThanOrEqual(clock.pending, 1)
+        clock.fire()
+        _ = await caller.value
+        XCTAssertEqual(fake.instances.map(\.id), ["still-owed"])
+        XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["still-owed"])
+        XCTAssertEqual(lifecycle.useCount, 0)
+        XCTAssertTrue(fake.models.isEmpty)
+        clock.fire()
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertEqual(fake.instances.count, 1, "Shutdown settlement does not rearm automatic retries")
+    }
+
+    func testALoadSettlingAfterTheShutdownBoundRetiresItsRecordedInstance() async throws {
+        let fake = FakeUnloads()
+        fake.requiredKey = "original"
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock, idle: .zero)
+        let began = LifecycleGate()
+        let finishLoad = LifecycleGate()
+        let lease = try await lifecycle.beginUse(lmTarget(key: "original"))
+        let caller = Task {
+            await lifecycle.reconcileLMStudio(
+                target: lmTarget(key: "original"), contextTokens: 8192, lease: lease,
+                read: { _, _ in .notRunning.reached },
+                load: { _, _, _ in
+                    began.open()
+                    try? await finishLoad.wait()
+                    return "late-shutdown-copy"
+                })
+        }
+        try await began.wait()
+        caller.cancel()
+        _ = await caller.value
+        lease.end()
+        XCTAssertEqual(lifecycle.useCount, 1)
+        let shutdown = Task { await lifecycle.release(.shutdown, target: nil) }
+        await clock.waitForSleepers(1)
+        XCTAssertGreaterThanOrEqual(clock.pending, 1)
+        clock.fire()
+        let first = await shutdown.value
+        XCTAssertEqual(first, .failed)
+        XCTAssertTrue(fake.instances.isEmpty)
+        finishLoad.open()
+        try await fake.instanceStarted.wait()
+        _ = await lifecycle.release(.shutdown, target: nil)
+        XCTAssertEqual(fake.instances.map(\.id), ["late-shutdown-copy", "late-shutdown-copy"])
+        XCTAssertNil(fake.instances.first?.key)
+        XCTAssertEqual(fake.instances.last?.key, "original")
+        XCTAssertTrue(fake.models.isEmpty)
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+        XCTAssertEqual(lifecycle.useCount, 0)
+        do {
+            _ = try await lifecycle.beginUse(lmTarget())
+            XCTFail("Settling a late load must not reopen admission")
+        } catch {
+            XCTAssertEqual(error as? LocalModelLifecycleError, .closing)
+        }
+    }
+
     func testAUseWaitingBehindTheFinalUnloadIsRefusedWhenTheUnloadEnds() async throws {
         let fake = FakeUnloads()
         let barrier = LifecycleGate()

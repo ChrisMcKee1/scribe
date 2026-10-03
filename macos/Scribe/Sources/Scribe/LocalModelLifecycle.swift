@@ -635,11 +635,6 @@ final class LocalModelLifecycle: Sendable {
         let outcome = OSAllocatedUnfairLock(initialState: LMStudioContextOutcome.busy)
         transferred = true
         let settle = Task { [self] in
-            defer {
-                finishChange(change)
-                settleLease.end()
-                if let candidate, candidate.isFinished { candidate.retire(in: self) }
-            }
             do {
                 try await loadLane.run {
                     let instance = await load(target.endpoint, target.model, contextTokens)
@@ -649,6 +644,13 @@ final class LocalModelLifecycle: Sendable {
                 }
             } catch {
                 ScribeLog.debug(.cleanup, "A local model load was cancelled before it started")
+            }
+            finishChange(change)
+            settleLease.end()
+            if state.withLock({ $0.releasesClosing }) {
+                _ = await release(.shutdown, target: nil)
+            } else if let candidate, candidate.isFinished {
+                candidate.retire(in: self)
             }
             done.open()
         }
