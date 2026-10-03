@@ -557,14 +557,19 @@ swift format lint --strict --recursive --configuration macos/Scribe/.swift-forma
 ## Known gaps vs. Windows
 
 See `PORTING-PLAN.md`, "Remaining parity gaps, checked against current source", for evidence, the smallest
-implementation surface and any dependency, runtime or credential blocker. Confirmed gaps include VAD trimming,
-multilingual and bundled ASR, chunking long recordings, GitHub Copilot cleanup,
-automatic updates, Intel validation, and full real-ASR scenario coverage. Settings also lacks a separate indicator
-preview and visibility toggle, global writing-style and advanced-prompt editing, Azure resource API-key auth, and
-speech-model/thread controls, an editable idle memory-release duration, and a tray microphone picker. Mouse-button
-shortcuts are not implemented; confirm that product-scope decision before treating them as platform-inapplicable.
-Shortcut input is one key, with Caps Lock as the only toggle, and is deliberately listen-only. Idle and pause release
-for local cleanup models remains incomplete.
+implementation surface and any dependency, runtime or credential blocker. Confirmed gaps include model-backed VAD
+trimming, bundled multilingual ASR, GitHub Copilot cleanup, automatic signed updates, actual Intel recognition,
+persisted dictation-problem history, and broader real-microphone/model coverage. Foundry/speech memory release and
+broader local-copy ownership reconciliation remain open because those runtimes can be shared with other apps.
+Shortcut input is one key, with Caps Lock as the only toggle, and is deliberately listen-only; modifier/chord,
+mouse-button and suppression behavior still need a product/platform decision. The Foundry CLI exposes no usable
+processor-thread setting, so Scribe has no ineffective slider.
+
+Bounded long-recording chunks, all seven committed real-ASR scenarios on cached Apple Silicon Parakeet v2, recording
+indicator preview and visibility, global writing-style and advanced-prompt editing, Microsoft Foundry API-key auth,
+speech-model selection, and editable local-cleanup idle retention are implemented. These do not establish Windows
+parity for other models, Intel recognition, credentialed cloud behavior or real hardware interactions. See the
+current parity summary rather than treating older implementation notes as a list of missing features.
 
 The macOS port deliberately keeps its distinct cleanup pipeline and privacy choices; those differences are documented
 separately and are not treated as missing features. The separate parity table also distinguishes those choices from
