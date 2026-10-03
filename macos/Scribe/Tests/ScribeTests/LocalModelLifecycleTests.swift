@@ -97,6 +97,51 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testLateExplicitAndCandidateRetirementsCannotCommitAfterShutdown() async throws {
+        let fake = FakeUnloads()
+        fake.instanceResult = false
+        let lifecycle = make(fake, idle: .zero)
+        let candidate = LocalModelLifecycle.Candidate { true }
+        try await LocalModelLifecycle.$candidate.withValue(candidate) {
+            try await owned(lifecycle, "candidate")
+        }
+        let final = await lifecycle.release(.shutdown, target: nil)
+        XCTAssertEqual(final, .failed)
+        let attempts = fake.instances.count
+        fake.instanceResult = true
+        for reason in [
+            LocalModelReleaseReason.configurationChanged, .candidateFinished, .freeMemory, .pause,
+            .retentionShortened, .idle,
+        ] {
+            let outcome = await lifecycle.release(reason, target: target(), candidateID: candidate.id)
+            XCTAssertEqual(outcome, .notWanted)
+        }
+        XCTAssertEqual(fake.instances.count, attempts)
+        XCTAssertTrue(fake.models.isEmpty)
+        XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["candidate"])
+    }
+
+    func testAReleaseWaitingForAUseCannotCommitIfShutdownWinsBeforeTheUseEnds() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock, idle: .zero)
+        let served = target()
+        let lease = try await lifecycle.beginUse(served)
+        let release = Task { await lifecycle.release(.configurationChanged, target: served) }
+        await clock.waitForSleepers(1)
+        XCTAssertEqual(clock.pending, 1)
+        let shutdown = Task { await lifecycle.release(.shutdown, target: nil) }
+        await clock.waitForSleepers(2)
+        XCTAssertEqual(clock.pending, 2)
+        lease.end()
+        let old = await release.value
+        let final = await shutdown.value
+        XCTAssertEqual(old, .notWanted)
+        XCTAssertEqual(final, .nothingToRelease)
+        XCTAssertTrue(fake.models.isEmpty)
+        XCTAssertTrue(fake.instances.isEmpty)
+    }
+
     func testShutdownWithdrawsAutomaticRetryAndLaterLeaseCompletionCannotRestartIt() async throws {
         for paused in [false, true] {
             let fake = FakeUnloads()

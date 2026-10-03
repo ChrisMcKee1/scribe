@@ -164,7 +164,7 @@ final class LocalModelLifecycle: Sendable {
         var idle: Duration = .zero
         var isPaused = false
         var idleSince: ContinuousClock.Instant?
-        var automaticReleasesStopped = false
+        var releasesClosing = false
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -273,7 +273,7 @@ final class LocalModelLifecycle: Sendable {
     /// and carries the new retention itself. Other changes recalculate owned-copy countdowns from the last use.
     func setIdle(_ idle: Duration) {
         let changed = state.withLock { state -> Bool in
-            guard !state.automaticReleasesStopped else { return false }
+            guard !state.releasesClosing else { return false }
             guard state.idle != idle else { return false }
             let shorter = idle > .zero && (state.idle == .zero || idle < state.idle)
             state.idle = idle
@@ -298,7 +298,7 @@ final class LocalModelLifecycle: Sendable {
     private func scheduleIdleReleaseIfOwed() {
         let sleeper = self.sleeper
         state.withLock { state in
-            guard !state.automaticReleasesStopped else { return }
+            guard !state.releasesClosing else { return }
             let idle = state.idle
             guard state.uses == 0 else { return }
             let paused = state.isPaused
@@ -347,7 +347,7 @@ final class LocalModelLifecycle: Sendable {
     ) async -> LocalModelReleaseOutcome {
         if reason == .shutdown {
             state.withLock {
-                $0.automaticReleasesStopped = true
+                $0.releasesClosing = true
                 $0.idleTask?.cancel()
                 $0.idleTask = nil
                 $0.idleGeneration &+= 1
@@ -431,6 +431,7 @@ final class LocalModelLifecycle: Sendable {
             }
             let decision = state.withLock { state -> Decision in
                 guard state.uses == 0 else { return .retry }
+                if state.releasesClosing, reason != .shutdown { return .stop(.notWanted) }
                 if reason == .pause, !state.isPaused { return .stop(.notWanted) }
                 let decidedByRevision = reason == .idle || reason == .pause || reason == .retentionShortened
                 if decidedByRevision, state.revision != revision { return .stop(.notWanted) }
