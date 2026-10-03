@@ -284,6 +284,15 @@ and Scribe keeps the recognized text. This check cannot prevent a first request
 from meeting a previously unknown runtime cap, nor exclude changes another app
 makes to the shared model while the requests run.
 
+On macOS, LM Studio's own-size mode checks the actual loaded context before
+sending user content, just as a chosen size does. If no copy is held, Scribe
+first sends only a fixed one-token "ok" request with fixed instructions to load
+it, then reads the loaded size again. That request carries no dictated text,
+vocabulary or user instructions. An unknown, unreadable or insufficient size
+refuses the actual completion. An omitted output ceiling becomes an enforced
+4,096-token limit so the reserved output is bounded on the wire too. This
+cannot exclude another app changing the shared copy between the read and send.
+
 AI cleanup never sends audio, your snippet templates, your dictation history, or
 the name of the focused application.
 

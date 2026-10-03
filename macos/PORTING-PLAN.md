@@ -132,6 +132,12 @@ real Mac.
   smaller size no longer inherit the requested budget. An absent size or unreadable residency refuses text.
   Tests cover a manual copy kept as-is, smaller-size no-send refusal, unknown residency and a newly loaded copy
   confirmed before Test connection. External changes between the reading and send remain possible.
+  LM Studio's own-size mode now uses the same full-request guard, against its actual held copy. With nothing held,
+  one fixed readying request loads it and a fresh reading must confirm its size before user content is sent.
+  Requests without an explicit output ceiling send an enforced 4,096-token ceiling. Context-bound local probes
+  do not retry without a limit, since unbounded output has no safe context budget; this deliberately refuses
+  models that need an uncapped retry. Wire tests pin own-size no-send refusal, fixed-only readying, confirmation
+  and output ceilings. Ollama's own-size fitting and oversized-dictation splitting remain open.
   Saved-settings probes and dictation prompt planning explicitly carry that store's saved guardrails and writing
   style, with a nonempty profile style first, so the fit is measured against the prompt actually sent.
   Custom-service local tuning and app identity require the selected app's actual recognized address; stale app

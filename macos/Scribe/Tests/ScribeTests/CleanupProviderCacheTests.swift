@@ -292,7 +292,11 @@ final class CleanupProviderCacheTests: XCTestCase {
         let factory = CleanupProviderFactory.testing(
             session: session, foundryStatus: foundryStatus ?? fakeFoundryStatus.source, azureCli: azureCli,
             azureCliLaunch: azureCliLaunch, azureCliSearchPath: [azDirectory.path(percentEncoded: false)], clock: clock,
-            readLocalServer: readLocalServer)
+            readLocalServer: readLocalServer ?? { _, _ in
+                LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: [LocalServerLoadedModel("local-model", 1, contextTokens: 8192)])
+            })
         let realTimer: @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
         let timer: @Sendable (Duration) async throws -> Void = checkTimer ?? realTimer
         let cache = CleanupProviderCache(
@@ -817,6 +821,7 @@ final class CleanupProviderCacheTests: XCTestCase {
                 rig.store.providerKind = .ollama
             case .openAICompatible:
                 configureOpenAICompatible(rig.store)
+                rig.store.openAIBaseURL = "http://127.0.0.1:1235/v1"
             case .microsoftFoundry:
                 configureMicrosoftFoundry(rig.store)
             }
@@ -871,6 +876,23 @@ final class CleanupProviderCacheTests: XCTestCase {
 
     // MARK: - Test Connection passes wherever dictation works
 
+    func testAContextBoundLocalCheckNeverClaimsItConfirmedWithoutAnOutputLimit() async throws {
+        for lengthStop in [true, false] {
+            let rig = try makeRig { request in
+                lengthStop
+                    ? StubReply.completion(request, nil, finishReason: "length")
+                    : StubReply.json(request, status: 400, #"{"error":{"message":"refused"}}"#)
+            }
+            configureOpenAICompatible(rig.store)
+            rig.store.selectedLocalApp = .lmStudio
+            let check = try await boundedCheck(rig.cache)
+            XCTAssertFalse(check.reachable)
+            XCTAssertEqual(rig.requests.count, lengthStop ? 1 : 2)
+            XCTAssertTrue(rig.requests.all.allSatisfy { $0.jsonBody["max_completion_tokens"] as? Int == 16 })
+            XCTAssertFalse(check.message.contains("without one"))
+        }
+    }
+
     /// A reasoning model can spend the probe's whole ceiling thinking and stop at `length` with nothing visible. One
     /// request without the ceiling then comes back with text, so the check passes, says only that the model answered,
     /// and the dictation that follows cleans with it. The confirmation carries neither field.
@@ -881,6 +903,7 @@ final class CleanupProviderCacheTests: XCTestCase {
                 : StubReply.completion(request, nil, finishReason: "length")
         }
         configureOpenAICompatible(rig.store)
+        rig.store.openAIBaseURL = "http://127.0.0.1:1235/v1"
 
         let check = try await boundedCheck(rig.cache)
         try await clean(rig)
@@ -917,6 +940,7 @@ final class CleanupProviderCacheTests: XCTestCase {
         for (name, sent, reply) in replies {
             let rig = try makeRig(reply: reply)
             configureOpenAICompatible(rig.store)
+            rig.store.openAIBaseURL = "http://127.0.0.1:1235/v1"
 
             let check = try await boundedCheck(rig.cache)
 
@@ -926,6 +950,7 @@ final class CleanupProviderCacheTests: XCTestCase {
         }
         let alwaysLength = try makeRig { request in StubReply.completion(request, nil, finishReason: "length") }
         configureOpenAICompatible(alwaysLength.store)
+        alwaysLength.store.openAIBaseURL = "http://127.0.0.1:1235/v1"
         let check = try await boundedCheck(alwaysLength.cache)
         XCTAssertEqual(
             check.message, "OpenAI-compatible endpoint: The model reached its output limit before writing any text.")
@@ -962,6 +987,7 @@ final class CleanupProviderCacheTests: XCTestCase {
                 : StubReply.json(request, status: 400, #"{"error":{"message":"extra fields not permitted"}}"#)
         }
         configureOpenAICompatible(rig.store)
+        rig.store.openAIBaseURL = "http://127.0.0.1:1235/v1"
 
         let check = try await boundedCheck(rig.cache)
 
@@ -1015,6 +1041,7 @@ final class CleanupProviderCacheTests: XCTestCase {
                 StubReply.json(request, status: status, #"{"error":{"message":"refused"}}"#)
             }
             configureOpenAICompatible(rig.store)
+            rig.store.openAIBaseURL = "http://127.0.0.1:1235/v1"
 
             let check = try await boundedCheck(rig.cache)
 
@@ -1132,7 +1159,7 @@ final class CleanupProviderCacheTests: XCTestCase {
         let rig = try makeRig(readLocalServer: { _, _ in
             let count = (reads.value ?? 0) + 1
             reads.set(count)
-            let loaded = count > 1 ? [LocalServerLoadedModel("local-model", 1)] : []
+            let loaded = count > 1 ? [LocalServerLoadedModel("local-model", 1, contextTokens: 8192)] : []
             return LocalServerState(reach: .reached, models: [], loaded: loaded, failureDetail: nil)
         })
         configureOpenAICompatible(rig.store)
@@ -1146,15 +1173,21 @@ final class CleanupProviderCacheTests: XCTestCase {
 
         XCTAssertEqual(results.filter { $0 == .resident }.count, 1)
         XCTAssertEqual(results.filter { $0 == .started }.count, 1)
-        XCTAssertEqual(reads.value, 2)
+        XCTAssertEqual(reads.value, 4)
         XCTAssertEqual(rig.requests.count, 1, "the second recording should observe the first one's readying request")
     }
 
     @MainActor
     func testAColdLocalModelGetsOneFixedReadyingRequestWithoutUserContent() async throws {
+        let reads = LockedValue<Int>()
         let rig = try makeRig(
             readLocalServer: { _, _ in
-                LocalServerState(reach: .reached, models: [], loaded: [], failureDetail: nil)
+                let count = (reads.value ?? 0) + 1
+                reads.set(count)
+                return LocalServerState(
+                    reach: .reached, models: [],
+                    loaded: count > 2 ? [LocalServerLoadedModel("local-model", 1, contextTokens: 8192)] : [],
+                    failureDetail: nil)
             })
         configureOpenAICompatible(rig.store)
         rig.store.isEnabled = true

@@ -242,6 +242,81 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
         }
     }
 
+    func testLMStudiosOwnSizeUsesTheActualCopyAndAnEnforcedOutputCeiling() async throws {
+        for context in [512, 8192] {
+            let log = RequestLog()
+            let provider = OpenAICompatibleCleanupProvider(
+                model: "model", serviceURL: URL(string: LocalAiServer.lmStudioAddress)!,
+                localServerApp: .lmStudio,
+                readLocalServer: { _, _ in
+                    LocalServerState(
+                        reach: .reached, models: [],
+                        loaded: [LocalServerLoadedModel("model", 0, contextTokens: context)])
+                },
+                session: makeStubSession { request in
+                    log.record(request)
+                    return StubReply.completion(request, "Cleaned.")
+                })
+            do {
+                let answer = try await provider.clean(
+                    CleanupRequest(transcript: "sample", writingStylePrompt: "Edit."))
+                XCTAssertEqual(context, 8192)
+                XCTAssertEqual(answer.cleanedText, "Cleaned.")
+            } catch {
+                XCTAssertEqual(context, 512)
+                XCTAssertEqual(error as? CleanupProviderError, .localRequestTooLarge)
+            }
+            XCTAssertEqual(log.count, context == 8192 ? 1 : 0)
+            if context == 8192 {
+                XCTAssertEqual(log.all.first?.jsonBody["max_completion_tokens"] as? Int, 4096)
+                XCTAssertEqual(log.all.first?.jsonBody["max_tokens"] as? Int, 4096)
+            }
+        }
+    }
+
+    func testLMStudiosOwnSizeReadiesOnlyWithFixedWordsBeforeLearningTheLoadedSize() async throws {
+        for reportsSize in [true, false] {
+            let log = RequestLog()
+            let readied = LockedValue<Bool>()
+            let provider = OpenAICompatibleCleanupProvider(
+                model: "model", apiKey: "synthetic-key", serviceURL: URL(string: LocalAiServer.lmStudioAddress)!,
+                localServerApp: .lmStudio,
+                readLocalServer: { _, key in
+                    XCTAssertEqual(key, "synthetic-key")
+                    return LocalServerState(
+                        reach: .reached, models: [],
+                        loaded: readied.value == true
+                            ? [LocalServerLoadedModel("model", 0, contextTokens: reportsSize ? 4096 : 0)] : [])
+                },
+                session: makeStubSession { request in
+                    log.record(request)
+                    readied.set(true)
+                    return StubReply.completion(request, "Cleaned.")
+                })
+            do {
+                _ = try await provider.clean(
+                    CleanupRequest(
+                        transcript: "private sample", writingStylePrompt: "private instructions", maxOutputTokens: 64))
+                XCTAssertTrue(reportsSize)
+            } catch {
+                XCTAssertFalse(reportsSize)
+                XCTAssertEqual(error as? CleanupProviderError, .localContextUnknown)
+            }
+            let readying = try XCTUnwrap(log.all.first)
+            XCTAssertEqual(
+                readying.messageContents,
+                [
+                    LocalModelReadiness.request.writingStylePrompt, LocalModelReadiness.request.transcript,
+                ])
+            XCTAssertFalse(readying.messageContents.joined().contains("private"))
+            XCTAssertEqual(readying.jsonBody["max_completion_tokens"] as? Int, 1)
+            XCTAssertEqual(log.count, reportsSize ? 2 : 1)
+            if reportsSize {
+                XCTAssertEqual(log.all.last?.messageContents, ["private instructions", "private sample"])
+            }
+        }
+    }
+
     func testAnUnavailableLMStudioResidencyReadingRefusesTheTextSend() async throws {
         let log = RequestLog()
         let provider = OpenAICompatibleCleanupProvider(

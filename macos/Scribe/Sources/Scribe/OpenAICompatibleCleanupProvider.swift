@@ -23,6 +23,9 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
     private let transport: ChatCompletionsTransport
     private let lifecycle: LocalModelLifecycle
     private let plainRequests = OSAllocatedUnfairLock(initialState: false)
+    var requiresOutputLimit: Bool {
+        localServerApp == .lmStudio || localServerApp == .ollama && localTuning().contextTokens > 0
+    }
 
     init(
         id: String = "openai-compatible",
@@ -156,6 +159,7 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
                         plain: false,
                         local: true,
                         acquireLane: false,
+                        readying: true,
                         lease: lease)
                 })
         }
@@ -166,6 +170,7 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         plain: Bool,
         local: Bool,
         acquireLane: Bool = true,
+        readying: Bool = false,
         lease: LocalModelLifecycle.Lease? = nil
     ) async throws -> ChatCompletionsTransport.Completion {
         let tuning = localTuning()
@@ -185,6 +190,7 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         let timeout = self.timeout
         let requiresChosenContext = CleanupProviderCache.isConnectionTest
         let work: @Sendable () async throws -> ChatCompletionsTransport.Completion = {
+            var request = request
             if localServerApp == .lmStudio, contextTokens > 0 || !lifecycle.ownedCopies.isEmpty {
                 if let lease, let target {
                     let outcome = await lifecycle.reconcileLMStudio(
@@ -195,16 +201,34 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
                         throw CleanupProviderError.localContextUnavailable(outcome)
                     }
                 }
-                if localServerApp == .lmStudio, contextTokens > 0 {
-                    let observed = await readLocalServer(serviceURL.absoluteString, apiKey)
+            }
+            if localServerApp == .lmStudio {
+                var observed = await readLocalServer(serviceURL.absoluteString, apiKey)
+                var warmed: ChatCompletionsTransport.Completion?
+                try Task.checkCancellation()
+                guard observed.reach == .reached else { throw CleanupProviderError.localContextUnknown }
+                if contextTokens == 0, readying || observed.loaded(for: model) == nil {
+                    warmed = try await transport.complete(
+                        LocalModelReadiness.request,
+                        at: serviceURL.appendingPathComponent("chat/completions"),
+                        model: model, bearerToken: apiKey,
+                        temperature: CleanupSampling.onDeviceTemperature,
+                        reasoningEffort: CleanupReasoningEffort.none, includeLegacyMaxTokens: true,
+                        ttl: ttl, defaultTimeout: timeout, provider: .openAICompatible)
+                    observed = await readLocalServer(serviceURL.absoluteString, apiKey)
                     try Task.checkCancellation()
-                    guard observed.reach == .reached, let held = observed.loaded(for: model),
-                        held.contextTokens > 0
-                    else { throw CleanupProviderError.localContextUnknown }
-                    guard ContextBudget.requestFits(request, contextTokens: held.contextTokens) else {
-                        throw CleanupProviderError.localRequestTooLarge
-                    }
                 }
+                guard observed.reach == .reached, let held = observed.loaded(for: model),
+                    held.contextTokens > 0
+                else { throw CleanupProviderError.localContextUnknown }
+                request = CleanupRequest(
+                    transcript: request.transcript, writingStylePrompt: request.writingStylePrompt,
+                    singleLineMode: request.singleLineMode, timeout: request.timeout,
+                    maxOutputTokens: request.maxOutputTokens ?? 4096)
+                guard ContextBudget.requestFits(request, contextTokens: held.contextTokens) else {
+                    throw CleanupProviderError.localRequestTooLarge
+                }
+                if readying, let warmed { return warmed }
             }
 
             if localServerApp == .ollama, contextTokens > 0 {

@@ -28,7 +28,9 @@ enum CleanupDisclosure {
         + "instructions to that local app. With a context size chosen for Ollama, each native request first asks "
         + "Ollama for the model's context limit, using only its model name and any key saved for that address. "
         + "After the answer, Scribe asks Ollama which model it holds and its loaded size, without sending text. "
-        + "Neither request contains dictated text or vocabulary. Cleanup never sends "
+        + "Neither request contains dictated text or vocabulary. LM Studio's loaded size is checked before text is sent; "
+        + "if nothing is held at its own size, only the fixed readying request loads it before the size is checked again. "
+        + "Cleanup never sends "
         + "your snippet templates, and audio never leaves this Mac."
 
     static func summary(for kind: CleanupProviderKind, endpoint: String?, forceLocal: Bool? = nil) -> String {

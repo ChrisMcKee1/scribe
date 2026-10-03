@@ -240,6 +240,12 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   before a completion sends text. A smaller manual or busy copy is used only when the full request fits it; a
   missing size or unreadable residency refuses the text request with a reason. A requested size alone never
   authorizes the send. Another app can still change that shared copy between the reading and the completion.
+  LM Studio's own-size mode uses this same actual-copy guard. With nothing held, a fixed one-token "ok" request
+  readies the model first; no dictated text, vocabulary or user instructions go in that request. Only a confirmed
+  loaded size permits the actual completion. An omitted output ceiling becomes 4,096 tokens and is sent as a
+  ceiling, not merely reserved in the estimate. Test connection never retries context-bound requests without
+  an output limit or claims it did. This may refuse strict servers or thinking models that need that retry;
+  unlimited output cannot be safely fitted into a bounded context.
   Dictation planning and a saved-settings Test connection use the instructions and writing style from their settings
   store, not a separate live defaults read. A nonempty app-profile style still takes precedence.
   Ollama/LM Studio tuning is bound to that app's recognized local address. A stale app selection beside a different

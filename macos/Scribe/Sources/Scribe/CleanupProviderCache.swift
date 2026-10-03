@@ -346,6 +346,7 @@ final class CleanupProviderCache: Sendable {
     ///   passes, and anything else, a `length` stop included, fails without a third request.
     ///
     /// Every request first checks for cancellation, so a check stopped between two requests sends no second one.
+    /// Context-bound local requests always need an output ceiling, so those failures are final, never an uncapped retry.
     static func probe(
         _ provider: any CleanupProvider,
         kind: CleanupProviderKind,
@@ -376,7 +377,9 @@ final class CleanupProviderCache: Sendable {
         do {
             first = try await attempt(provider, capped)
         } catch let error as CleanupProviderError {
-            guard case .rejected(let status, _, _) = error, status == 400 || status == 422 else {
+            guard !provider.requiresOutputLimit,
+                case .rejected(let status, _, _) = error, status == 400 || status == 422
+            else {
                 throw error
             }
             ScribeLog.info(
@@ -388,6 +391,9 @@ final class CleanupProviderCache: Sendable {
         case .text:
             return .text
         case .stoppedAtCeiling:
+            guard !provider.requiresOutputLimit else {
+                throw CleanupProviderError.invalidResponse(.outputLimitReachedBeforeText)
+            }
             ScribeLog.info(.cleanup, "Test Connection confirming without an output limit", .name("provider", kind))
             return try await lastAttempt(provider, uncapped, answer: .textAfterOutputLimit)
         }

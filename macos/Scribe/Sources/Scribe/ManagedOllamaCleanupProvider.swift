@@ -27,6 +27,7 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
     private let readLocalServer: @Sendable (String) async -> LocalServerState
+    var requiresOutputLimit: Bool { contextTokens > 0 }
 
     init(
         model: String = CleanupSettingsStore.defaultOllamaModel,

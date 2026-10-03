@@ -28,6 +28,8 @@ final class CleanupDisclosureTests: XCTestCase {
         XCTAssertTrue(text.contains("the current writing style and guardrails"))
         XCTAssertTrue(text.contains("none of your vocabulary"))
         XCTAssertTrue(text.contains("Ollama or LM Studio on this Mac"))
+        XCTAssertTrue(text.contains("LM Studio's loaded size is checked before text is sent"))
+        XCTAssertTrue(text.contains("only the fixed readying request loads it"))
         XCTAssertTrue(text.contains("fixed readying request"))
         XCTAssertTrue(text.contains("Neither request contains dictated text or vocabulary"))
         XCTAssertTrue(text.contains("each native request first asks Ollama for the model's context limit"))
