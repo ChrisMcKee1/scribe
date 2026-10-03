@@ -4,6 +4,89 @@ import XCTest
 @testable import Scribe
 
 final class FoundryLocalResidencyTests: XCTestCase {
+    func testLoadReplyRequiresExplicitBooleanSuccess() throws {
+        XCTAssertNoThrow(try FoundryLocalResidencySource.confirmLoadReply(Data(#"{"success":true}"#.utf8)))
+        for reply in ["{}", #"{"success":false}"#, #"{"success":"true"}"#, "not json"] {
+            XCTAssertThrowsError(try FoundryLocalResidencySource.confirmLoadReply(Data(reply.utf8)))
+        }
+    }
+
+    func testUnknownOrInsufficientCapacityNeverLoadsTheColdModel() async throws {
+        for capacity in [0, 256] {
+            let loaded = StubSwitch()
+            let inspected = StubSwitch()
+            let log = RequestLog()
+            let provider = FoundryLocalCleanupProvider(
+                modelAlias: "qwen", status: .init(lookup: { URL(string: "http://localhost:5273")! }),
+                context: .init(lookup: { _ in capacity }),
+                residency: .init(
+                    isLoaded: { _ in
+                        inspected.turnOn()
+                        return false
+                    },
+                    loadCached: { _ in loaded.turnOn() }),
+                modelLane: AsyncLane(),
+                session: makeStubSession { request in
+                    log.record(request)
+                    return StubReply.completion(request, "never")
+                })
+            let request = CleanupRequest(
+                transcript: String(repeating: "words ", count: 100), writingStylePrompt: "Fix spelling.",
+                maxOutputTokens: 64)
+            let failure = try await cleanupFailure(of: provider, request)
+            XCTAssertEqual(failure, capacity == 0 ? .localContextUnknown : .localRequestTooLarge)
+            XCTAssertFalse(inspected.isOn)
+            XCTAssertFalse(loaded.isOn)
+            XCTAssertTrue(log.all.isEmpty)
+        }
+    }
+
+    func testPostLoadCapacityChangeRefusesTheTextDespiteAPassingPreflight() async throws {
+        let loaded = StubSwitch()
+        let log = RequestLog()
+        let provider = FoundryLocalCleanupProvider(
+            modelAlias: "qwen", status: .init(lookup: { URL(string: "http://localhost:5273")! }),
+            context: .init(lookup: { _ in loaded.isOn ? 256 : 4096 }),
+            residency: .init(isLoaded: { _ in loaded.isOn }, loadCached: { _ in loaded.turnOn() }),
+            modelLane: AsyncLane(),
+            session: makeStubSession { request in
+                log.record(request)
+                return StubReply.completion(request, "never")
+            })
+        let request = CleanupRequest(
+            transcript: String(repeating: "words ", count: 100), writingStylePrompt: "Fix spelling.",
+            maxOutputTokens: 64)
+        let failure = try await cleanupFailure(of: provider, request)
+        XCTAssertEqual(failure, .localRequestTooLarge)
+        XCTAssertTrue(loaded.isOn)
+        XCTAssertTrue(log.all.isEmpty)
+    }
+
+    func testChangedBackSettingsDuringLocalResidencyReadWithdrawReadiness() async throws {
+        let store = makeCleanupStore().store
+        store.isEnabled = true
+        store.providerKind = .openAICompatible
+        store.openAIBaseURL = "http://localhost:1234/v1"
+        store.openAIModel = "qwen"
+        store.selectedLocalApp = .lmStudio
+        let starting = StubSwitch()
+        let session = makeStubSession { request in
+            XCTFail("Stale readiness cannot send")
+            return StubReply.completion(request, "never")
+        }
+        let factory = CleanupProviderFactory.testing(
+            session: session,
+            readLocalServer: { _, _ in
+                store.isEnabled = false
+                store.isEnabled = true
+                return LocalServerState(reach: .reached, models: [], loaded: [], failureDetail: nil)
+            })
+        let cache = CleanupProviderCache(store: store, environment: [:], factory: factory)
+        let result = await cache.prepareLocalModel(isCurrent: { true }, onStarting: { starting.turnOn() })
+        XCTAssertEqual(result, .configurationChanged)
+        XCTAssertFalse(starting.isOn)
+    }
+
     func testCachedRealFoundryModelCanStartAndCompleteWithoutADownload() async throws {
         guard ProcessInfo.processInfo.environment["SCRIBE_REAL_FOUNDRY_COLD"] == "1" else {
             throw XCTSkip("Opt in with qwen2.5-0.5b already cached in Foundry Local.")

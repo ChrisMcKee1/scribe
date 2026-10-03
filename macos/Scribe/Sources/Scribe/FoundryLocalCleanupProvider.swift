@@ -83,6 +83,7 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
         let (url, wasCached) = try await completionsURL()
+        _ = try await boundedRequest(request)
         try await ensureLoaded()
         do {
             return try await send(request, to: url)
@@ -90,6 +91,8 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
             forget(url)
             ScribeLog.info(.cleanup, "Foundry Local no longer answers at the endpoint it reported; asking again")
             let (fresh, _) = try await completionsURL()
+            _ = try await boundedRequest(request)
+            try await ensureLoaded()
             return try await send(request, to: fresh)
         }
     }
@@ -126,6 +129,15 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
     }
 
     private func send(_ request: CleanupRequest, to url: URL) async throws -> CleanupResponse {
+        let bounded = try await boundedRequest(request)
+        let completion = try await transport.complete(
+            bounded, at: url, model: modelAlias, bearerToken: nil, temperature: CleanupSampling.onDeviceTemperature,
+            defaultTimeout: timeout, provider: .foundryLocal)
+        return CleanupResponse(
+            cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: modelAlias)
+    }
+
+    private func boundedRequest(_ request: CleanupRequest) async throws -> CleanupRequest {
         let limit = try await contextForPlanning()
         guard let limit else { throw CleanupProviderError.localContextUnknown }
         let bounded = CleanupRequest(
@@ -135,11 +147,7 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
         guard ContextBudget.requestFits(bounded, contextTokens: limit) else {
             throw CleanupProviderError.localRequestTooLarge
         }
-        let completion = try await transport.complete(
-            bounded, at: url, model: modelAlias, bearerToken: nil, temperature: CleanupSampling.onDeviceTemperature,
-            defaultTimeout: timeout, provider: .foundryLocal)
-        return CleanupResponse(
-            cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: modelAlias)
+        return bounded
     }
 
 }

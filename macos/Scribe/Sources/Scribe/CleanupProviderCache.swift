@@ -175,16 +175,19 @@ final class CleanupProviderCache: Sendable {
         isCurrent: @escaping @MainActor @Sendable () async -> Bool,
         onStarting: @escaping @MainActor @Sendable () async -> Void
     ) async -> LocalModelPreparationResult {
-        let connection: CleanupConnection
+        let admission: OneOffAdmission
         do {
-            connection = try CleanupProviderResolver.connection(store: store, environment: environment)
+            admission = try admitOneOff()
+        } catch is CleanupSendHandoff.Refusal {
+            return .configurationChanged
         } catch {
             return .notApplicable
         }
+        let connection = admission.connection
         guard Self.isRecognizedLocal(connection, selectedApp: connection.localServerApp) else {
             return .notApplicable
         }
-        let handoff = CleanupSendHandoff(store: store)
+        let handoff = admission.handoff
         do {
             return try await OperationDeadline.run(within: LocalModelDefaults.startWait, sleep: readinessTimer) {
                 try Task.checkCancellation()

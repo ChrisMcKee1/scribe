@@ -388,6 +388,11 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   daemon may still finish after cancellation; Scribe claims no ownership or retirement for it.
   `SCRIBE_REAL_FOUNDRY_COLD=1 swift test --package-path macos/Scribe --filter FoundryLocalResidencyTests`
   exercises cached Qwen2.5 0.5B readiness and a synthetic completion. It passed from a cold cached model on this Mac.
+- Foundry direct completion now checks request fit before inspecting/loading residency, then checks capacity again
+  immediately before sending. Unknown capacity or oversized instructions/text therefore load no cold model.
+  Endpoint-refresh retries repeat both preflight and residency confirmation. The load CLI must return explicit
+  boolean success, followed by a matching loaded-model reading. Local readiness captures its connection and
+  saved-settings revision in one admission, avoiding separately captured configuration/revision state.
 
 The runners cannot grant Microphone, Accessibility or Input Monitoring access and have no screen to look at, so the
 event tap, a real microphone, insertion into real apps and the menu bar and overlay UI still need a real Mac.

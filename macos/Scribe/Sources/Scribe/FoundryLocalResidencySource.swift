@@ -15,7 +15,8 @@ struct FoundryLocalResidencySource: Sendable {
                 guard !model.isEmpty, !model.hasPrefix("-") else { throw LocalModelReadinessError.unavailable }
                 let metadata = try await run(["model", "info", model, "-o", "json"], environment: environment)
                 let id = try cachedVariant(metadata, model: model)
-                _ = try await run(["model", "load", id, "-o", "json"], environment: environment)
+                let result = try await run(["model", "load", id, "-o", "json"], environment: environment)
+                try confirmLoadReply(result)
             })
     }
 
@@ -64,5 +65,12 @@ struct FoundryLocalResidencySource: Sendable {
             let id = info.model.id, !id.isEmpty, !id.hasPrefix("-")
         else { throw LocalModelReadinessError.unavailable }
         return id
+    }
+
+    static func confirmLoadReply(_ data: Data) throws {
+        struct Reply: Decodable { let success: Bool }
+        guard let reply = try? JSONDecoder().decode(Reply.self, from: data), reply.success else {
+            throw LocalModelReadinessError.unavailable
+        }
     }
 }
