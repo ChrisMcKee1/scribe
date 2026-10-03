@@ -567,7 +567,8 @@ final class LocalModelLifecycleTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(clock.pending, 1)
         clock.fire()
         let first = await shutdown.value
-        XCTAssertEqual(first, .failed)
+        // The overall shutdown and its use-drain timer have the same bound; either may win.
+        XCTAssertTrue(first == .failed || first == .drainTimedOut)
         XCTAssertTrue(fake.instances.isEmpty)
         finishLoad.open()
         try await fake.instanceStarted.wait()

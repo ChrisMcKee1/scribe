@@ -1019,6 +1019,52 @@ final class TranscriptionEngineTests: XCTestCase {
         ) { XCTAssertEqual($0 as? TranscriptionError, .terminatedBySignal(SIGTERM)) }
     }
 
+    func testTruncatedRecognizerOutputNeverYieldsItsKeptPrefix() throws {
+        for kind in [TranscriptionBackendKind.foundryLocal, .whisperCpp] {
+            let text = kind == .foundryLocal ? "{\"text\":\"kept prefix\"}\n" : "kept prefix"
+            let data = Data(text.utf8)
+            let result = ProcessRunner.Outcome(
+                terminationReason: .finished, exitStatus: 0, terminationSignal: nil,
+                standardOutput: ProcessRunner.CapturedOutput(
+                    data: data, totalByteCount: data.count + 1, reachedEndOfFile: true),
+                standardError: ProcessRunner.CapturedOutput(
+                    data: Data(), totalByteCount: 0, reachedEndOfFile: true),
+                duration: .milliseconds(1))
+            XCTAssertThrowsError(try TranscriptionEngine.transcript(from: result, kind: kind)) {
+                XCTAssertEqual($0 as? TranscriptionError, .malformedOutput)
+            }
+            XCTAssertEqual(
+                try TranscriptionEngine.transcript(from: outcome(stdout: text), kind: kind), "kept prefix")
+        }
+    }
+
+    func testWhisperRefusesInvalidUTF8InsteadOfReplacingLostTranscriptBytes() {
+        let result = ProcessRunner.Outcome(
+            terminationReason: .finished, exitStatus: 0, terminationSignal: nil,
+            standardOutput: ProcessRunner.CapturedOutput(
+                data: Data([0x61, 0xFF, 0x62]), totalByteCount: 3, reachedEndOfFile: true),
+            standardError: ProcessRunner.CapturedOutput(
+                data: Data(), totalByteCount: 0, reachedEndOfFile: true),
+            duration: .milliseconds(1))
+        XCTAssertThrowsError(try TranscriptionEngine.transcript(from: result, kind: .whisperCpp)) {
+            XCTAssertEqual($0 as? TranscriptionError, .malformedOutput)
+        }
+    }
+
+    func testOversizedFoundryStdoutRefusesAValidJSONPrefixAndDeletesScratch() async throws {
+        let directory = try makeTemporaryDirectory(label: "asr-output-overflow")
+        let script = try makeScript(
+            """
+            printf '{"text":"kept prefix"}\\n'
+            /usr/bin/head -c \(ProcessRunner.defaultOutputLimit + 1) /dev/zero
+            """, in: directory, named: "foundry")
+        let scratch = ScratchAudioDirectory(url: directory.appendingPathComponent("scratch"))
+        let engine = makeEngine(foundry: script, scratch: scratch)
+        let error = await transcriptionError { try await engine.transcribe(samples: self.tone, sampleRate: 16_000) }
+        XCTAssertEqual(error, .malformedOutput)
+        XCTAssertTrue(scratchFiles(scratch).isEmpty)
+    }
+
     func testTheDeadlineGrowsWithTheAudioAndIsLongerWhileCold() {
         let deadlines = TranscriptionDeadlines()
 

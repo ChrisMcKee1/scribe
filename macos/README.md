@@ -43,6 +43,8 @@ missing component rather than substituting another model. Choosing `whisper` nev
 These variables belong to that launch, not a persistent Finder setting. The fallback currently requests English
 (`-l en`), including with a multilingual model; this is not multilingual parity. Scripted subprocess tests cover
 resolution, arguments, transcription and scratch cleanup, not actual whisper.cpp or Intel speech accuracy.
+Neither backend accepts truncated captured stdout as a complete transcript. Whisper also refuses invalid UTF-8
+instead of replacing missing text bytes. The existing bounded output capture remains unchanged.
 
 ## Build
 

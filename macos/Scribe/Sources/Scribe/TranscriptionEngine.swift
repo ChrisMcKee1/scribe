@@ -602,6 +602,7 @@ final class TranscriptionEngine: Sendable {
         case .finished:
             break
         }
+        guard !outcome.standardOutput.isTruncated else { throw TranscriptionError.malformedOutput }
 
         switch kind {
         case .foundryLocal:
@@ -624,7 +625,10 @@ final class TranscriptionEngine: Sendable {
             throw output.isEmpty ? TranscriptionError.emptyOutput : TranscriptionError.malformedOutput
         case .whisperCpp:
             try throwForAbnormalExit(outcome)
-            let text = outcome.standardOutput.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let decoded = String(data: outcome.standardOutput.data, encoding: .utf8) else {
+                throw TranscriptionError.malformedOutput
+            }
+            let text = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { throw TranscriptionError.emptyOutput }
             return text
         }
