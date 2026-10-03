@@ -965,10 +965,15 @@ final class DictationController {
 
         let settings = services.cleanup.currentSettings()
         let tuning = LocalModelTuning.forSettings(settings)
-        let style = CleanupPrompt.writingStyle(profileStyle: profile?.writingStylePrompt, requireSingleLine: singleLine)
+        let profileStyle = profile?.writingStylePrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedStyle =
+            profileStyle.flatMap { $0.isEmpty ? nil : $0 }
+            ?? CleanupPrompt.effectiveOverride(settings.writingStyle, defaultValue: CleanupPrompt.defaultWritingStyle)
+        let style = CleanupPrompt.writingStyle(profileStyle: selectedStyle, requireSingleLine: singleLine)
         let promptWithoutGlossary = CleanupPrompt.systemPrompt(
             writingStyle: style,
-            useLocalPrompt: provider.usesLocalCleanupPrompt)
+            useLocalPrompt: provider.usesLocalCleanupPrompt,
+            frontierPrompt: settings.frontierPrompt, localPrompt: settings.localPrompt)
         let outputCeiling = cleanupOutputCeiling(for: settings, transcript: sent)
         let glossary = cleanupGlossary(
             vocabulary: services.rules.cleanupVocabulary,
@@ -983,7 +988,8 @@ final class DictationController {
             writingStylePrompt: CleanupPrompt.systemPrompt(
                 writingStyle: style,
                 useLocalPrompt: provider.usesLocalCleanupPrompt,
-                glossary: glossary),
+                glossary: glossary,
+                frontierPrompt: settings.frontierPrompt, localPrompt: settings.localPrompt),
             singleLineMode: singleLine,
             maxOutputTokens: outputCeiling)
         let started = clock.now
@@ -1044,7 +1050,7 @@ final class DictationController {
         let budget = ContextBudget.vocabularyTokens(
             context,
             instructions: promptWithoutGlossary,
-            transcript: correctedText,
+            transcript: CleanupPrompt.wrapTranscript(correctedText),
             outputCeiling: outputCeiling)
         let maxTerms =
             tuning.sendWholeVocabulary
@@ -1059,6 +1065,7 @@ final class DictationController {
     }
 
     private func cleanupOutputCeiling(for settings: CleanupSettingsSnapshot, transcript: String) -> Int? {
+        if settings.providerKind == .ollama { return estimateCleanupOutputTokens(transcript) }
         switch settings.selectedLocalApp {
         case .none:
             return nil

@@ -298,6 +298,9 @@ struct ChatCompletionsTransport: Sendable {
         }
         components.percentEncodedPath = "/api/chat"
         guard let chatURL = components.url else { throw CleanupProviderError.transport(URLError(.badURL)) }
+        guard ContextBudget.requestFits(cleanupRequest, contextTokens: contextTokens) else {
+            throw CleanupProviderError.localRequestTooLarge
+        }
         var request = URLRequest(url: chatURL)
         request.httpMethod = "POST"
         request.timeoutInterval = cleanupRequest.timeout ?? defaultTimeout

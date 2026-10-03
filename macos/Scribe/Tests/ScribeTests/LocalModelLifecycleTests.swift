@@ -575,7 +575,7 @@ final class LocalModelLifecycleTests: XCTestCase {
         fake.set { $0.barrier = barrier }
         let lifecycle = make(fake)
         let release = Task { await lifecycle.release(.freeMemory, target: lmTarget()) }
-        for _ in 0..<200 where fake.models.isEmpty { await Task.yield() }
+        try await fake.modelStarted.wait()
         let began = LockedFlag()
         let use = Task {
             let lease = try await lifecycle.beginUse(lmTarget())

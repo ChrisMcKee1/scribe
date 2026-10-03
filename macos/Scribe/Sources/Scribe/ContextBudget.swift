@@ -39,6 +39,16 @@ enum ContextBudget {
         readingVocabularyTokens(contextTokens, instructions: instructions)
     }
 
+    static func requestFits(_ request: CleanupRequest, contextTokens: Int) -> Bool {
+        let room = contextTokens - chatTemplateTokens - margin(contextTokens)
+        guard room >= 0 else { return false }
+        let instructions = TokenEstimate.vocabulary(request.writingStylePrompt)
+        let transcript = TokenEstimate.transcript(request.transcript)
+        let output = max(0, request.maxOutputTokens ?? 4096)
+        guard instructions <= room, transcript <= room - instructions else { return false }
+        return output <= room - instructions - transcript
+    }
+
     private static func vocabularyTokensFor(
         _ contextTokens: Int,
         instructions: String,

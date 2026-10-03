@@ -3,6 +3,28 @@ import XCTest
 @testable import Scribe
 
 final class ContextBudgetTests: XCTestCase {
+    func testRequestFitReservesTheActualWrappedTextPromptAnswerAndMargin() {
+        let context = 2048
+        let prompt = String(repeating: "a", count: 260)
+        let transcript = CleanupPrompt.wrapTranscript("日本語")
+        let room =
+            context - ContextBudget.chatTemplateTokens - 64
+            - TokenEstimate.vocabulary(prompt) - TokenEstimate.transcript(transcript)
+        XCTAssertTrue(
+            ContextBudget.requestFits(
+                CleanupRequest(transcript: transcript, writingStylePrompt: prompt, maxOutputTokens: room),
+                contextTokens: context))
+        XCTAssertFalse(
+            ContextBudget.requestFits(
+                CleanupRequest(transcript: transcript, writingStylePrompt: prompt, maxOutputTokens: room + 1),
+                contextTokens: context))
+        XCTAssertFalse(ContextBudget.requestFits(CleanupRequest(transcript: "small"), contextTokens: context))
+        XCTAssertFalse(
+            ContextBudget.requestFits(
+                CleanupRequest(transcript: String(repeating: "語", count: 2048), maxOutputTokens: 1),
+                contextTokens: context))
+    }
+
     func testTheEstimateCountsProseAndVocabularyAtTheirOwnRates() {
         XCTAssertEqual(TokenEstimate.prose(""), 0)
         XCTAssertEqual(TokenEstimate.prose(String(repeating: "a", count: 360)), 100)

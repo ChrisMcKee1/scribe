@@ -221,6 +221,13 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   `num_predict`, `think: false` and retention. With the app's own size selected, the existing Chat Completions path
   stays unchanged. Readiness checks the configured `/v1` app address and a held copy's context, not an unrelated
   default address or a different-size copy. Test connection uses its candidate size without saving it.
+  Before a chosen-size Ollama request is sent, Scribe conservatively estimates the full prompt, the actual wrapped
+  transcript, the output limit, chat-template room and margin. A request that does not fit fails without being sent;
+  dictation then keeps its recognized text. Managed Ollama gets bounded output and glossary planning even without
+  a selected local-app row. These are estimates, not tokenizer counts; learning a model's smaller context limit and
+  splitting oversize dictations remain open work.
+  Dictation planning and a saved-settings Test connection use the instructions and writing style from their settings
+  store, not a separate live defaults read. A nonempty app-profile style still takes precedence.
 - Dictionary's **Suggest with AI** asks before sending a bounded raw sample from the latest Try dictation report and
   suggestion instructions. It never reads saved history or sends expanded snippets/templates. Consent is tied to the
   saved cleanup configuration's revision: changing away and back still requires consent again. Every request/retry

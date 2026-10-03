@@ -165,6 +165,31 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertTrue(request.writingStylePrompt.contains("Term119"))
     }
 
+    func testManagedOllamaWithNoSelectedAppStillPlansItsVocabularyAndOutput() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        harness.load(
+            dictionary: (0..<120).map { DictionaryEntry(pattern: "spoken term \($0)", replacement: "Term\($0)") })
+        let store = makeCleanupStore().store
+        store.providerKind = .ollama
+        store.ollamaContextTokens = 32768
+        store.ollamaSendWholeVocabulary = true
+        store.writingStyle = "Use the saved concise style."
+        store.frontierPrompt = "Use this saved guardrail."
+        harness.cleanup.settings = store.snapshot()
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        harness.transcriber.defaultText = "spoken term 119"
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+        let request = try XCTUnwrap(provider.requests.first)
+        XCTAssertNotNil(request.maxOutputTokens)
+        XCTAssertTrue(request.writingStylePrompt.contains("Term0"))
+        XCTAssertTrue(request.writingStylePrompt.contains("Term119"))
+        XCTAssertTrue(request.writingStylePrompt.contains("Use the saved concise style."))
+        XCTAssertTrue(request.writingStylePrompt.contains("Use this saved guardrail."))
+        XCTAssertTrue(ContextBudget.requestFits(request, contextTokens: 32768))
+    }
+
     /// A casing fix, an expansion that holds its own spoken form, and a spelling whose output is another rule's spoken
     /// form each land once with cleanup on: they run on the text the provider is sent and never again on the reply,
     /// and one rule's output never feeds another rule after cleanup either.

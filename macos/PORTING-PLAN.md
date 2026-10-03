@@ -114,6 +114,12 @@ real Mac.
   connection through Ollama's native `/api/chat`, not `/v1/chat`. The request carries `options.num_ctx`,
   `options.num_predict`, `think: false` and the captured retention. The app's own size keeps Chat Completions.
   Readiness inspects the configured `/v1` app address and requires the held copy's size to agree with the choice.
+  Chosen-size Ollama requests are refused before transport when the conservative full prompt, wrapped transcript,
+  output limit, template and margin do not fit. Managed Ollama's pipeline now reserves output/glossary space even
+  with no selected-app row. This does not yet learn a model's smaller maximum or split an oversized dictation;
+  those remain explicit gaps, and refusal preserves recognized text instead of silently losing instructions.
+  Saved-settings probes and dictation prompt planning explicitly carry that store's saved guardrails and writing
+  style, with a nonempty profile style first, so the fit is measured against the prompt actually sent.
   Foundry Local cleanup now rejects any reported address outside literal loopback or `localhost`, and addresses
   with embedded credentials, query or fragment. Its ephemeral transport disables proxies, cookies and response
   caching and refuses redirects. Status parsing and the provider both enforce the destination before any text is sent.

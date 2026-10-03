@@ -468,7 +468,13 @@ final class CleanupProviderCache: Sendable {
                     frontierPrompt: candidate.frontierPrompt,
                     localPrompt: candidate.localPrompt)
             } else {
-                prompt = nil
+                let settings = store.snapshot()
+                prompt = CleanupPrompt.systemPrompt(
+                    writingStyle: CleanupPrompt.effectiveOverride(
+                        settings.writingStyle, defaultValue: CleanupPrompt.defaultWritingStyle),
+                    useLocalPrompt: provider.usesLocalCleanupPrompt,
+                    frontierPrompt: settings.frontierPrompt,
+                    localPrompt: settings.localPrompt)
             }
             let answer = try await Self.probe(provider, kind: kind, systemPrompt: prompt, deadline: deadline)
             let seconds = ChatCompletionsTransport.seconds(started.duration(to: .now))

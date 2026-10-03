@@ -78,6 +78,18 @@ final class CleanupProviderCacheTests: XCTestCase {
     }
 
     @MainActor
+    func testAnOversizeChosenOllamaProbeFailsWithoutSendingOrDroppingItsInstructions() async throws {
+        let rig = try makeRig()
+        rig.store.providerKind = .ollama
+        rig.store.ollamaContextTokens = 2048
+        rig.store.localPrompt = String(repeating: "instruction ", count: 2000)
+        let check = await rig.cache.checkConnection()
+        XCTAssertFalse(check.reachable)
+        XCTAssertTrue(check.message.contains("does not fit the chosen context size"), check.message)
+        XCTAssertTrue(rig.requests.all.isEmpty)
+    }
+
+    @MainActor
     func testManagedOllamaCandidateUsesItsSizeWithoutChangingSavedSettings() async throws {
         let rig = try makeRig(reply: { request in
             if request.url?.path == "/api/chat" {
@@ -103,8 +115,8 @@ final class CleanupProviderCacheTests: XCTestCase {
         rig.store.ollamaContextTokens = 16384
         let new = try rig.cache.provider()
         XCTAssertFalse((old as AnyObject) === (new as AnyObject))
-        _ = try await old.clean(CleanupRequest(transcript: "earlier snapshot"))
-        _ = try await new.clean(CleanupRequest(transcript: "new snapshot"))
+        _ = try await old.clean(CleanupRequest(transcript: "earlier snapshot", maxOutputTokens: 16))
+        _ = try await new.clean(CleanupRequest(transcript: "new snapshot", maxOutputTokens: 16))
         let sizes = rig.requests.all.compactMap {
             ($0.jsonBody["options"] as? [String: Any])?["num_ctx"] as? Int
         }

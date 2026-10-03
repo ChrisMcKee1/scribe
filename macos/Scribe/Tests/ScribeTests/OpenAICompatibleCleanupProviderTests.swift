@@ -362,6 +362,32 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
 }
 
 final class ManagedOllamaCleanupProviderTests: XCTestCase {
+    func testAnOversizeNativeRequestIsRefusedBeforeTransportOnBothOllamaPaths() async throws {
+        let log = RequestLog()
+        let session = makeStubSession { request in
+            log.record(request)
+            return StubReply.json(request, #"{"message":{"content":"never"},"done":true}"#)
+        }
+        let providers: [any CleanupProvider] = [
+            ManagedOllamaCleanupProvider(contextTokens: 2048, session: session),
+            OpenAICompatibleCleanupProvider(
+                model: "gemma4:e4b", serviceURL: URL(string: LocalAiServer.ollamaAddress)!,
+                localServerApp: .ollama,
+                localTuning: { LocalModelTuning(contextTokens: 2048, sendWholeVocabulary: false) },
+                session: session),
+        ]
+        for provider in providers {
+            do {
+                _ = try await provider.clean(
+                    CleanupRequest(transcript: String(repeating: "語", count: 2048), maxOutputTokens: 1))
+                XCTFail("An oversized request must not reach Ollama")
+            } catch {
+                XCTAssertEqual(error as? CleanupProviderError, .localRequestTooLarge)
+            }
+        }
+        XCTAssertTrue(log.all.isEmpty)
+    }
+
     func testAChosenContextUsesTheNativeOllamaRouteForDictation() async throws {
         let log = RequestLog()
         let provider = ManagedOllamaCleanupProvider(

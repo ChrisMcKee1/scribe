@@ -110,6 +110,7 @@ enum CleanupProviderError: Error, LocalizedError, FailureShapeDetailing, Equatab
     case transport(URLError)
     case timedOut
     case localContextUnavailable(LMStudioContextOutcome)
+    case localRequestTooLarge
     /// The endpoint answered with a status outside 200 to 299.
     case rejected(status: Int, provider: CleanupProviderKind, reply: CleanupServiceReply)
     /// The endpoint answered with a success status but not with a usable completion.
@@ -153,6 +154,8 @@ enum CleanupProviderError: Error, LocalizedError, FailureShapeDetailing, Equatab
             return Self.transportMessage(error.code)
         case .timedOut:
             return "The cleanup request timed out before the model answered."
+        case .localRequestTooLarge:
+            return "The cleanup request does not fit the chosen context size. Use a larger size or a shorter dictation."
         case .localContextUnavailable(let outcome):
             switch outcome {
             case .busy:
