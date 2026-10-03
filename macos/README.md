@@ -373,7 +373,15 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   connection cannot retry without an output limit. This is catalog-capacity checking, not proof of the active runtime's
   context or atomic ownership. Older CLIs without usable metadata cannot serve cleanup until upgraded.
   `SCRIBE_REAL_FOUNDRY_CLEANUP=1 swift test --package-path macos/Scribe --filter FoundryLocalCleanupProviderTests`
-  checks a synthetic bounded completion only when the default `qwen2.5-1.5b` is already cached and loaded.
+  checks a synthetic bounded completion only when the default `qwen2.5-1.5b` is already cached.
+- Foundry cleanup readiness now checks the runtime's loaded chat list and, if absent, loads only the exact variant
+  that `model info` positively identifies as cached. No download or unload command is used. Recording startup shares
+  the existing 30-second readiness bound and shows Starting local model; direct completions also wait for confirmed
+  residency within that bound. Loads share a lane and every completed load is reread before text is sent. Changed-back
+  saved settings withdraw readiness, and cancellation stops/reaps the CLI child. A load already accepted by the shared
+  daemon may still finish after cancellation; Scribe claims no ownership or retirement for it.
+  `SCRIBE_REAL_FOUNDRY_COLD=1 swift test --package-path macos/Scribe --filter FoundryLocalResidencyTests`
+  exercises cached Qwen2.5 0.5B readiness and a synthetic completion. It passed from a cold cached model on this Mac.
 
 The runners cannot grant Microphone, Accessibility or Input Monitoring access and have no screen to look at, so the
 event tap, a real microphone, insertion into real apps and the menu bar and overlay UI still need a real Mac.

@@ -710,11 +710,16 @@ extension CleanupProviderFactory {
             localModelLifecycle: LocalModelLifecycle(
                 idle: .zero,
                 actions: .init(unloadModel: { _, _, _ in true }, unloadInstance: { _, _, _ in true })),
-            foundryLocalContext: .init(lookup: { _ in 4096 }))
+            foundryLocalContext: .init(lookup: { _ in 4096 }),
+            foundryLocalResidency: .alreadyResident)
     }
 }
 
 // MARK: - Work that never finishes, and reads held in the middle
+
+extension FoundryLocalResidencySource {
+    static var alreadyResident: Self { Self(isLoaded: { _ in true }, loadCached: { _ in }) }
+}
 
 /// Work that never finishes on its own: `hold()` suspends until its task is cancelled and then throws
 /// `CancellationError`, as a stalled `az`, a hung `foundry status` or a silent endpoint would, given that Scribe's

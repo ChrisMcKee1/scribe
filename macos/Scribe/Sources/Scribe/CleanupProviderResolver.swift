@@ -82,6 +82,7 @@ struct CleanupProviderFactory: Sendable {
     var monotonicNow: @Sendable () -> ContinuousClock.Instant
     var localModelLifecycle: LocalModelLifecycle = .shared
     var foundryLocalContext: FoundryLocalContextSource = .live()
+    var foundryLocalResidency: FoundryLocalResidencySource = .live()
 
     static var live: CleanupProviderFactory {
         CleanupProviderFactory(
@@ -183,6 +184,7 @@ enum CleanupProviderResolver {
         case .foundryLocal(let modelAlias):
             return FoundryLocalCleanupProvider(
                 modelAlias: modelAlias, status: factory.foundryLocalStatus, context: factory.foundryLocalContext,
+                residency: factory.foundryLocalResidency,
                 session: factory.session,
                 now: factory.monotonicNow)
         case .ollama(let model):

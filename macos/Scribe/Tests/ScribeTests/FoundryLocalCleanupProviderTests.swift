@@ -175,7 +175,7 @@ final class FoundryLocalCleanupProviderTests: XCTestCase {
         let log = RequestLog()
         let provider = FoundryLocalCleanupProvider(
             status: .init(lookup: { URL(string: "http://localhost:5273")! }),
-            context: .init(lookup: { _ in 1024 }),
+            context: .init(lookup: { _ in 1024 }), residency: .alreadyResident,
             session: makeStubSession { request in
                 log.record(request)
                 return StubReply.completion(request, "Cleaned.")
@@ -201,12 +201,14 @@ final class FoundryLocalCleanupProviderTests: XCTestCase {
         }
         let status = FoundryLocalStatusSource { URL(string: "http://localhost:5273")! }
         let unknown = FoundryLocalCleanupProvider(
-            status: status, context: .init(lookup: { _ in 0 }), session: makeStubSession(handler))
+            status: status, context: .init(lookup: { _ in 0 }), residency: .alreadyResident,
+            session: makeStubSession(handler))
         let unknownFailure = try await cleanupFailure(of: unknown)
         XCTAssertEqual(unknownFailure, .localContextUnknown)
         XCTAssertTrue(log.all.isEmpty)
         let bounded = FoundryLocalCleanupProvider(
-            status: status, context: .init(lookup: { _ in 4096 }), session: makeStubSession(handler))
+            status: status, context: .init(lookup: { _ in 4096 }), residency: .alreadyResident,
+            session: makeStubSession(handler))
         _ = try await bounded.clean(CleanupRequest(transcript: "hello"))
         XCTAssertEqual(
             log.all.first?.jsonBody["max_completion_tokens"] as? Int,
@@ -218,7 +220,7 @@ final class FoundryLocalCleanupProviderTests: XCTestCase {
         let log = RequestLog()
         let provider = FoundryLocalCleanupProvider(
             status: .init(lookup: { URL(string: "http://localhost:5273")! }),
-            context: .init(lookup: { _ in changed.isOn ? 256 : 4096 }),
+            context: .init(lookup: { _ in changed.isOn ? 256 : 4096 }), residency: .alreadyResident,
             session: makeStubSession { request in
                 log.record(request)
                 return StubReply.completion(request, "never")
@@ -238,6 +240,7 @@ final class FoundryLocalCleanupProviderTests: XCTestCase {
         let status = FakeFoundryStatus(endpoints: ["http://localhost:5001", "http://localhost:5002"])
         let provider = FoundryLocalCleanupProvider(
             status: status.source, context: .init(lookup: { _ in changed.isOn ? 64 : 4096 }),
+            residency: .alreadyResident,
             session: makeStubSession { request in
                 log.record(request)
                 if log.all.count > 1 {
@@ -327,6 +330,7 @@ final class FoundryLocalCleanupProviderTests: XCTestCase {
     ) -> FoundryLocalCleanupProvider {
         FoundryLocalCleanupProvider(
             modelAlias: "qwen2.5-1.5b", status: status.source, context: .init(lookup: { _ in 4096 }),
+            residency: .alreadyResident,
             session: makeStubSession(handler),
             now: clock.monotonicNow)
     }

@@ -184,19 +184,24 @@ final class CleanupProviderCache: Sendable {
         guard Self.isRecognizedLocal(connection, selectedApp: connection.localServerApp) else {
             return .notApplicable
         }
+        let handoff = CleanupSendHandoff(store: store)
         do {
             return try await OperationDeadline.run(within: LocalModelDefaults.startWait, sleep: readinessTimer) {
                 try Task.checkCancellation()
-                let provider = try self.entry(for: connection).provider
+                let provider = AdmittedCleanupProvider(
+                    provider: try self.entry(for: connection).provider, handoff: handoff)
                 guard await self.isCurrent(connection, requested: isCurrent) else { return .configurationChanged }
                 let result = try await provider.prepareLocalModel(
                     isCurrent: {
-                        await self.isCurrent(connection, requested: isCurrent)
+                        guard (try? handoff.perform { true }) == true else { return false }
+                        return await self.isCurrent(connection, requested: isCurrent)
                     },
                     onStarting: onStarting)
                 guard await self.isCurrent(connection, requested: isCurrent) else { return .configurationChanged }
                 return result
             }
+        } catch is CleanupSendHandoff.Refusal {
+            return .configurationChanged
         } catch is CancellationError {
             return .cancelled
         } catch is OperationDeadlineError {
@@ -213,12 +218,12 @@ final class CleanupProviderCache: Sendable {
         selectedApp: LocalServerApp
     ) -> Bool {
         switch connection.target {
-        case .ollama:
+        case .foundryLocal, .ollama:
             return true
         case .openAICompatible(let serviceURL, _, _, _):
             guard connection.source == .settings, selectedApp != .none else { return false }
             return LocalAiServer.appAt(serviceURL.absoluteString) == selectedApp
-        case .foundryLocal, .microsoftFoundry:
+        case .microsoftFoundry:
             return false
         }
     }

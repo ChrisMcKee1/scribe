@@ -24,6 +24,8 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
     let modelAlias: String
     private let status: FoundryLocalStatusSource
     private let context: FoundryLocalContextSource
+    private let residency: FoundryLocalResidencySource
+    private let modelLane: AsyncLane
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
     private let now: @Sendable () -> ContinuousClock.Instant
@@ -46,6 +48,8 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
         modelAlias: String = CleanupSettingsStore.defaultFoundryLocalModelAlias,
         status: FoundryLocalStatusSource = .live(),
         context: FoundryLocalContextSource = .live(),
+        residency: FoundryLocalResidencySource = .live(),
+        modelLane: AsyncLane = FoundryLocalResidencySource.sharedLane,
         timeout: TimeInterval = 30,
         session: URLSession = CleanupProviderFactory.cleanupSession,
         now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
@@ -53,6 +57,8 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
         self.modelAlias = modelAlias
         self.status = status
         self.context = context
+        self.residency = residency
+        self.modelLane = modelLane
         self.timeout = timeout
         self.transport = ChatCompletionsTransport(
             session: URLSession(
@@ -77,6 +83,7 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
         let (url, wasCached) = try await completionsURL()
+        try await ensureLoaded()
         do {
             return try await send(request, to: url)
         } catch let error as CleanupProviderError where wasCached && error.isConnectionRefusal {
@@ -85,6 +92,37 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
             let (fresh, _) = try await completionsURL()
             return try await send(request, to: fresh)
         }
+    }
+
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async throws -> LocalModelPreparationResult {
+        try await modelLane.run {
+            try await LocalModelReadiness.prepare(
+                isResident: { try await self.residency.isLoaded(self.modelAlias) },
+                isCurrent: isCurrent,
+                onStarting: onStarting,
+                start: { try await self.loadAndConfirm() })
+        }
+    }
+
+    private func ensureLoaded() async throws {
+        try await OperationDeadline.run(within: LocalModelDefaults.startWait) {
+            try await self.modelLane.run {
+                if try await !self.residency.isLoaded(self.modelAlias) {
+                    try await self.loadAndConfirm()
+                }
+            }
+        }
+    }
+
+    private func loadAndConfirm() async throws {
+        try Task.checkCancellation()
+        try CleanupSendHandoff.current?.perform {}
+        try await residency.loadCached(modelAlias)
+        try Task.checkCancellation()
+        guard try await residency.isLoaded(modelAlias) else { throw LocalModelReadinessError.unavailable }
     }
 
     private func send(_ request: CleanupRequest, to url: URL) async throws -> CleanupResponse {
@@ -123,6 +161,7 @@ struct FoundryLocalContextSource: Sendable {
             } catch {
                 throw CleanupProviderError.localContextUnknown
             }
+
             if outcome.terminationReason == .cancelled { throw CancellationError() }
             guard outcome.terminationReason == .finished, outcome.exitStatus == 0 else {
                 throw CleanupProviderError.localContextUnknown
