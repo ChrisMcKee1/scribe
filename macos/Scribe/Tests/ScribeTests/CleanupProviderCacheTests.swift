@@ -85,13 +85,16 @@ final class CleanupProviderCacheTests: XCTestCase {
         rig.store.localPrompt = String(repeating: "instruction ", count: 2000)
         let check = await rig.cache.checkConnection()
         XCTAssertFalse(check.reachable)
-        XCTAssertTrue(check.message.contains("does not fit the chosen context size"), check.message)
+        XCTAssertTrue(check.message.contains("does not fit the available context size"), check.message)
         XCTAssertTrue(rig.requests.all.isEmpty)
     }
 
     @MainActor
     func testManagedOllamaCandidateUsesItsSizeWithoutChangingSavedSettings() async throws {
         let rig = try makeRig(reply: { request in
+            if request.url?.path == "/api/show" {
+                return StubReply.json(request, #"{"model_info":{"gemma.context_length":32768}}"#)
+            }
             if request.url?.path == "/api/chat" {
                 return StubReply.json(request, #"{"message":{"role":"assistant","content":"OK"},"done":true}"#)
             }
@@ -106,7 +109,7 @@ final class CleanupProviderCacheTests: XCTestCase {
             writingStyle: "", frontierPrompt: "", localPrompt: "")
         let check = await rig.cache.checkConnection(candidate: candidate)
         XCTAssertTrue(check.reachable, check.message)
-        let candidateSend = try XCTUnwrap(rig.requests.all.first)
+        let candidateSend = try XCTUnwrap(rig.requests.all.first { $0.url?.path == "/api/chat" })
         XCTAssertEqual(candidateSend.url?.path, "/api/chat")
         XCTAssertEqual((candidateSend.jsonBody["options"] as? [String: Any])?["num_ctx"] as? Int, 8192)
         XCTAssertEqual(rig.store.ollamaContextTokens, 4096)

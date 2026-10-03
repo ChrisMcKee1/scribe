@@ -116,8 +116,13 @@ real Mac.
   Readiness inspects the configured `/v1` app address and requires the held copy's size to agree with the choice.
   Chosen-size Ollama requests are refused before transport when the conservative full prompt, wrapped transcript,
   output limit, template and margin do not fit. Managed Ollama's pipeline now reserves output/glossary space even
-  with no selected-app row. This does not yet learn a model's smaller maximum or split an oversized dictation;
-  those remain explicit gaps, and refusal preserves recognized text instead of silently losing instructions.
+  with no selected-app row. Each native request reads `/api/show` at the configured address and caps its choice
+  and fit check at the model's smaller reported maximum. The metadata request holds only the model name and that
+  address's key. An unreadable or absent limit refuses text instead of assuming the choice is supported; readiness
+  recognizes a copy held at the learned cap. Tests cover both paths, a maximum changing between requests, a limit
+  below the picker's minimum, missing metadata and refusal without a chat send.
+  Runtime caps learned after a request, the app's own size and oversized-dictation splitting remain explicit gaps;
+  refusal preserves recognized text instead of silently losing instructions.
   Saved-settings probes and dictation prompt planning explicitly carry that store's saved guardrails and writing
   style, with a nonempty profile style first, so the fit is measured against the prompt actually sent.
   Custom-service local tuning and app identity require the selected app's actual recognized address; stale app

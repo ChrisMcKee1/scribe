@@ -224,8 +224,13 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   Before a chosen-size Ollama request is sent, Scribe conservatively estimates the full prompt, the actual wrapped
   transcript, the output limit, chat-template room and margin. A request that does not fit fails without being sent;
   dictation then keeps its recognized text. Managed Ollama gets bounded output and glossary planning even without
-  a selected local-app row. These are estimates, not tokenizer counts; learning a model's smaller context limit and
-  splitting oversize dictations remain open work.
+  a selected local-app row. With a size chosen, every native request first reads that model's maximum through
+  `/api/show` at the configured address, with its model name and saved key but no dictated text or instructions.
+  The smaller of that limit and the choice decides both `num_ctx` and the fit check, even below the size picker's
+  minimum. Missing metadata refuses the text request with a reason rather than guessing. Readiness recognizes a
+  model held at a previously learned cap instead of repeatedly starting it at an impossible size.
+  These are estimates, not tokenizer counts; learning a smaller runtime cap after a request and splitting oversize
+  dictations remain open work. The app's own size still keeps its previous Chat Completions behavior.
   Dictation planning and a saved-settings Test connection use the instructions and writing style from their settings
   store, not a separate live defaults read. A nonempty app-profile style still takes precedence.
   Ollama/LM Studio tuning is bound to that app's recognized local address. A stale app selection beside a different

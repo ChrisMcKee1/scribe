@@ -111,7 +111,8 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
                     let state = await self.readLocalServer(self.lifecycleEndpoint)
                     guard state.reach == .reached else { throw LocalModelReadinessError.unavailable }
                     guard let loaded = state.loaded(for: self.model) else { return false }
-                    return self.contextTokens == 0 || loaded.contextTokens == self.contextTokens
+                    return self.contextTokens == 0
+                        || loaded.contextTokens == self.transport.ollamaContextLimit(requested: self.contextTokens)
                 },
                 isCurrent: isCurrent,
                 onStarting: onStarting,

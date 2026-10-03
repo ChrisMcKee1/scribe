@@ -226,7 +226,7 @@ final class LocalServerClient: @unchecked Sendable {
     }
 
     func readMaxContext(_ endpoint: String, modelID: String, apiKey: String? = nil) async -> Int {
-        let roots = roots(for: endpoint).filter { $0.app == .ollama }
+        let roots = roots(for: endpoint, includeAliases: false).filter { $0.app == .ollama }
         guard !roots.isEmpty, !modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return 0
         }
@@ -245,13 +245,15 @@ final class LocalServerClient: @unchecked Sendable {
                 guard let info = body["model_info"] as? [String: Any] else {
                     return 0
                 }
+                var maximum = 0
                 for (key, value) in info where key.hasSuffix(".context_length") {
                     let length = Self.int64(value)
                     if length > 0 {
-                        return min(Int(length), Int(Int32.max))
+                        let limit = min(Int(length), Int(Int32.max))
+                        maximum = maximum > 0 ? min(maximum, limit) : limit
                     }
                 }
-                return 0
+                return maximum
             }
         } catch {
             return 0

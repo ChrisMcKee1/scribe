@@ -108,6 +108,26 @@ final class LocalServerClientTests: XCTestCase {
         XCTAssertFalse(LocalServerClient.sameModel(nil, nil))
     }
 
+    func testOllamaContextMetadataUsesTheConfiguredDestinationAndSmallestPositiveLimit() async {
+        let log = RequestLog()
+        let client = makeClient { request in
+            log.record(request)
+            XCTAssertEqual(request.url?.host(percentEncoded: false), "localhost")
+            XCTAssertEqual(request.url?.path, "/api/show")
+            XCTAssertEqual(RecordedRequest(request).jsonBody["model"] as? String, "model")
+            return StubReply.json(
+                request,
+                #"{"model_info":{"first.context_length":32768,"second.context_length":4096,"absent.context_length":0}}"#
+            )
+        }
+        let maximum = await client.readMaxContext("http://localhost:11434/v1", modelID: "model")
+        XCTAssertEqual(maximum, 4096)
+        XCTAssertEqual(log.count, 1)
+        let remote = await client.readMaxContext("https://remote.example/v1", modelID: "model")
+        XCTAssertEqual(remote, 0)
+        XCTAssertEqual(log.count, 1)
+    }
+
     func testOllamaListsTheModelsItCanChatWithAndWhatEachLoadedOneTakes() async {
         let log = RequestLog()
         let client = makeClient { request in

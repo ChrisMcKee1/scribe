@@ -25,7 +25,9 @@ enum CleanupDisclosure {
         + "with none of your "
         + "vocabulary. When a recording starts, Ollama or LM Studio on this Mac is asked whether it holds the selected "
         + "model at the needed size; if not, Scribe sends a fixed readying request with only \"ok\" and fixed "
-        + "instructions to that local app. Neither request contains dictated text or vocabulary. Cleanup never sends "
+        + "instructions to that local app. With a context size chosen for Ollama, each native request first asks "
+        + "Ollama for the model's context limit, using only its model name and any key saved for that address. "
+        + "Neither request contains dictated text or vocabulary. Cleanup never sends "
         + "your snippet templates, and audio never leaves this Mac."
 
     static func summary(for kind: CleanupProviderKind, endpoint: String?, forceLocal: Bool? = nil) -> String {

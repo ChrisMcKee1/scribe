@@ -143,7 +143,10 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
                     let state = await self.readLocalServer(endpoint, self.apiKey)
                     guard state.reach == .reached else { throw LocalModelReadinessError.unavailable }
                     guard let loaded = state.loaded(for: self.model) else { return false }
-                    return requestedContext == 0 || loaded.contextTokens == requestedContext
+                    let context =
+                        self.localServerApp == .ollama
+                        ? self.transport.ollamaContextLimit(requested: requestedContext) : requestedContext
+                    return requestedContext == 0 || loaded.contextTokens == context
                 },
                 isCurrent: isCurrent,
                 onStarting: onStarting,
@@ -278,12 +281,17 @@ enum OpenAICompatibleEndpoint {
 /// deployments reject fields they do not know (AGENTS.md, "Cloud cleanup stores nothing"). A Responses route, if one is
 /// ever added, has to send `store: false` and prove it with a wire test.
 struct ChatCompletionsTransport: Sendable {
+    private let learnedOllamaContext = OSAllocatedUnfairLock(initialState: 0)
     struct Completion: Sendable {
         let text: String
         let latency: TimeInterval
     }
 
     let session: URLSession
+
+    func ollamaContextLimit(requested: Int) -> Int {
+        learnedOllamaContext.withLock { $0 > 0 ? min(requested, $0) : requested }
+    }
 
     func completeOllama(
         _ cleanupRequest: CleanupRequest,
@@ -304,6 +312,17 @@ struct ChatCompletionsTransport: Sendable {
         guard ContextBudget.requestFits(cleanupRequest, contextTokens: contextTokens) else {
             throw CleanupProviderError.localRequestTooLarge
         }
+        let maximum = await LocalServerClient(session: session).readMaxContext(
+            url.absoluteString, modelID: model, apiKey: bearerToken)
+        try Task.checkCancellation()
+        learnedOllamaContext.withLock { $0 = maximum }
+        guard maximum > 0 else {
+            throw CleanupProviderError.localContextUnknown
+        }
+        let effectiveContext = min(contextTokens, maximum)
+        guard ContextBudget.requestFits(cleanupRequest, contextTokens: effectiveContext) else {
+            throw CleanupProviderError.localRequestTooLarge
+        }
         var request = URLRequest(url: chatURL)
         request.httpMethod = "POST"
         request.timeoutInterval = cleanupRequest.timeout ?? defaultTimeout
@@ -322,7 +341,7 @@ struct ChatCompletionsTransport: Sendable {
                 keepAlive: keepAlive,
                 think: false,
                 options: .init(
-                    numContext: contextTokens,
+                    numContext: effectiveContext,
                     temperature: CleanupSampling.onDeviceTemperature,
                     numPredict: cleanupRequest.maxOutputTokens ?? 4096),
                 stream: false))

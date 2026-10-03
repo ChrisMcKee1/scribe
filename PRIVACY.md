@@ -270,6 +270,13 @@ only to that app on this PC and carry nothing you said, only an API key you
 saved for that address, if any: the one saved now, as cleanup requests carry, or,
 to free a copy Scribe loaded with a key you have since replaced, that earlier key.
 
+On macOS, with a context size chosen for Ollama, each native cleanup or readying
+request first asks the configured local address for that model's context limit.
+This metadata request carries only the model name and any key saved for that
+address, not dictated text, instructions or vocabulary. Scribe caps the chosen
+size at that limit and refuses to send the text if the full request does not fit,
+or if Ollama does not report a limit.
+
 AI cleanup never sends audio, your snippet templates, your dictation history, or
 the name of the focused application.
 
