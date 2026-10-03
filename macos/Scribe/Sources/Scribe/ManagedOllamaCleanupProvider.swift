@@ -71,6 +71,8 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
             return try await lifecycle.beginUse(
                 LocalModelTarget(
                     endpoint: lifecycleEndpoint, model: model, app: .ollama, apiKey: nil))
+        } catch LocalModelLifecycleError.closing {
+            throw CancellationError()
         } catch is LocalModelLifecycleError {
             throw CleanupProviderError.timedOut
         }

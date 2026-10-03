@@ -158,7 +158,7 @@ final class CleanupProviderCache: Sendable {
     @discardableResult
     func releaseLocalModel(_ reason: LocalModelReleaseReason) async -> LocalModelReleaseOutcome {
         let served = lifecycle.servedTarget
-        guard served != nil || !lifecycle.ownedCopies.isEmpty else { return .nothingToRelease }
+        guard reason == .shutdown || served != nil || !lifecycle.ownedCopies.isEmpty else { return .nothingToRelease }
         let wanted: @Sendable () -> Bool
         if reason == .configurationChanged {
             wanted = { [self] in currentLocalTarget() != served }

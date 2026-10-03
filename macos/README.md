@@ -399,6 +399,10 @@ Info.plist, verifies its signature and runs its library listing from inside it.
 - The same shutdown state is checked at every release commit. A late configuration-change, candidate,
   Free memory or automatic release is refused as no longer wanted, even when it started waiting for
   uses before shutdown. The final shutdown release remains allowed; already-committed unloads are unchanged.
+- Shutdown also closes local-model use admission, including a use already waiting behind an unload.
+  An empty cache still closes its lifecycle. Recognized-local cleanup providers report this as cancellation,
+  not a fictitious timeout, without reaching transport. LM Studio reconciliation checks closing before its
+  read and at its unload/load commit, so a read spanning shutdown cannot start a new model change.
 - Foundry Local cleanup now reads its selected chat model's supported `model info` metadata for context planning
   and again before each send, including an endpoint-refresh retry. The reported capacity only lowers a conservative
   4,096-token ceiling. Missing, invalid or mismatched capacity refuses cleanup explicitly, preserving ordinary

@@ -97,6 +97,96 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testAUseWaitingBehindTheFinalUnloadIsRefusedWhenTheUnloadEnds() async throws {
+        let fake = FakeUnloads()
+        let barrier = LifecycleGate()
+        fake.barrier = barrier
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock, idle: .zero)
+        try await owned(lifecycle, "i1")
+        let release = Task { await lifecycle.release(.freeMemory, target: lmTarget()) }
+        try await fake.modelStarted.wait()
+        let use = Task { try await lifecycle.beginUse(lmTarget()) }
+        await clock.waitForSleepers(1)
+        let shutdown = Task { await lifecycle.release(.shutdown, target: nil) }
+        await clock.waitForSleepers(2)
+        barrier.open()
+        _ = await release.value
+        _ = await shutdown.value
+        if case .failure(let error) = await use.result {
+            XCTAssertEqual(error as? LocalModelLifecycleError, .closing)
+        } else {
+            XCTFail("A waiting use cannot enter after shutdown")
+        }
+        XCTAssertEqual(lifecycle.useCount, 0)
+    }
+
+    func testReconciliationReadAcrossShutdownCannotUnloadOrLoadACopy() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock, idle: .zero)
+        let served = target()
+        let lease = try await lifecycle.beginUse(served)
+        let readStarted = LifecycleGate()
+        let resumeRead = LifecycleGate()
+        let loads = StubSwitch()
+        let reconcile = Task {
+            await lifecycle.reconcileLMStudio(
+                target: served, contextTokens: 8192, lease: lease,
+                read: { _, _ in
+                    readStarted.open()
+                    try? await resumeRead.wait()
+                    return LocalServerState(reach: .reached, models: [], loaded: [], failureDetail: nil)
+                },
+                load: { _, _, _ in
+                    loads.turnOn()
+                    return "late"
+                })
+        }
+        try await readStarted.wait()
+        let shutdown = Task { await lifecycle.release(.shutdown, target: nil) }
+        await clock.waitForSleepers(2)
+        resumeRead.open()
+        let reconciled = await reconcile.value
+        XCTAssertEqual(reconciled, .busy)
+        lease.end()
+        _ = await shutdown.value
+        XCTAssertFalse(loads.isOn)
+        XCTAssertTrue(fake.models.isEmpty)
+        XCTAssertTrue(fake.instances.isEmpty)
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+    }
+
+    func testCacheShutdownClosesAnUnusedLifecycleBeforeItsFirstUse() async throws {
+        let store = makeCleanupStore().store
+        let factory = CleanupProviderFactory.testing(
+            session: makeStubSession { request in
+                XCTFail("A closed lifecycle cannot reach transport")
+                return StubReply.completion(request, "never")
+            })
+        let cache = CleanupProviderCache(store: store, environment: [:], factory: factory)
+        let outcome = await cache.releaseLocalModel(.shutdown)
+        XCTAssertEqual(outcome, .nothingToRelease)
+        do {
+            _ = try await factory.localModelLifecycle.beginUse(target())
+            XCTFail("Empty shutdown still closes admission")
+        } catch {
+            XCTAssertEqual(error as? LocalModelLifecycleError, .closing)
+        }
+        store.isEnabled = true
+        store.providerKind = .openAICompatible
+        store.openAIBaseURL = "http://localhost:11434/v1"
+        store.openAIModel = "m"
+        let provider = try cache.admittedProvider()
+        do {
+            _ = try await provider.clean(
+                CleanupRequest(transcript: "never", writingStylePrompt: "Fix spelling.", maxOutputTokens: 64))
+            XCTFail("A provider cannot send after empty shutdown")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
     func testLateExplicitAndCandidateRetirementsCannotCommitAfterShutdown() async throws {
         let fake = FakeUnloads()
         fake.instanceResult = false
@@ -142,7 +232,7 @@ final class LocalModelLifecycleTests: XCTestCase {
         XCTAssertTrue(fake.instances.isEmpty)
     }
 
-    func testShutdownWithdrawsAutomaticRetryAndLaterLeaseCompletionCannotRestartIt() async throws {
+    func testShutdownWithdrawsAutomaticRetryAndRefusesNewUses() async throws {
         for paused in [false, true] {
             let fake = FakeUnloads()
             fake.modelResult = false
@@ -166,8 +256,12 @@ final class LocalModelLifecycleTests: XCTestCase {
             let instances = fake.instances.count
             fake.modelResult = true
             fake.instanceResult = true
-            let late = try await lifecycle.beginUse(target())
-            late.end()
+            do {
+                _ = try await lifecycle.beginUse(target())
+                XCTFail("Shutdown must close local use admission")
+            } catch {
+                XCTAssertEqual(error as? LocalModelLifecycleError, .closing)
+            }
             lifecycle.setIdle(.seconds(1))
             clock.fire()
             for _ in 0..<500 { await Task.yield() }

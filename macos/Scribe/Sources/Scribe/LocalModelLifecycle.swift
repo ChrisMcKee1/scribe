@@ -20,6 +20,7 @@ enum LocalModelLifecycleError: Error, Equatable, Sendable {
     /// An unload was still on its way after the bound, so the request is not sent.
     case unloadInProgress
     case drainTimedOut
+    case closing
 }
 
 enum LMStudioContextOutcome: Sendable, Equatable {
@@ -222,6 +223,7 @@ final class LocalModelLifecycle: Sendable {
     /// `unloadInProgress` past that, so a dictation is typed as heard instead of reaching a model being unloaded.
     func beginUse(_ target: LocalModelTarget) async throws -> Lease {
         while true {
+            guard !state.withLock({ $0.releasesClosing }) else { throw LocalModelLifecycleError.closing }
             let gate = state.withLock { $0.inFlightUnload }
             guard let gate else { break }
             do {
@@ -233,7 +235,8 @@ final class LocalModelLifecycle: Sendable {
                 throw LocalModelLifecycleError.unloadInProgress
             }
         }
-        let admitted = state.withLock { state -> Bool in
+        let admitted = try state.withLock { state -> Bool in
+            guard !state.releasesClosing else { throw LocalModelLifecycleError.closing }
             // An unload published between the check and here sends the caller around again.
             guard state.inFlightUnload == nil else { return false }
             state.uses += 1
@@ -550,7 +553,9 @@ final class LocalModelLifecycle: Sendable {
         load: @escaping @Sendable (_ endpoint: String, _ model: String, _ contextTokens: Int) async -> String?
     ) async -> LMStudioContextOutcome {
         let refusedKey = "\(target.endpoint)|\(target.model)|\(contextTokens)"
-        let revision = state.withLock { $0.revision }
+        guard let revision = state.withLock({ state in state.releasesClosing ? nil : state.revision }) else {
+            return .unavailable
+        }
         let observed = await read(target.endpoint, target.apiKey)
         guard observed.reach == .reached || observed.reach == .notRunning else { return .unavailable }
         if observed.reach == .reached {
@@ -560,7 +565,9 @@ final class LocalModelLifecycle: Sendable {
         let held = observed.reach == .reached ? observed.loaded(for: target.model) : nil
         if observed.reach == .reached {
             let retirement = state.withLock { state -> (LifecycleGate, [Copy])? in
-                guard state.uses == 1, state.revision == revision, state.inFlightUnload == nil else { return nil }
+                guard !state.releasesClosing,
+                    state.uses == 1, state.revision == revision, state.inFlightUnload == nil
+                else { return nil }
                 let copies = state.copies.filter {
                     Self.sameServer($0.endpoint, target.endpoint) && $0.instanceID != held?.instanceID
                 }
@@ -588,7 +595,9 @@ final class LocalModelLifecycle: Sendable {
         }
         if let held, held.remainingTTLSeconds == nil { return .ready }
         let change = state.withLock { state -> LifecycleGate? in
-            guard state.uses == 1, state.revision == revision, state.inFlightUnload == nil else { return nil }
+            guard !state.releasesClosing,
+                state.uses == 1, state.revision == revision, state.inFlightUnload == nil
+            else { return nil }
             let gate = LifecycleGate()
             state.inFlightUnload = gate
             return gate

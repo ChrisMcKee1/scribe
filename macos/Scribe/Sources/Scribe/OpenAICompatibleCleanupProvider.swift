@@ -104,6 +104,8 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         guard let target = lifecycleTarget else { return nil }
         do {
             return try await lifecycle.beginUse(target)
+        } catch LocalModelLifecycleError.closing {
+            throw CancellationError()
         } catch is LocalModelLifecycleError {
             throw CleanupProviderError.timedOut
         }
