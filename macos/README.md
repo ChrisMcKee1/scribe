@@ -27,6 +27,23 @@ Foundry Local cleanup is not available through that official runtime, so use ano
 The setup hints are build-aware: an x86_64 build never recommends the incompatible Foundry Homebrew install. Runtime
 discovery and explicit executable overrides remain unchanged.
 
+### whisper.cpp fallback
+
+Install `whisper-cpp` and obtain its `ggml-tiny.en.bin` model using whisper.cpp's official model instructions.
+Scribe does not download that model. Stop any running Scribe before launching the packaged executable with:
+
+```bash
+SCRIBE_ASR_BACKEND=whisper SCRIBE_WHISPER_MODEL="/absolute/path/to/ggml-tiny.en.bin" \
+  macos/Scribe/dist/Scribe.app/Contents/MacOS/Scribe
+```
+
+The CLI is discovered from Homebrew on Apple Silicon or Intel and the search path. Set `SCRIBE_WHISPER_CLI` to an
+absolute executable path if needed; the CLI and model overrides work independently. An invalid override reports the
+missing component rather than substituting another model. Choosing `whisper` never selects Foundry instead.
+These variables belong to that launch, not a persistent Finder setting. The fallback currently requests English
+(`-l en`), including with a multilingual model; this is not multilingual parity. Scripted subprocess tests cover
+resolution, arguments, transcription and scratch cleanup, not actual whisper.cpp or Intel speech accuracy.
+
 ## Build
 
 ```bash

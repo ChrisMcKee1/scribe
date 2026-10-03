@@ -124,7 +124,9 @@ struct TranscriptionBackendResolver: Sendable {
         return TranscriptionBackendResolver(
             environment: environment,
             searchPath: ProcessRunner.defaultSearchPath(environment: environment),
-            whisperCliCandidates: ["/opt/homebrew/opt/whisper-cpp/bin/whisper-cli"],
+            whisperCliCandidates: [
+                "/opt/homebrew/opt/whisper-cpp/bin/whisper-cli", "/usr/local/opt/whisper-cpp/bin/whisper-cli",
+            ],
             whisperModelCandidates: [
                 sourceRoot.appendingPathComponent("Models/whisper/ggml-tiny.en.bin").path(percentEncoded: false),
                 currentDirectory.appendingPathComponent("macos/Scribe/Models/whisper/ggml-tiny.en.bin")
@@ -152,10 +154,28 @@ struct TranscriptionBackendResolver: Sendable {
                     ?? Self.defaultFoundryModelAlias)
         }
 
-        let cli =
-            whisperCliCandidates.first(where: fileManager.isExecutableFile(atPath:)).map { URL(fileURLWithPath: $0) }
-            ?? ProcessRunner.locateExecutable(named: "whisper-cli", searchPath: searchPath)
-        let model = whisperModelCandidates.first(where: fileManager.fileExists(atPath:))
+        let cli: URL?
+        if let override = environment["SCRIBE_WHISPER_CLI"] {
+            guard fileManager.isExecutableFile(atPath: override) else {
+                throw TranscriptionError.backendMissing(.whisperCliNotFound)
+            }
+            cli = URL(fileURLWithPath: override)
+        } else {
+            cli =
+                whisperCliCandidates.first(where: fileManager.isExecutableFile(atPath:)).map {
+                    URL(fileURLWithPath: $0)
+                }
+                ?? ProcessRunner.locateExecutable(named: "whisper-cli", searchPath: searchPath)
+        }
+        let model: String?
+        if let override = environment["SCRIBE_WHISPER_MODEL"] {
+            guard fileManager.fileExists(atPath: override) else {
+                throw TranscriptionError.backendMissing(.whisperModelNotFound)
+            }
+            model = override
+        } else {
+            model = whisperModelCandidates.first(where: fileManager.fileExists(atPath:))
+        }
         if let cli, let model {
             return Self.whisper(cli: cli, model: URL(fileURLWithPath: model))
         }
