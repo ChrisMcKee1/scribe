@@ -51,6 +51,8 @@ An explicit non-null Foundry error also takes precedence over any text in that s
 into a log or shown as a transcript. Progress-prefixed Foundry replies are decoded without replacing damaged UTF-8 bytes.
 Foundry cleanup also refuses signal-terminated or truncated status, capacity and residency replies before trusting their
 JSON, so an incomplete management reply cannot authorize an endpoint, model load or text request.
+The speech model picker likewise rejects damaged catalog output and option-shaped model aliases. An explicit download
+terminated by a signal is a failure; long progress output alone does not invalidate a successful download.
 
 ## Build
 

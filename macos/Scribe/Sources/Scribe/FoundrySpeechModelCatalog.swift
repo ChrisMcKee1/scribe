@@ -34,13 +34,15 @@ enum FoundrySpeechModelCatalog {
     }
 
     static func list(cliURL: URL) async throws -> [FoundrySpeechModelChoice] {
+        try Task.checkCancellation()
         let outcome = try await ProcessRunner.run(
             cliURL, arguments: ["model", "list", "--type", "speech", "-o", "json"], timeout: .seconds(20))
+        try Task.checkCancellation()
         guard outcome.terminationReason == .finished else {
             if outcome.terminationReason == .cancelled { throw CancellationError() }
             throw FoundrySpeechModelError.catalogUnavailable
         }
-        guard outcome.exitStatus == 0,
+        guard outcome.exitStatus == 0, outcome.terminationSignal == nil, !outcome.standardOutput.isTruncated,
             let response = try? JSONDecoder().decode(ModelListResponse.self, from: outcome.standardOutput.data)
         else {
             throw FoundrySpeechModelError.catalogUnavailable
@@ -48,7 +50,9 @@ enum FoundrySpeechModelCatalog {
         return response.models
             .filter { $0.type.map { $0.caseInsensitiveCompare("speech") == .orderedSame } ?? true }
             .compactMap { model in
-                guard !model.alias.isEmpty else { return nil }
+                guard !model.alias.isEmpty, !model.alias.hasPrefix("-"), !model.alias.utf8.contains(0) else {
+                    return nil
+                }
                 return FoundrySpeechModelChoice(
                     alias: model.alias,
                     title: model.displayName.flatMap { $0.isEmpty ? nil : $0 } ?? model.alias,
@@ -57,16 +61,20 @@ enum FoundrySpeechModelCatalog {
     }
 
     static func download(alias: String, cliURL: URL) async throws {
-        guard !alias.isEmpty, !alias.utf8.contains(0) else {
+        try Task.checkCancellation()
+        guard !alias.isEmpty, !alias.hasPrefix("-"), !alias.utf8.contains(0) else {
             throw FoundrySpeechModelError.invalidAlias
         }
         let outcome = try await ProcessRunner.run(
             cliURL, arguments: ["model", "download", alias], timeout: .seconds(3_600), outputLimit: 16_384)
+        try Task.checkCancellation()
         guard outcome.terminationReason == .finished else {
             if outcome.terminationReason == .cancelled { throw CancellationError() }
             throw FoundrySpeechModelError.downloadFailed
         }
-        guard outcome.exitStatus == 0 else { throw FoundrySpeechModelError.downloadFailed }
+        guard outcome.exitStatus == 0, outcome.terminationSignal == nil else {
+            throw FoundrySpeechModelError.downloadFailed
+        }
     }
 
     private struct ModelListResponse: Decodable {
