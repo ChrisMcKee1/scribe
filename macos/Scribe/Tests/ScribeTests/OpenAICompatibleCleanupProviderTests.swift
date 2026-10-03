@@ -99,6 +99,36 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
         XCTAssertEqual(sent.jsonBody["max_tokens"] as? Int, 16)
     }
 
+    func testALoopbackLookingDomainIsRemoteAndCannotInheritLocalAppRequestFields() async throws {
+        for endpoint in [
+            "http://127.attacker.example/v1", "http://127.0.0.1.attacker.example/v1",
+            "https://remote.example/v1",
+        ] {
+            XCTAssertFalse(LocalAiServer.isOnThisMac(endpoint), endpoint)
+            let log = RequestLog()
+            let provider = OpenAICompatibleCleanupProvider(
+                model: "model", serviceURL: URL(string: endpoint)!, localServerApp: .lmStudio,
+                localTuning: { LocalModelTuning(contextTokens: 32768, sendWholeVocabulary: true) },
+                session: makeStubSession { request in
+                    log.record(request)
+                    return StubReply.completion(request, "Cleaned.")
+                })
+            XCTAssertFalse(provider.usesLocalCleanupPrompt)
+            XCTAssertEqual(provider.localServerApp, .none)
+            _ = try await provider.clean(CleanupRequest(transcript: "sample", maxOutputTokens: 16))
+            let body = try XCTUnwrap(log.all.first?.jsonBody)
+            for field in ["temperature", "reasoning_effort", "keep_alive", "ttl", "max_tokens", "options"] {
+                XCTAssertNil(body[field], field)
+            }
+        }
+        for endpoint in [
+            "http://127.0.0.1/v1", "http://127.10.20.30/v1", "http://[::1]/v1",
+            "http://localhost/v1", "http://app.localhost/v1",
+        ] {
+            XCTAssertTrue(LocalAiServer.isOnThisMac(endpoint), endpoint)
+        }
+    }
+
     func testALocalServerThatRejectsTheExtraFieldsFallsBackToPlainRequests() async throws {
         let log = RequestLog()
         let provider = OpenAICompatibleCleanupProvider(

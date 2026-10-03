@@ -228,6 +228,9 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   splitting oversize dictations remain open work.
   Dictation planning and a saved-settings Test connection use the instructions and writing style from their settings
   store, not a separate live defaults read. A nonempty app-profile style still takes precedence.
+  Ollama/LM Studio tuning is bound to that app's recognized local address. A stale app selection beside a different
+  address sends neither whole-vocabulary tuning nor app-specific request fields. Literal loopback IPs are parsed as
+  IPs: domains such as `127.example.com` are remote, not a server on this Mac.
 - Dictionary's **Suggest with AI** asks before sending a bounded raw sample from the latest Try dictation report and
   suggestion instructions. It never reads saved history or sends expanded snippets/templates. Consent is tied to the
   saved cleanup configuration's revision: changing away and back still requires consent again. Every request/retry

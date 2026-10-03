@@ -3,6 +3,23 @@ import XCTest
 @testable import Scribe
 
 final class LocalModelTuningTextTests: XCTestCase {
+    func testAStaleAppSelectionCannotGiveAnotherAddressLocalTuning() {
+        let store = makeCleanupStore().store
+        store.providerKind = .openAICompatible
+        store.selectedLocalApp = .ollama
+        store.ollamaContextTokens = 32768
+        store.ollamaSendWholeVocabulary = true
+        for endpoint in ["https://remote.example/v1", LocalAiServer.lmStudioAddress, "http://localhost:9000/v1"] {
+            store.openAIBaseURL = endpoint
+            XCTAssertEqual(LocalModelTuning.appForSettings(store.snapshot()), .none)
+            XCTAssertEqual(LocalModelTuning.forSettings(store.snapshot()), .none)
+        }
+        store.openAIBaseURL = LocalAiServer.ollamaAddress
+        XCTAssertEqual(
+            LocalModelTuning.forSettings(store.snapshot()),
+            LocalModelTuning(contextTokens: 32768, sendWholeVocabulary: true))
+    }
+
     func testTheContextSizeListStartsWithTheAppsOwnSetting() {
         let sizes = LocalModelTuningText.contextSizes("Ollama")
 

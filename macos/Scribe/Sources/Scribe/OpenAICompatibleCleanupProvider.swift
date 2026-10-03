@@ -60,7 +60,8 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
         self.serviceURL = serviceURL ?? OpenAICompatibleEndpoint.serviceURL(for: completionsURL!) ?? completionsURL!
         self.apiStyle = apiStyle
         self.usesLocalCleanupPrompt = LocalAiServer.isOnThisMac(self.serviceURL.absoluteString)
-        self.localServerApp = localServerApp
+        self.localServerApp =
+            LocalAiServer.appAt(self.serviceURL.absoluteString) == localServerApp ? localServerApp : .none
         self.keepAliveMinutes = keepAliveMinutes
         self.localModelLane = localModelLane
         self.lifecycle = lifecycle ?? LocalModelLifecycle(idle: .zero, actions: .connected(to: session))

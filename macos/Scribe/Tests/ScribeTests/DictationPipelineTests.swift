@@ -190,6 +190,30 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertTrue(ContextBudget.requestFits(request, contextTokens: 32768))
     }
 
+    func testRemoteAddressWithAStaleAppSelectionDoesNotSendWholeVocabulary() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        harness.load(dictionary: [
+            DictionaryEntry(pattern: "mentioned", replacement: "Mentioned"),
+            DictionaryEntry(pattern: "private term", replacement: "PrivateTerm"),
+        ])
+        let store = makeCleanupStore().store
+        store.providerKind = .openAICompatible
+        store.selectedLocalApp = .ollama
+        store.openAIBaseURL = "https://remote.example/v1"
+        store.ollamaSendWholeVocabulary = true
+        store.ollamaContextTokens = 32768
+        harness.cleanup.settings = store.snapshot()
+        harness.cleanup.isEnabled = true
+        harness.transcriber.defaultText = "mentioned"
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+        let request = try XCTUnwrap(provider.requests.first)
+        XCTAssertTrue(request.writingStylePrompt.contains("Mentioned"))
+        XCTAssertFalse(request.writingStylePrompt.contains("PrivateTerm"))
+        XCTAssertNil(request.maxOutputTokens)
+    }
+
     /// A casing fix, an expansion that holds its own spoken form, and a spelling whose output is another rule's spoken
     /// form each land once with cleanup on: they run on the text the provider is sent and never again on the reply,
     /// and one rule's output never feeds another rule after cleanup either.

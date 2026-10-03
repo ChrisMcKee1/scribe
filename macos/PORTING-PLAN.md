@@ -120,6 +120,9 @@ real Mac.
   those remain explicit gaps, and refusal preserves recognized text instead of silently losing instructions.
   Saved-settings probes and dictation prompt planning explicitly carry that store's saved guardrails and writing
   style, with a nonempty profile style first, so the fit is measured against the prompt actually sent.
+  Custom-service local tuning and app identity require the selected app's actual recognized address; stale app
+  selections beside another address cannot expand the glossary or add local request fields. Loopback-looking
+  domains such as `127.example.com` no longer count as local IPs. Wire, resolver and pipeline tests pin these bounds.
   Foundry Local cleanup now rejects any reported address outside literal loopback or `localhost`, and addresses
   with embedded credentials, query or fragment. Its ephemeral transport disables proxies, cookies and response
   caching and refuses redirects. Status parsing and the provider both enforce the destination before any text is sent.

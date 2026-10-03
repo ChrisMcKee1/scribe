@@ -135,7 +135,8 @@ final class CleanupProviderCache: Sendable {
         case .openAICompatible(let url, let model, _, _):
             guard connection.source == .settings else { return nil }
             let app =
-                store.selectedLocalApp != .none ? store.selectedLocalApp : LocalAiServer.appAt(url.absoluteString)
+                connection.localServerApp != .none
+                ? connection.localServerApp : LocalAiServer.appAt(url.absoluteString)
             guard app != .none else { return nil }
             return LocalModelTarget(endpoint: url.absoluteString, model: model, app: app, apiKey: nil)
         default:
@@ -171,7 +172,7 @@ final class CleanupProviderCache: Sendable {
         } catch {
             return .notApplicable
         }
-        guard Self.isRecognizedLocal(connection, selectedApp: store.snapshot().selectedLocalApp) else {
+        guard Self.isRecognizedLocal(connection, selectedApp: connection.localServerApp) else {
             return .notApplicable
         }
         do {
@@ -517,7 +518,9 @@ final class CleanupProviderCache: Sendable {
             return true
         case .openAICompatible(let url, _, _, _):
             guard connection.source == .settings else { return false }
-            let app = store.selectedLocalApp != .none ? store.selectedLocalApp : LocalAiServer.appAt(url.absoluteString)
+            let app =
+                connection.localServerApp != .none
+                ? connection.localServerApp : LocalAiServer.appAt(url.absoluteString)
             return app != .none
         default:
             return false

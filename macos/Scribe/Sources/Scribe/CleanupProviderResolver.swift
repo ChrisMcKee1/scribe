@@ -306,7 +306,7 @@ enum CleanupProviderResolver {
     private static func settingsConnection(_ settings: CleanupSettingsSnapshot) throws -> CleanupConnection {
         var connection = try settingsTargetConnection(settings)
         connection.localModelIdleMinutes = settings.localModelIdleMinutes
-        connection.localServerApp = settings.selectedLocalApp
+        connection.localServerApp = LocalModelTuning.appForSettings(settings)
         connection.localContextTokens = LocalModelTuning.forSettings(settings).contextTokens
         return connection
     }

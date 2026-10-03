@@ -98,6 +98,22 @@ final class CleanupProviderResolverSettingsTests: XCTestCase {
         XCTAssertEqual(provider.displayName, "OpenAI-compatible endpoint")
     }
 
+    func testAStaleLocalSelectionIsNotCapturedByARemoteConnection() throws {
+        let store = makeCleanupStore().store
+        store.providerKind = .openAICompatible
+        store.openAIBaseURL = "https://remote.example/v1"
+        store.openAIModel = "model"
+        store.selectedLocalApp = .ollama
+        store.ollamaContextTokens = 32768
+        let captured = try connection(store)
+        XCTAssertEqual(captured.localServerApp, .none)
+        XCTAssertEqual(captured.localContextTokens, 0)
+        let cache = CleanupProviderCache(
+            store: store, environment: [:],
+            factory: .testing(session: makeStubSession { request in StubReply.completion(request, "Cleaned.") }))
+        XCTAssertNil(cache.currentLocalTarget())
+    }
+
     func testMicrosoftFoundryNeedsAnEndpointAndADeployment() {
         let fixture = makeCleanupStore()
         fixture.store.providerKind = .microsoftFoundry

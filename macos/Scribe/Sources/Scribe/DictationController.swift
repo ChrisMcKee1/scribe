@@ -1065,8 +1065,7 @@ final class DictationController {
     }
 
     private func cleanupOutputCeiling(for settings: CleanupSettingsSnapshot, transcript: String) -> Int? {
-        if settings.providerKind == .ollama { return estimateCleanupOutputTokens(transcript) }
-        switch settings.selectedLocalApp {
+        switch LocalModelTuning.appForSettings(settings) {
         case .none:
             return nil
         case .ollama, .lmStudio:

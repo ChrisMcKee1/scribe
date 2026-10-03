@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import os
 
@@ -177,10 +176,7 @@ enum FoundryLocalStatus {
             components.query == nil, components.fragment == nil,
             let host = url.host(percentEncoded: false)?.lowercased()
         else { return false }
-        if host == "localhost" || host == "::1" { return true }
-        var address = in_addr()
-        guard inet_pton(AF_INET, host, &address) == 1 else { return false }
-        return UInt32(bigEndian: address.s_addr) >> 24 == 127
+        return host == "localhost" || LocalAiServer.isLiteralLoopbackHost(host)
     }
 
     private struct Status: Decodable {

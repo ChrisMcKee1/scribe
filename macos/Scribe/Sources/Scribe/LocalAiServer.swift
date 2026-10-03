@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// An app on this Mac that serves AI models and that Scribe knows how to inspect and unload.
@@ -34,7 +35,14 @@ enum LocalAiServer {
         guard let host = uri.host(percentEncoded: false)?.lowercased() else {
             return false
         }
-        return host == "localhost" || host == "::1" || host.hasPrefix("127.") || host.hasSuffix(".localhost")
+        return host == "localhost" || isLiteralLoopbackHost(host) || host.hasSuffix(".localhost")
+    }
+
+    static func isLiteralLoopbackHost(_ host: String) -> Bool {
+        if host == "::1" { return true }
+        var address = in_addr()
+        guard inet_pton(AF_INET, host, &address) == 1 else { return false }
+        return UInt32(bigEndian: address.s_addr) >> 24 == 127
     }
 
     static func appAt(_ endpoint: String?) -> LocalServerApp {
