@@ -7,15 +7,29 @@ import XCTest
 private final class ManualClock: @unchecked Sendable {
     private let lock = NSLock()
     private var gates: [LifecycleGate] = []
+    private var activeDurations: [ObjectIdentifier: Duration] = [:]
     private var requested: [Duration] = []
+    private var observers: [(count: Int, duration: Duration?, gate: LifecycleGate)] = []
     private var instant = ContinuousClock.now
 
     var sleeper: @Sendable (Duration) async throws -> Void {
         { [self] duration in
+            try Task.checkCancellation()
             let gate = LifecycleGate()
-            lock.withLock {
+            let ready = lock.withLock { () -> [LifecycleGate] in
                 gates.append(gate)
+                activeDurations[ObjectIdentifier(gate)] = duration
                 requested.append(duration)
+                let ready = observers.filter { $0.count <= registeredCount(for: $0.duration) }.map(\.gate)
+                observers.removeAll { $0.count <= registeredCount(for: $0.duration) }
+                return ready
+            }
+            for observer in ready { observer.open() }
+            defer {
+                lock.withLock {
+                    gates.removeAll { $0 === gate }
+                    activeDurations.removeValue(forKey: ObjectIdentifier(gate))
+                }
             }
             try await gate.wait()
         }
@@ -31,14 +45,33 @@ private final class ManualClock: @unchecked Sendable {
 
     func fire() {
         let all = lock.withLock { () -> [LifecycleGate] in
-            defer { gates = [] }
+            defer {
+                gates = []
+                activeDurations = [:]
+            }
             return gates
         }
         for gate in all { gate.open() }
     }
 
-    func waitForSleepers(_ count: Int) async {
-        for _ in 0..<2000 where pending < count { await Task.yield() }
+    private func registeredCount(for duration: Duration?) -> Int {
+        guard let duration else { return gates.count }
+        return activeDurations.values.filter { $0 == duration }.count
+    }
+
+    func waitForSleepers(_ count: Int, duration: Duration? = nil) async {
+        let arrived = LifecycleGate()
+        let ready = lock.withLock { () -> Bool in
+            guard registeredCount(for: duration) < count else { return true }
+            observers.append((count, duration, arrived))
+            return false
+        }
+        if ready { return }
+        do {
+            try await OperationDeadline.run(within: .seconds(30)) { try await arrived.wait() }
+        } catch {
+            XCTFail("The manual timer did not register the expected sleepers")
+        }
     }
 }
 
@@ -97,6 +130,67 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testConfigurationRetirementRetriesBehindActiveUseWithoutUnloadingNewModel() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock, idle: .zero)
+        let old = lmTarget("old")
+        let original = try await lifecycle.beginUse(old)
+        original.end()
+        fake.modelResult = false
+        lifecycle.scheduleConfigurationRetirement(old, wanted: { true })
+        await clock.waitForSleepers(1)
+        XCTAssertEqual(clock.pending, 1)
+        XCTAssertEqual(clock.durations, [.seconds(30)])
+        XCTAssertEqual(fake.models, ["old"])
+        lifecycle.scheduleConfigurationRetirement(old, wanted: { true })
+        XCTAssertEqual(lifecycle.configurationRetirementCountForTests, 1)
+        let newer = try await lifecycle.beginUse(lmTarget("new"))
+        clock.fire()
+        await clock.waitForSleepers(1)
+        XCTAssertEqual(clock.pending, 1)
+        XCTAssertEqual(fake.models, ["old"], "A retry must drain the new configuration's active use")
+        fake.modelResult = true
+        newer.end()
+        let completed = await finishes(within: 30) {
+            while lifecycle.configurationRetirementCountForTests != 0 { await Task.yield() }
+        }
+        XCTAssertTrue(completed)
+        XCTAssertEqual(fake.models, ["old", "old"])
+        XCTAssertTrue(fake.instances.isEmpty)
+        _ = await lifecycle.release(.shutdown, target: nil)
+    }
+
+    func testConfigurationRetryIsWithdrawnWhenSettingsReturnOrShutdownBegins() async throws {
+        for shutdown in [false, true] {
+            let fake = FakeUnloads()
+            let clock = ManualClock()
+            let lifecycle = make(fake, clock: clock, idle: .zero)
+            let selected = LockedValue<LocalModelTarget>()
+            selected.set(lmTarget("new"))
+            let old = lmTarget("old")
+            fake.modelResult = false
+            lifecycle.scheduleConfigurationRetirement(old, wanted: { selected.value != old })
+            await clock.waitForSleepers(1)
+            XCTAssertEqual(clock.pending, 1)
+            XCTAssertEqual(fake.models, ["old"])
+            if shutdown {
+                _ = await lifecycle.release(.shutdown, target: nil)
+                lifecycle.scheduleConfigurationRetirement(old, wanted: { true })
+            } else {
+                selected.set(old)
+            }
+            clock.fire()
+            let completed = await finishes(within: 30) {
+                while lifecycle.configurationRetirementCountForTests != 0 { await Task.yield() }
+            }
+            XCTAssertTrue(completed)
+            XCTAssertEqual(fake.models, ["old"])
+            XCTAssertTrue(fake.instances.isEmpty)
+            _ = await lifecycle.release(.shutdown, target: nil)
+        }
+    }
+
     func testCandidateRetryBackoffIsBoundedAndReadsRotatedServerKey() async throws {
         let fake = FakeUnloads()
         let clock = ManualClock()
@@ -603,7 +697,7 @@ final class LocalModelLifecycleTests: XCTestCase {
                 await clock.waitForSleepers(1)
                 clock.fire()
             }
-            await clock.waitForSleepers(1)
+            await clock.waitForSleepers(1, duration: .seconds(30))
             XCTAssertEqual(clock.durations.last, .seconds(30))
             let shutdown = await lifecycle.release(.shutdown, target: nil)
             XCTAssertEqual(shutdown, .failed)
@@ -905,7 +999,7 @@ final class LocalModelLifecycleTests: XCTestCase {
         XCTAssertEqual(clock.durations.last, .seconds(600))
         clock.advance(.seconds(400))
         lifecycle.setIdle(.seconds(900))
-        await clock.waitForSleepers(2)
+        await clock.waitForSleepers(1, duration: .seconds(500))
         XCTAssertEqual(clock.durations.last, .seconds(500))
         clock.fire()
         _ = await lifecycle.release(.freeMemory, target: target())
@@ -934,7 +1028,7 @@ final class LocalModelLifecycleTests: XCTestCase {
         let lease = try await lifecycle.beginUse(target())
         lease.end()
         lifecycle.setIdle(.seconds(60))
-        await clock.waitForSleepers(1)
+        await clock.waitForSleepers(1, duration: .seconds(30))
         XCTAssertEqual(fake.models, ["m"])
         XCTAssertEqual(clock.durations.last, .seconds(30))
         for expected in [60, 120, 240, 300, 300] {
@@ -962,7 +1056,7 @@ final class LocalModelLifecycleTests: XCTestCase {
             let first = try await lifecycle.beginUse(target())
             first.end()
             lifecycle.setIdle(.seconds(60))
-            await clock.waitForSleepers(1)
+            await clock.waitForSleepers(1, duration: .seconds(30))
             XCTAssertEqual(clock.durations.last, .seconds(30))
             XCTAssertEqual(fake.models.count, 1)
             var newer: LocalModelLifecycle.Lease?
@@ -1258,7 +1352,7 @@ final class LocalModelLifecycleTests: XCTestCase {
         try await owned(lifecycle, "i1")
         await clock.waitForSleepers(1)
         clock.fire()
-        await clock.waitForSleepers(1)
+        await clock.waitForSleepers(1, duration: .seconds(30))
         XCTAssertEqual(lifecycle.ownedCopies.count, 1)
         XCTAssertEqual(clock.durations.last, .seconds(30))
         for expected in [60, 120, 240, 300, 300] {
@@ -1285,7 +1379,7 @@ final class LocalModelLifecycleTests: XCTestCase {
             try await owned(lifecycle, "i1")
             await clock.waitForSleepers(1)
             clock.fire()
-            await clock.waitForSleepers(1)
+            await clock.waitForSleepers(1, duration: .seconds(30))
             XCTAssertEqual(clock.durations.last, .seconds(30))
             let attempts = fake.instances.count
             let lease = startsUse ? try await lifecycle.beginUse(target()) : nil
@@ -1309,7 +1403,7 @@ final class LocalModelLifecycleTests: XCTestCase {
         let lease = try await lifecycle.beginUse(target())
         lifecycle.notePause(true)
         lease.end()
-        await clock.waitForSleepers(1)
+        await clock.waitForSleepers(1, duration: .seconds(30))
         XCTAssertEqual(clock.durations.last, .seconds(30))
         XCTAssertEqual(fake.models.count, 1)
         lifecycle.notePause(false)

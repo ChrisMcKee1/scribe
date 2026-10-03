@@ -5,6 +5,54 @@ import os
 @testable import Scribe
 
 final class CleanupProviderCacheTests: XCTestCase {
+    func testInvalidatingDisabledCleanupRetriesItsFormerLocalModelRetirement() async throws {
+        let fixture = makeCleanupStore()
+        configureOpenAICompatible(fixture.store)
+        fixture.store.isEnabled = true
+        fixture.store.localModelIdleMinutes = 0
+        let retryStarted = LifecycleGate()
+        let retry = LifecycleGate()
+        let attempts = LockedValue<Int>()
+        let lifecycle = LocalModelLifecycle(
+            idle: .zero,
+            actions: .init(
+                unloadModel: { _, model, _ in
+                    XCTAssertEqual(model, "local-model")
+                    let count = (attempts.value ?? 0) + 1
+                    attempts.set(count)
+                    return count > 1
+                },
+                unloadInstance: { _, _, _ in
+                    XCTFail("An ordinary model has no tracked instance")
+                    return false
+                }),
+            sleeper: { duration in
+                XCTAssertEqual(duration, .seconds(30))
+                retryStarted.open()
+                try await retry.wait()
+            })
+        let cache = CleanupProviderCache(
+            store: fixture.store, environment: [:],
+            factory: .testing(
+                session: makeStubSession { request in
+                    XCTFail("Retirement cannot send a completion")
+                    return StubReply.completion(request, "never")
+                }), lifecycle: lifecycle)
+        let target = try XCTUnwrap(cache.currentLocalTarget())
+        let use = try await lifecycle.beginUse(target)
+        use.end()
+        fixture.store.isEnabled = false
+        cache.invalidate()
+        try await retryStarted.wait()
+        XCTAssertEqual(attempts.value, 1)
+        retry.open()
+        let completed = await finishes(within: 30) {
+            while lifecycle.configurationRetirementCountForTests != 0 { await Task.yield() }
+        }
+        XCTAssertTrue(completed)
+        XCTAssertEqual(attempts.value, 2)
+    }
+
     func testSavingACandidateKeyDoesNotMakeItsCopyLookLikeAnotherConfiguration() throws {
         let rig = try makeRig()
         configureOpenAICompatible(rig.store)

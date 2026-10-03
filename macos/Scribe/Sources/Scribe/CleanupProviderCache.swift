@@ -119,10 +119,9 @@ final class CleanupProviderCache: Sendable {
         ScribeLog.debug(.cleanup, "Dropped the cached cleanup provider")
         // A configuration that no longer uses the model it served frees it, once its uses have ended. A, B, A is not
         // a change: `wanted` is asked again when the release commits.
-        Task.detached { [self] in
-            guard let served else { return }
-            _ = await lifecycle.release(
-                .configurationChanged, target: served,
+        if let served {
+            lifecycle.scheduleConfigurationRetirement(
+                served,
                 wanted: { self.currentLocalTarget() != served })
         }
         applyIdleTime()

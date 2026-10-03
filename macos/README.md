@@ -440,6 +440,10 @@ Info.plist, verifies its signature and runs its library listing from inside it.
 - The shared operation deadline refuses an already cancelled caller before starting either work or its timer,
   and refuses success after caller cancellation. It still waits for all work to settle: synchronous Keychain
   consent and deliberately noncooperative work are not hard-stopped.
+- Failed retirement after cleanup changes configuration now uses the same 30-second to five-minute retry
+  scheduler, one task per former model. Every attempt rechecks the current saved configuration and drains
+  active uses, so switching back keeps that model and a use of the new model is not interrupted. Shutdown
+  permanently stops these tasks. Free memory remains a single attempt with an explicit failed result.
 - Refused Test connection candidate-copy retirements retry after 30 seconds, doubling up to five minutes,
   even with idle release set to Never. Each candidate has one retry task, and each attempt rechecks whether
   its configuration became saved, drains active uses and unloads only that candidate's tracked instance ids.
