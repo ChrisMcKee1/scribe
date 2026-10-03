@@ -183,6 +183,8 @@ final class CleanupProviderCache: Sendable {
             admission = try admitOneOff()
         } catch is CleanupSendHandoff.Refusal {
             return .configurationChanged
+        } catch is CancellationError {
+            return .cancelled
         } catch {
             return .notApplicable
         }

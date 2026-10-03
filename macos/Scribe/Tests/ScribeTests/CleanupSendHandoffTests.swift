@@ -5,6 +5,50 @@ import os
 @testable import Scribe
 
 final class CleanupSendHandoffTests: XCTestCase {
+    func testRecordingReadinessAfterShutdownReportsCancellationWithoutLookup() async throws {
+        let store = makeCleanupStore().store
+        store.isEnabled = true
+        var factory = CleanupProviderFactory.testing(
+            session: makeStubSession { request in
+                XCTFail("Closed recording readiness cannot send")
+                return StubReply.completion(request, "never")
+            })
+        factory.foundryLocalResidency = .init(
+            isLoaded: { _ in
+                XCTFail("Closed recording readiness cannot read residency")
+                return false
+            }, loadCached: { _ in XCTFail("Closed recording readiness cannot load") })
+        let cache = CleanupProviderCache(store: store, environment: [:], factory: factory)
+        _ = await cache.releaseLocalModel(.shutdown)
+        let result = await cache.prepareLocalModel(isCurrent: { true }, onStarting: {})
+        XCTAssertEqual(result, .cancelled)
+    }
+
+    func testRecordingReadinessSpanningShutdownCannotLoadAndReportsCancellation() async throws {
+        let store = makeCleanupStore().store
+        store.isEnabled = true
+        let began = LifecycleGate()
+        let resume = LifecycleGate()
+        var factory = CleanupProviderFactory.testing(
+            session: makeStubSession { request in
+                XCTFail("Withdrawn recording readiness cannot send")
+                return StubReply.completion(request, "never")
+            })
+        factory.foundryLocalResidency = .init(
+            isLoaded: { _ in
+                began.open()
+                try await resume.wait()
+                return false
+            }, loadCached: { _ in XCTFail("Withdrawn recording readiness cannot load") })
+        let cache = CleanupProviderCache(store: store, environment: [:], factory: factory)
+        let readiness = Task { await cache.prepareLocalModel(isCurrent: { true }, onStarting: {}) }
+        try await began.wait()
+        _ = await cache.releaseLocalModel(.shutdown)
+        resume.open()
+        let result = await readiness.value
+        XCTAssertEqual(result, .cancelled)
+    }
+
     func testClosingOneCacheDoesNotWithdrawAnotherWithTheSameSettings() async throws {
         let store = makeCleanupStore().store
         store.isEnabled = true
