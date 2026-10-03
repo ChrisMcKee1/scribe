@@ -97,6 +97,33 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testACancelledUseDoesNotWithdrawTheOwedIdleRetirement() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock)
+        try await owned(lifecycle, "idle-copy")
+        await clock.waitForSleepers(1)
+        XCTAssertGreaterThanOrEqual(clock.pending, 1)
+        let cancelled = Task {
+            _ = withUnsafeCurrentTask { $0?.cancel() }
+            do {
+                let lease = try await lifecycle.beginUse(lmTarget("other"))
+                lease.end()
+                XCTFail("A cancelled request cannot take a local-model lease")
+            } catch {
+                XCTAssertTrue(error is CancellationError)
+            }
+        }
+        await cancelled.value
+        XCTAssertEqual(lifecycle.useCount, 0)
+        clock.fire()
+        try await fake.instanceStarted.wait()
+        _ = await lifecycle.release(.shutdown, target: nil)
+        XCTAssertEqual(fake.instances.map(\.id), ["idle-copy"])
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+        XCTAssertTrue(fake.models.isEmpty)
+    }
+
     func testShutdownDuringResizeUnloadPreventsTheReplacementLoad() async throws {
         let fake = FakeUnloads()
         let clock = ManualClock()

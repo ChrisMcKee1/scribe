@@ -222,6 +222,7 @@ final class LocalModelLifecycle: Sendable {
     /// Starts a use of `target`. Waits for an unload already on its way, at most `Bounds.unloadWait`, and throws
     /// `unloadInProgress` past that, so a dictation is typed as heard instead of reaching a model being unloaded.
     func beginUse(_ target: LocalModelTarget) async throws -> Lease {
+        try Task.checkCancellation()
         while true {
             guard !state.withLock({ $0.releasesClosing }) else { throw LocalModelLifecycleError.closing }
             let gate = state.withLock { $0.inFlightUnload }
@@ -236,6 +237,7 @@ final class LocalModelLifecycle: Sendable {
             }
         }
         let admitted = try state.withLock { state -> Bool in
+            try Task.checkCancellation()
             guard !state.releasesClosing else { throw LocalModelLifecycleError.closing }
             // An unload published between the check and here sends the caller around again.
             guard state.inFlightUnload == nil else { return false }
