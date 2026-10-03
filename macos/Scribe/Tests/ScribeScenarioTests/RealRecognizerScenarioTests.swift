@@ -88,4 +88,57 @@ final class RealRecognizerScenarioTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(expectedOverlap, ScenarioText.minimumOverlap)
         XCTAssertGreaterThanOrEqual(recognizedWords.count, ScenarioPrivacy.words(clip.text).count * 3 / 2)
     }
+
+    func testDegradedAndStereoCapturesThroughTheInstalledRecognizer() async throws {
+        guard ProcessInfo.processInfo.environment["SCRIBE_REAL_ASR"] == "1" else {
+            throw XCTSkip("Set SCRIBE_REAL_ASR=1, with the cached Foundry speech model, for real degraded audio.")
+        }
+        let clip = try ScenarioLibrary.shared().clip("longer")
+        let scratch = try makeScenarioDirectory("asr-degraded")
+        let engine = TranscriptionEngine(
+            scratch: ScratchAudioDirectory(url: scratch.appendingPathComponent("asr", isDirectory: true)))
+        let backend = try engine.resolveBackend()
+        XCTAssertEqual(backend.kind, .foundryLocal)
+        let report = ScenarioReport("real-asr-degraded")
+        let noisy = ScenarioAudio.added(
+            clip.samples, ScenarioAudio.noiseAtSNR(clip.samples, snrDb: 10, seed: 42))
+        let reverberant = ScenarioAudio.reflected(clip.samples, sampleRate: clip.sampleRate)
+        let equalNoise = ScenarioAudio.added(
+            clip.samples, ScenarioAudio.noiseAtSNR(clip.samples, snrDb: 0, seed: 43))
+        let noisyReflections = ScenarioAudio.added(
+            reverberant, ScenarioAudio.noiseAtSNR(reverberant, snrDb: 10, seed: 44))
+        let signals = [
+            ("noise-10db", noisy, ScenarioChannelLayout.mono, 16000.0),
+            ("noise-0db", equalNoise, .mono, 16000.0),
+            ("reflections", reverberant, .mono, 16000.0),
+            ("reflections-noise-10db", noisyReflections, .mono, 16000.0),
+            ("stereo-left", clip.samples, .stereoOne(voice: 0, otherHasFloor: false), 44100.0),
+            ("stereo-right-floor", clip.samples, .stereoOne(voice: 1, otherHasFloor: true), 48000.0),
+        ]
+        for (name, samples, layout, rate) in signals {
+            let audio = try ScenarioDeviceAudio.device(
+                playing: samples, at: rate, layout: layout, encoding: .float32, seed: 42)
+            let device = ScenarioCaptureDevice(audio: audio)
+            let capture = AudioCaptureEngine(makeDevice: { device })
+            let owner = RecordingID.next()
+            let opened = try await underWatchdog("degraded microphone open") {
+                try await capture.start(owner: owner, policy: .hold(maximumDuration: nil), events: { _ in })
+            }
+            XCTAssertEqual(opened, .live)
+            let stream = device.stream(
+                frameCounts: ScenarioAudio.frameCounts(total: audio.frameCount, seed: 42, within: 17...4801))
+            try await underWatchdog("degraded device delivery") { try await stream.finished.wait() }
+            let seal = try XCTUnwrap(capture.retire(owner: owner))
+            let sealed = try await underWatchdog("degraded capture seal") { await seal.audio }
+            let captured = try XCTUnwrap(sealed)
+            XCTAssertEqual(captured.summary.sampleRate, 16000)
+            XCTAssertEqual(captured.summary.droppedBufferCount, 0)
+            let result = try await engine.transcribe(samples: captured.samples, sampleRate: 16000)
+            let overlap = ScenarioText.wordOverlap(expected: clip.text, actual: result.text)
+            report.note("\(name).overlap", value: overlap, digits: 3)
+            report.note("\(name).samples", count: captured.samples.count)
+            XCTAssertGreaterThanOrEqual(overlap, ScenarioText.minimumOverlap, name)
+        }
+        report.write()
+    }
 }

@@ -356,7 +356,13 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   `SCRIBE_SCENARIO_REPORT_DIR` names when it is set.
 - With Foundry Local and its model installed,
   `SCRIBE_REAL_ASR=1 swift test --package-path macos/Scribe --filter RealRecognizerScenarioTests` transcribes the
-  short fixtures with the real recognizer and holds each asserted phrase to Windows' word-overlap bar. The
+  short fixtures, the repeated long fixture and six degraded/stereo captures with the real recognizer. Each
+  asserted phrase is held to Windows' 0.6 word-overlap bar. Degraded cases include seeded white noise at 10 and
+  0 dB SNR, early reflections, reflections with 10 dB noise, 44.1 kHz left-channel speech and 48 kHz right-channel
+  speech with the other channel's floor. They all pass through production capture/resampling before decoding.
+  On this Mac's cached Parakeet v2, all six scored 1.0 word overlap; that is a controlled fixture result, not a
+  promise for real microphones, competing speech or every room. The noise SNR and reflection delays/gains have
+  deterministic tests even when real-ASR is off. No new model is downloaded by these added tests. The
   workflow's optional real speech recognition job does the same on a hosted runner, only when it is dispatched by
   hand; it fits one, with the model taking about 700 MB of disk and Foundry Local about 1.1 GB of memory.
 
