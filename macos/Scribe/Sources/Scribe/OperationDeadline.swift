@@ -20,8 +20,8 @@ enum OperationDeadlineError: Error, Equatable, Sendable {
 enum OperationDeadline {
     /// Runs `operation` and returns what it returns, or throws what it throws, unless `limit` passes first. Then the
     /// operation's task is cancelled and, once the operation has stopped, `OperationDeadlineError.exceeded` is thrown.
-    /// Cancelling the caller cancels the operation too, and the call then throws the operation's own error, a
-    /// `CancellationError` for everything Scribe runs, so a deadline and a cancellation stay apart.
+    /// Cancelling the caller cancels the operation too. An already cancelled caller starts no work, and a successful
+    /// result after caller cancellation is refused. Operation errors remain unchanged.
     ///
     /// - Parameter sleep: Waits out the limit; `Task.sleep` on the continuous clock. A test passes a timer it fires by
     ///   hand, so it can decide exactly where in the operation the deadline passes.
@@ -30,9 +30,11 @@ enum OperationDeadline {
         sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
         _ operation: @escaping @Sendable () async throws -> Value
     ) async throws -> Value {
-        try await withThrowingTaskGroup(of: Value.self) { group in
+        try Task.checkCancellation()
+        return try await withThrowingTaskGroup(of: Value.self) { group in
             group.addTask {
-                try await operation()
+                try Task.checkCancellation()
+                return try await operation()
             }
             group.addTask {
                 try await sleep(limit)
@@ -43,6 +45,7 @@ enum OperationDeadline {
             guard let first = try await group.next() else {
                 throw CancellationError()
             }
+            try Task.checkCancellation()
             return first
         }
     }

@@ -437,6 +437,9 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   context or atomic ownership. Older CLIs without usable metadata cannot serve cleanup until upgraded.
   `SCRIBE_REAL_FOUNDRY_CLEANUP=1 swift test --package-path macos/Scribe --filter FoundryLocalCleanupProviderTests`
   checks a synthetic bounded completion only when the default `qwen2.5-1.5b` is already cached.
+- The shared operation deadline refuses an already cancelled caller before starting either work or its timer,
+  and refuses success after caller cancellation. It still waits for all work to settle: synchronous Keychain
+  consent and deliberately noncooperative work are not hard-stopped.
 - Refused Test connection candidate-copy retirements retry after 30 seconds, doubling up to five minutes,
   even with idle release set to Never. Each candidate has one retry task, and each attempt rechecks whether
   its configuration became saved, drains active uses and unloads only that candidate's tracked instance ids.
