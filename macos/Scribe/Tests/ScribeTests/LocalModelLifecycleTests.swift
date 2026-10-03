@@ -97,6 +97,95 @@ private func lmTarget(_ model: String = "m", key: String? = nil) -> LocalModelTa
 }
 
 final class LocalModelLifecycleTests: XCTestCase {
+    func testCandidateRetryBackoffIsBoundedAndReadsRotatedServerKey() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock, idle: .zero)
+        let candidate = LocalModelLifecycle.Candidate { true }
+        try await LocalModelLifecycle.$candidate.withValue(candidate) { try await owned(lifecycle, "copy") }
+        fake.instanceResult = false
+        candidate.finish(in: lifecycle)
+        for delay in [30, 60, 120, 240, 300, 300] {
+            await clock.waitForSleepers(1)
+            XCTAssertEqual(clock.pending, 1)
+            XCTAssertEqual(clock.durations.last, .seconds(delay))
+            clock.fire()
+        }
+        await clock.waitForSleepers(1)
+        XCTAssertEqual(clock.pending, 1)
+        lifecycle.useSavedKeys { _ in "rotated-test-key" }
+        fake.requiredKey = "rotated-test-key"
+        clock.fire()
+        let completed = await finishes(within: 30) {
+            while lifecycle.candidateRetirementCountForTests != 0 { await Task.yield() }
+        }
+        XCTAssertTrue(completed)
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+        XCTAssertEqual(fake.instances.last?.key, "rotated-test-key")
+        XCTAssertTrue(fake.models.isEmpty)
+        _ = await lifecycle.release(.shutdown, target: nil)
+    }
+
+    func testRefusedCandidateRetirementRetriesOnlyItsInstanceWithNeverIdle() async throws {
+        let fake = FakeUnloads()
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock, idle: .zero)
+        try await owned(lifecycle, "served", model: "saved")
+        let candidate = LocalModelLifecycle.Candidate { true }
+        try await LocalModelLifecycle.$candidate.withValue(candidate) {
+            try await owned(lifecycle, "candidate", model: "unsaved")
+        }
+        fake.instanceResult = false
+        candidate.finish(in: lifecycle)
+        await clock.waitForSleepers(1)
+        XCTAssertEqual(clock.pending, 1)
+        XCTAssertEqual(clock.durations, [.seconds(30)])
+        XCTAssertEqual(fake.instances.map(\.id), ["candidate"])
+        candidate.retire(in: lifecycle)
+        fake.instanceResult = true
+        clock.fire()
+        let completed = await finishes(within: 30) {
+            while lifecycle.candidateRetirementCountForTests != 0 { await Task.yield() }
+        }
+        XCTAssertTrue(completed)
+        XCTAssertEqual(fake.instances.map(\.id), ["candidate", "candidate"])
+        XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["served"])
+        XCTAssertTrue(fake.models.isEmpty)
+        _ = await lifecycle.release(.shutdown, target: nil)
+    }
+
+    func testCandidateRetryRechecksSavedChoiceAndStopsAtShutdown() async throws {
+        for shutdown in [false, true] {
+            let fake = FakeUnloads()
+            let clock = ManualClock()
+            let lifecycle = make(fake, clock: clock, idle: .zero)
+            let wanted = LockedValue<Bool>()
+            wanted.set(true)
+            let candidate = LocalModelLifecycle.Candidate { wanted.value == true }
+            try await LocalModelLifecycle.$candidate.withValue(candidate) { try await owned(lifecycle, "copy") }
+            fake.instanceResult = false
+            candidate.finish(in: lifecycle)
+            await clock.waitForSleepers(1)
+            XCTAssertEqual(clock.pending, 1)
+            if shutdown {
+                _ = await lifecycle.release(.shutdown, target: nil)
+            } else {
+                wanted.set(false)
+            }
+            let attempts = fake.instances.count
+            clock.fire()
+            candidate.retire(in: lifecycle)
+            let completed = await finishes(within: 30) {
+                while lifecycle.candidateRetirementCountForTests != 0 { await Task.yield() }
+            }
+            XCTAssertTrue(completed)
+            XCTAssertEqual(fake.instances.count, attempts)
+            XCTAssertEqual(lifecycle.ownedCopies.map(\.instanceID), ["copy"])
+            XCTAssertTrue(fake.models.isEmpty)
+            _ = await lifecycle.release(.shutdown, target: nil)
+        }
+    }
+
     func testACancelledReconciliationReadsAndChangesNothing() async throws {
         let lifecycle = make(idle: .zero)
         let lease = try await lifecycle.beginUse(lmTarget())

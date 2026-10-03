@@ -437,6 +437,11 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   context or atomic ownership. Older CLIs without usable metadata cannot serve cleanup until upgraded.
   `SCRIBE_REAL_FOUNDRY_CLEANUP=1 swift test --package-path macos/Scribe --filter FoundryLocalCleanupProviderTests`
   checks a synthetic bounded completion only when the default `qwen2.5-1.5b` is already cached.
+- Refused Test connection candidate-copy retirements retry after 30 seconds, doubling up to five minutes,
+  even with idle release set to Never. Each candidate has one retry task, and each attempt rechecks whether
+  its configuration became saved, drains active uses and unloads only that candidate's tracked instance ids.
+  Keys are reread for the matching server. Shutdown cancels these retries permanently; an already committed
+  unload cannot be retracted. Refusal remains best effort while Scribe is running, not a promise after exit.
 - Live dictation forwards cancellation to its detached provider lookup. An already cancelled lookup reads
   no secret, and a secret read completing after cancellation returns no provider. A synchronous Keychain
   consent/read still cannot be interrupted; waiting ends only once that read returns.

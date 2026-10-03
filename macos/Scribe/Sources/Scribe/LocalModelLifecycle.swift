@@ -79,10 +79,7 @@ final class LocalModelLifecycle: Sendable {
             retire(in: lifecycle)
         }
         func retire(in lifecycle: LocalModelLifecycle) {
-            Task.detached {
-                _ = await lifecycle.release(
-                    .candidateFinished, target: nil, candidateID: self.id, wanted: self.wanted)
-            }
+            lifecycle.scheduleCandidateRetirement(self)
         }
     }
 
@@ -166,6 +163,7 @@ final class LocalModelLifecycle: Sendable {
         var isPaused = false
         var idleSince: ContinuousClock.Instant?
         var releasesClosing = false
+        var candidateRetirements: [UUID: (token: UUID, task: Task<Void, Never>, again: Bool)] = [:]
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -194,6 +192,7 @@ final class LocalModelLifecycle: Sendable {
     var useCount: Int { state.withLock { $0.uses } }
     var ownedCopies: [Copy] { state.withLock { $0.copies } }
     var servedTarget: LocalModelTarget? { state.withLock { $0.served } }
+    var candidateRetirementCountForTests: Int { state.withLock { $0.candidateRetirements.count } }
 
     func useSavedKeys(_ source: @escaping @Sendable (String) throws -> String?) {
         savedKeySource.withLock { $0 = source }
@@ -345,6 +344,36 @@ final class LocalModelLifecycle: Sendable {
 
     // MARK: Release
 
+    fileprivate func scheduleCandidateRetirement(_ candidate: Candidate) {
+        state.withLock { state in
+            guard !state.releasesClosing else { return }
+            if state.candidateRetirements[candidate.id] != nil {
+                state.candidateRetirements[candidate.id]?.again = true
+                return
+            }
+            let token = UUID()
+            let task = Task { [weak self] in
+                guard let self else { return }
+                defer {
+                    let again = self.state.withLock { state -> Bool in
+                        guard state.candidateRetirements[candidate.id]?.token == token else { return false }
+                        return state.candidateRetirements.removeValue(forKey: candidate.id)?.again == true
+                    }
+                    if again { self.scheduleCandidateRetirement(candidate) }
+                }
+                var delay = Duration.seconds(30)
+                while !Task.isCancelled {
+                    let outcome = await self.release(
+                        .candidateFinished, target: nil, candidateID: candidate.id, wanted: candidate.wanted)
+                    guard outcome == .failed || outcome == .drainTimedOut else { return }
+                    do { try await self.sleeper(delay) } catch { return }
+                    delay = min(.seconds(300), delay * 2)
+                }
+            }
+            state.candidateRetirements[candidate.id] = (token, task, false)
+        }
+    }
+
     /// Frees what `reason` frees, once no use is in flight. `wanted` is asked in the committing step, so a
     /// configuration that came back (A, B, A) or a predicate that went false cancels the release.
     func release(
@@ -359,6 +388,8 @@ final class LocalModelLifecycle: Sendable {
                 $0.idleTask?.cancel()
                 $0.idleTask = nil
                 $0.idleGeneration &+= 1
+                for retirement in $0.candidateRetirements.values { retirement.task.cancel() }
+                $0.candidateRetirements.removeAll()
             }
         }
         let revision = state.withLock { $0.revision }
