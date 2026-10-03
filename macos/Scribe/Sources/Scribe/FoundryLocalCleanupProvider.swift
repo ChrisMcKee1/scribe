@@ -128,6 +128,7 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
         try await residency.loadCached(modelAlias)
         try Task.checkCancellation()
         guard try await residency.isLoaded(modelAlias) else { throw LocalModelReadinessError.unavailable }
+        _ = try await boundedRequest(LocalModelReadiness.request)
     }
 
     private func send(_ request: CleanupRequest, to url: URL) async throws -> CleanupResponse {

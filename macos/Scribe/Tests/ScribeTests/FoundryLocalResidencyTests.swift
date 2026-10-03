@@ -4,6 +4,36 @@ import XCTest
 @testable import Scribe
 
 final class FoundryLocalResidencyTests: XCTestCase {
+    func testRecordingReadinessRechecksCapacityAfterLoadingBeforeReportingStarted() async throws {
+        for capacity in [0, 256, 4096] {
+            let loaded = StubSwitch()
+            let log = RequestLog()
+            let provider = FoundryLocalCleanupProvider(
+                modelAlias: "qwen",
+                context: .init(lookup: { _ in loaded.isOn ? capacity : 4096 }),
+                residency: .init(
+                    isLoaded: { _ in loaded.isOn },
+                    loadCached: { _ in loaded.turnOn() }),
+                modelLane: AsyncLane(),
+                session: makeStubSession { request in
+                    log.record(request)
+                    return StubReply.completion(request, "never")
+                })
+            do {
+                let result = try await provider.prepareLocalModel(isCurrent: { true }, onStarting: {})
+                XCTAssertEqual(capacity, 4096, "Unknown or insufficient post-load capacity must refuse readiness")
+                XCTAssertEqual(result, .started)
+            } catch {
+                XCTAssertEqual(
+                    error as? CleanupProviderError,
+                    capacity == 0 ? .localContextUnknown : .localRequestTooLarge)
+                XCTAssertNotEqual(capacity, 4096, "A fitting post-load capacity must stay usable")
+            }
+            XCTAssertTrue(loaded.isOn)
+            XCTAssertTrue(log.all.isEmpty, "Capacity confirmation cannot send user or readiness text")
+        }
+    }
+
     func testRealResidentFoundryReadinessChecksCapacityWithoutLoadOrText() async throws {
         guard ProcessInfo.processInfo.environment["SCRIBE_REAL_FOUNDRY_CLEANUP"] == "1" else {
             throw XCTSkip("Opt in with qwen2.5-1.5b already resident in Foundry Local.")
