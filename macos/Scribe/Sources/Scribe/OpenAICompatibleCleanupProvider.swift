@@ -332,8 +332,8 @@ enum OpenAICompatibleEndpoint {
 /// The body is `model`, the system and user messages, `stream: false`, for on-device models only `temperature`, and,
 /// for Test Connection only, `max_completion_tokens`.
 /// It never has a `store` field: Chat Completions keep nothing unless asked to with `store: true`, and some
-/// deployments reject fields they do not know (AGENTS.md, "Cloud cleanup stores nothing"). A Responses route, if one is
-/// ever added, has to send `store: false` and prove it with a wire test.
+/// deployments reject fields they do not know (AGENTS.md, "Cloud cleanup stores nothing"). The Responses route
+/// explicitly sends `store: false`; its default would otherwise retain the answer.
 struct ChatCompletionsTransport: Sendable {
     private struct OllamaContext {
         var endpoint: URL?
