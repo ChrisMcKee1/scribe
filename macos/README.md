@@ -214,7 +214,11 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
   that same server now, even with cleanup off, then the key used to load the copy. A settings or key change during
   the Keychain read refuses that reading; an unreadable key is logged by shape and the original key can still be tried.
   Management loads/unloads go to the configured address once, never raced across
-  loopback aliases. Foundry Local cleanup and speech-memory release remain open work. Test connection waits
+  loopback aliases. A refused idle/pause unload retries on the same lifecycle task after 30 seconds, doubling
+  to at most five minutes; every retry rechecks the original revision and rereads the destination's current key.
+  A newer use, resume or changed idle duration withdraws that task. Idle still unloads only tracked instance ids,
+  never another app's model. Other failed releases stay owed until a later existing reconciliation/release.
+  Foundry Local cleanup and speech-memory release remain open work. Test connection waits
   180 s for a recognized local app (Ollama, LM Studio), 90 s for other custom endpoints.
 - A chosen Ollama context size uses its native `/api/chat` route, for managed Ollama as well as Ollama selected under
   another AI service. Dictation, Test connection and the fixed readying request carry the same captured `num_ctx`,

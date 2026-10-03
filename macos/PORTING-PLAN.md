@@ -190,6 +190,12 @@ real Mac.
   caching and refuses redirects. Status parsing and the provider both enforce the destination before any text is sent.
   Cleanup failure notifications now use plain language and appear once per failure episode, resetting on successful
   cleanup or a cleanup configuration change. Real local-runtime release behavior still needs interactive verification.
+  Refused idle/pause releases now retry within the existing lifecycle task after 30 seconds, doubling up to
+  five minutes. Each retry keeps its original revision/generation, waits through the release lane and uses fresh
+  destination-scoped keys. New use, resume or retention change withdraws it; idle still frees only Scribe-owned
+  instance ids. Manual-clock tests pin repeated refusal/backoff, eventual rotated-key success, new-use/Never
+  cancellation and resumed-pause refusal. Candidate/configuration/Free memory failures still need a later
+  reconciliation or explicit release opportunity; no general unload retry policy is claimed.
 - **Rewritten menu bar notices** (0.5.0): applicable Windows dictation and tray notices are wired to the actual
   microphone, capture, recognition, insertion, clipboard, Quick Add and startup events, with plain-language
   templates and episode deciders. The trigger-by-trigger mapping and platform adaptations are below.

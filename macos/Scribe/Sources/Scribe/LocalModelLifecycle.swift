@@ -312,9 +312,15 @@ final class LocalModelLifecycle: Sendable {
                     do { try await sleeper(remaining) } catch { return }
                 }
                 guard let self, !Task.isCancelled else { return }
-                _ = await self.release(
-                    paused ? .pause : .idle, target: paused ? target : nil,
-                    decidedAt: revision, generation: generation)
+                var retryDelay = Duration.seconds(30)
+                while !Task.isCancelled {
+                    let outcome = await self.release(
+                        paused ? .pause : .idle, target: paused ? target : nil,
+                        decidedAt: revision, generation: generation)
+                    guard outcome == .failed || outcome == .drainTimedOut else { return }
+                    do { try await sleeper(retryDelay) } catch { return }
+                    retryDelay = min(.seconds(300), retryDelay * 2)
+                }
             }
         }
     }

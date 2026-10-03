@@ -669,6 +669,76 @@ final class LocalModelLifecycleTests: XCTestCase {
         XCTAssertEqual(fake.instances.map(\.id), ["i1"])
     }
 
+    func testARefusedIdleCopyRetriesWithBoundedBackoffAndUsesTheNewSavedKey() async throws {
+        let fake = FakeUnloads()
+        fake.requiredKey = "rotated"
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock)
+        try await owned(lifecycle, "i1")
+        await clock.waitForSleepers(1)
+        clock.fire()
+        await clock.waitForSleepers(1)
+        XCTAssertEqual(lifecycle.ownedCopies.count, 1)
+        XCTAssertEqual(clock.durations.last, .seconds(30))
+        for expected in [60, 120, 240, 300, 300] {
+            clock.fire()
+            await clock.waitForSleepers(1)
+            XCTAssertEqual(clock.durations.last, .seconds(expected))
+            XCTAssertEqual(lifecycle.ownedCopies.count, 1)
+        }
+        lifecycle.useSavedKeys { _ in "rotated" }
+        clock.fire()
+        for _ in 0..<2000 where !lifecycle.ownedCopies.isEmpty { await Task.yield() }
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+        XCTAssertEqual(fake.instances.last?.key, "rotated")
+        XCTAssertTrue(fake.models.isEmpty, "idle retries only tracked instance ids")
+        lifecycle.setIdle(.zero)
+    }
+
+    func testANewUseOrNeverSettingWithdrawsARefusedIdleRetry() async throws {
+        for startsUse in [false, true] {
+            let fake = FakeUnloads()
+            fake.instanceResult = false
+            let clock = ManualClock()
+            let lifecycle = make(fake, clock: clock)
+            try await owned(lifecycle, "i1")
+            await clock.waitForSleepers(1)
+            clock.fire()
+            await clock.waitForSleepers(1)
+            XCTAssertEqual(clock.durations.last, .seconds(30))
+            let attempts = fake.instances.count
+            let lease = startsUse ? try await lifecycle.beginUse(target()) : nil
+            if !startsUse { lifecycle.setIdle(.zero) }
+            fake.instanceResult = true
+            clock.fire()
+            for _ in 0..<200 { await Task.yield() }
+            XCTAssertEqual(fake.instances.count, attempts)
+            XCTAssertEqual(lifecycle.ownedCopies.count, 1)
+            lifecycle.setIdle(.zero)
+            lease?.end()
+            _ = await lifecycle.release(.shutdown, target: nil)
+        }
+    }
+
+    func testResumingWithdrawsARefusedPauseRetry() async throws {
+        let fake = FakeUnloads()
+        fake.modelResult = false
+        let clock = ManualClock()
+        let lifecycle = make(fake, clock: clock, idle: .zero)
+        let lease = try await lifecycle.beginUse(target())
+        lifecycle.notePause(true)
+        lease.end()
+        await clock.waitForSleepers(1)
+        XCTAssertEqual(clock.durations.last, .seconds(30))
+        XCTAssertEqual(fake.models.count, 1)
+        lifecycle.notePause(false)
+        fake.modelResult = true
+        clock.fire()
+        for _ in 0..<200 { await Task.yield() }
+        XCTAssertEqual(fake.models.count, 1)
+        XCTAssertTrue(lifecycle.ownedCopies.isEmpty)
+    }
+
     func testAChangedIdleTimeRestartsTheCountdownAndZeroNeverFrees() async throws {
         let fake = FakeUnloads()
         let clock = ManualClock()
