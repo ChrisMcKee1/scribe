@@ -238,6 +238,51 @@ final class CleanupProviderCacheTests: XCTestCase {
     }
 
     @MainActor
+    func testCancelledLiveProviderLookupReadsNoSecret() async throws {
+        let apiKeys = InMemorySecretStore([CleanupSettingsStore.openAIApiKeyAccount: "sk-test"])
+        let rig = try makeRig(apiKeys: apiKeys)
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        let cleanup = LiveDictationCleanup(cache: rig.cache)
+        let lookup = Task {
+            _ = withUnsafeCurrentTask { $0?.cancel() }
+            return try await cleanup.provider()
+        }
+        do {
+            _ = try await lookup.value
+            XCTFail("Cancelled lookup cannot return a provider")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(apiKeys.reads, 0)
+        XCTAssertEqual(rig.requests.count, 0)
+    }
+
+    @MainActor
+    func testLiveProviderLookupForwardsCancellationThroughHeldSecretRead() async throws {
+        let apiKeys = InMemorySecretStore([CleanupSettingsStore.openAIApiKeyAccount: "sk-test"])
+        let rig = try makeRig(apiKeys: apiKeys)
+        configureOpenAICompatible(rig.store)
+        rig.store.isEnabled = true
+        let pause = apiKeys.pauseNextRead()
+        let cleanup = LiveDictationCleanup(cache: rig.cache)
+        let lookup = Task { try await cleanup.provider() }
+        let reached = await finishes(within: 30) { await pause.waitUntilReached() }
+        XCTAssertTrue(reached, "The detached lookup must reach its secret read")
+        lookup.cancel()
+        pause.releaseOnceCancelled()
+        do {
+            _ = try await lookup.value
+            XCTFail("A late secret read cannot return a cancelled provider lookup")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(apiKeys.reads, 1)
+        XCTAssertEqual(rig.requests.count, 0)
+        _ = try await cleanup.provider()
+    }
+
+    @MainActor
     func testTheLiveDictationAdapterDropsAnAnswerAfterItsSettingsChange() async throws {
         let rig = try makeRig()
         configureOpenAICompatible(rig.store)

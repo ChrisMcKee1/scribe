@@ -220,12 +220,23 @@ struct LiveDictationCleanup: DictationCleaning {
     }
 
     func provider() async throws -> any CleanupProvider {
+        try Task.checkCancellation()
         let cache = cache
         // Detached, because a build reads the Keychain, and a Keychain read waits for the user whenever macOS asks
         // them to allow it; that wait must not hold the main actor.
-        return try await Task.detached(priority: .userInitiated) {
-            try cache.admittedProvider()
-        }.value
+        let work = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let provider = try cache.admittedProvider()
+            try Task.checkCancellation()
+            return provider
+        }
+        return try await withTaskCancellationHandler {
+            let provider = try await work.value
+            try Task.checkCancellation()
+            return provider
+        } onCancel: {
+            work.cancel()
+        }
     }
 
     func prepareLocalModel(

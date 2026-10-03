@@ -437,6 +437,9 @@ Info.plist, verifies its signature and runs its library listing from inside it.
   context or atomic ownership. Older CLIs without usable metadata cannot serve cleanup until upgraded.
   `SCRIBE_REAL_FOUNDRY_CLEANUP=1 swift test --package-path macos/Scribe --filter FoundryLocalCleanupProviderTests`
   checks a synthetic bounded completion only when the default `qwen2.5-1.5b` is already cached.
+- Live dictation forwards cancellation to its detached provider lookup. An already cancelled lookup reads
+  no secret, and a secret read completing after cancellation returns no provider. A synchronous Keychain
+  consent/read still cannot be interrupted; waiting ends only once that read returns.
 - Foundry cleanup readiness now checks the runtime's loaded chat list and, if absent, loads only the exact variant
   that `model info` positively identifies as cached. No download or unload command is used. Recording startup shares
   the existing 30-second readiness bound and shows Starting local model; direct completions also wait for confirmed
