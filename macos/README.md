@@ -144,6 +144,9 @@ Privacy & Security), and a one-time Welcome window explains the push-to-talk ges
 
 ## What works today
 
+Settings opens with a 1,000 by 760-point content area. Its 860 by 600-point minimum is measured inside the title bar,
+so resizing cannot subtract the title bar from the space reserved for the page and Save/Discard/Close footer.
+
 - Menu bar app shell (`NSStatusItem`, background-only via `LSUIElement`) with tray items for test
   dictation, Settings, AI Cleanup/Pause toggles, Recent Dictations, Quick Add to Dictionary,
   Welcome, and Quit
