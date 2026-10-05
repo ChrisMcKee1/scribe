@@ -49,6 +49,20 @@ final class SettingsWindowOwnerProbe {
 }
 
 final class SettingsWindowControllerTests: XCTestCase {
+    @MainActor
+    func testInitialWindowReservesTheFullContentHeightBelowTheTitleBar() throws {
+        _ = NSApplication.shared
+        let controller = SettingsWindowController(
+            rootView: Color.clear.frame(minWidth: 860, minHeight: 600), onClose: { _ in })
+        let window = try XCTUnwrap(controller.window)
+        let content = window.contentRect(forFrameRect: window.frame)
+        XCTAssertEqual(content.width, 1000, accuracy: 1)
+        XCTAssertEqual(content.height, 760, accuracy: 1)
+        XCTAssertEqual(window.contentMinSize, NSSize(width: 860, height: 600))
+        XCTAssertGreaterThan(window.minSize.height, window.contentMinSize.height)
+        window.close()
+    }
+
     /// The owner lets go of the window when told, so it must be told after AppKit has finished closing it, never
     /// from inside the close.
     @MainActor

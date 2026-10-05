@@ -75,13 +75,7 @@ struct ScratchAudioDirectory: Sendable {
     /// Writes `samples` (mono, `sampleRate` Hz) as a 32-bit float WAV, the format the recognizers were verified
     /// with, and returns the file. Nothing is left behind when it throws.
     func writeRecording(samples: [Float], sampleRate: Double) throws -> ScratchAudioFile {
-        guard sampleRate > 0, sampleRate.isFinite, sampleRate <= Double(UInt32.max) / 4 else {
-            throw ScratchAudioError(operation: .invalidAudio, errno: EINVAL)
-        }
-        guard samples.count <= (Int(UInt32.max) - 36) / 4 else {
-            throw ScratchAudioError(operation: .invalidAudio, errno: EFBIG)
-        }
-
+        try Self.validateRecording(samples: samples, sampleRate: sampleRate)
         try prepareDirectory()
         let file = url.appendingPathComponent(
             "\(Self.filePrefix)\(getpid())-\(UUID().uuidString).\(Self.fileExtension)", isDirectory: false)
@@ -108,6 +102,21 @@ struct ScratchAudioDirectory: Sendable {
         try samples.withUnsafeBytes { try Self.writeAll($0, to: descriptor) }
         written = true
         return ScratchAudioFile(url: file)
+    }
+
+    static func validateRecording(samples: [Float], sampleRate: Double) throws {
+        guard sampleRate >= 1, sampleRate.isFinite, sampleRate.rounded(.towardZero) == sampleRate,
+            sampleRate <= Double(UInt32.max) / 4
+        else {
+            throw ScratchAudioError(operation: .invalidAudio, errno: EINVAL)
+        }
+        guard samples.count <= (Int(UInt32.max) - 36) / 4 else {
+            throw ScratchAudioError(operation: .invalidAudio, errno: EFBIG)
+        }
+
+        guard samples.allSatisfy(\.isFinite) else {
+            throw ScratchAudioError(operation: .invalidAudio, errno: EINVAL)
+        }
     }
 
     /// Deletes `file`. A file that is already gone is not a failure; any other failure is logged by its code.

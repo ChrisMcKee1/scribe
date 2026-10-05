@@ -117,6 +117,27 @@ enum ScenarioAudio {
         return sum
     }
 
+    static func noiseAtSNR(_ samples: [Float], snrDb: Double, seed: UInt64) -> [Float] {
+        let noise = white(count: samples.count, rmsDbfs: -20, seed: seed)
+        let level = rms(noise)
+        guard level > 0 else { return noise }
+        let gain = Float(rms(samples) / pow(10, snrDb / 20) / level)
+        return scaled(noise, by: gain)
+    }
+
+    /// Three deterministic early reflections, retaining the original length to keep duration comparisons meaningful.
+    static func reflected(_ samples: [Float], sampleRate: Int) -> [Float] {
+        var result = samples
+        for (delayMs, gain) in [(37, Float(0.35)), (73, Float(0.2)), (113, Float(0.1))] {
+            let delay = sampleRate * delayMs / 1000
+            guard delay > 0, delay < samples.count else { continue }
+            for index in delay..<samples.count {
+                result[index] += samples[index - delay] * gain
+            }
+        }
+        return result
+    }
+
     /// `samples` at `targetRate`, converted in one pass with AVAudioConverter at its highest quality: how the scenarios
     /// make a 44.1 or 48 kHz device out of a 16 kHz fixture. The capture converts back with its own converter.
     static func resampled(_ samples: [Float], from sourceRate: Double, to targetRate: Double) throws -> [Float] {

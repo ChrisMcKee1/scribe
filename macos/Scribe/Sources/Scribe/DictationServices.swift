@@ -46,8 +46,34 @@ protocol DictationCleaning {
     /// main actor.
     func provider() async throws -> any CleanupProvider
 
+    /// Checks and, only when needed, starts the local model for the configuration stored now.
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async -> LocalModelPreparationResult
+
+    /// The cleanup settings stored now, for request shaping that belongs outside the provider cache.
+    func currentSettings() -> CleanupSettingsSnapshot
+
     /// Drops the cached provider and credential (`CleanupProviderCache.invalidate()`).
     func invalidate()
+
+    /// Frees the local model for `reason` once no use is in flight (pause, shutdown). Never throws; a model another
+    /// app holds is left alone unless the reason frees it explicitly.
+    func releaseLocalModel(_ reason: LocalModelReleaseReason) async
+    func notePause(_ paused: Bool)
+}
+
+extension DictationCleaning {
+    func releaseLocalModel(_ reason: LocalModelReleaseReason) async {}
+    func notePause(_ paused: Bool) {}
+
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async -> LocalModelPreparationResult {
+        .notApplicable
+    }
 }
 
 /// Where a dictation is meant to go, captured when its recording starts.
@@ -101,6 +127,7 @@ protocol DictationRuleSource: AnyObject, Sendable {
     func waitUntilLoaded() async -> StartupGate.State
 
     var appProfiles: [AppProfile] { get }
+    var cleanupVocabulary: CleanupVocabulary { get }
 
     /// With AI cleanup off, and when cleanup fell back: snippets, then the dictionary and the enabled libraries.
     func postProcess(_ text: String) -> TextPostProcessingResult
@@ -193,16 +220,54 @@ struct LiveDictationCleanup: DictationCleaning {
     }
 
     func provider() async throws -> any CleanupProvider {
+        try Task.checkCancellation()
         let cache = cache
         // Detached, because a build reads the Keychain, and a Keychain read waits for the user whenever macOS asks
         // them to allow it; that wait must not hold the main actor.
-        return try await Task.detached(priority: .userInitiated) {
-            try cache.provider()
-        }.value
+        let work = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let provider = try cache.admittedProvider()
+            try Task.checkCancellation()
+            return provider
+        }
+        return try await withTaskCancellationHandler {
+            let provider = try await work.value
+            try Task.checkCancellation()
+            return provider
+        } onCancel: {
+            work.cancel()
+        }
+    }
+
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async -> LocalModelPreparationResult {
+        let cache = cache
+        let work = Task.detached(priority: .userInitiated) {
+            await cache.prepareLocalModel(isCurrent: isCurrent, onStarting: onStarting)
+        }
+        return await withTaskCancellationHandler {
+            await work.value
+        } onCancel: {
+            work.cancel()
+        }
+    }
+
+    func currentSettings() -> CleanupSettingsSnapshot {
+        cache.store.snapshot()
     }
 
     func invalidate() {
         cache.invalidate()
+    }
+
+    func releaseLocalModel(_ reason: LocalModelReleaseReason) async {
+        await cache.releaseLocalModel(reason)
+    }
+
+    func notePause(_ paused: Bool) {
+        cache.lifecycle.notePause(paused)
     }
 }
 
@@ -238,6 +303,7 @@ struct LiveDictationTargeting: DictationTargeting {
 /// (`DictationRules.install`); a dictation meets either the rules before or the rules after, never a mix.
 struct DictationRuleSnapshot: Sendable {
     let rules: TextPostProcessor.CompiledRules
+    let cleanupVocabulary: CleanupVocabulary
     let appProfiles: [AppProfile]
     /// For the log: how many rules of each kind went in, and how long compiling took.
     let dictionaryEntryCount: Int
@@ -246,11 +312,17 @@ struct DictationRuleSnapshot: Sendable {
     let compileDuration: Duration
 
     /// Compiles `ruleSet` on the calling thread.
-    init(_ ruleSet: PersistenceRuleSet, libraryEntries: [DictionaryEntry]) {
+    init(
+        _ ruleSet: PersistenceRuleSet,
+        libraryEntries: [DictionaryEntry],
+        cleanupVocabularyEntries: [DictionaryEntry]
+    ) {
         let clock = ContinuousClock()
         let started = clock.now
         rules = TextPostProcessor.CompiledRules(
             dictionaryEntries: ruleSet.dictionaryEntries, snippets: ruleSet.snippets, libraryEntries: libraryEntries)
+        cleanupVocabulary = CleanupVocabulary(
+            glossaryEntries: CleanupPrompt.composeVocabulary(ruleSet.dictionaryEntries, cleanupVocabularyEntries))
         appProfiles = ruleSet.appProfiles
         dictionaryEntryCount = ruleSet.dictionaryEntries.count
         libraryEntryCount = libraryEntries.count
@@ -260,10 +332,15 @@ struct DictationRuleSnapshot: Sendable {
 
     /// Compiles `ruleSet` off the main actor.
     static func compile(
-        _ ruleSet: PersistenceRuleSet, libraryEntries: [DictionaryEntry]
+        _ ruleSet: PersistenceRuleSet,
+        libraryEntries: [DictionaryEntry],
+        cleanupVocabularyEntries: [DictionaryEntry]
     ) async -> DictationRuleSnapshot {
         await Task.detached(priority: .userInitiated) {
-            DictationRuleSnapshot(ruleSet, libraryEntries: libraryEntries)
+            DictationRuleSnapshot(
+                ruleSet,
+                libraryEntries: libraryEntries,
+                cleanupVocabularyEntries: cleanupVocabularyEntries)
         }.value
     }
 }
@@ -274,6 +351,7 @@ struct DictationRuleSnapshot: Sendable {
 final class DictationRules: DictationRuleSource {
     let gate: StartupGate
     private let processor = TextPostProcessor()
+    private(set) var cleanupVocabulary = CleanupVocabulary.none
     private(set) var appProfiles: [AppProfile] = []
 
     init(gate: StartupGate) {
@@ -291,12 +369,21 @@ final class DictationRules: DictationRuleSource {
     /// Installs rules compiled off the main actor, in one step.
     func install(_ snapshot: DictationRuleSnapshot) {
         processor.install(snapshot.rules)
+        cleanupVocabulary = snapshot.cleanupVocabulary
         appProfiles = snapshot.appProfiles
     }
 
     /// Compiles `rules` here and installs them. The app compiles off the main actor instead (`install`).
-    func apply(_ rules: PersistenceRuleSet, libraryEntries: [DictionaryEntry]) {
-        install(DictationRuleSnapshot(rules, libraryEntries: libraryEntries))
+    func apply(
+        _ rules: PersistenceRuleSet,
+        libraryEntries: [DictionaryEntry],
+        cleanupVocabularyEntries: [DictionaryEntry]? = nil
+    ) {
+        install(
+            DictationRuleSnapshot(
+                rules,
+                libraryEntries: libraryEntries,
+                cleanupVocabularyEntries: cleanupVocabularyEntries ?? libraryEntries))
     }
 
     func postProcess(_ text: String) -> TextPostProcessingResult {

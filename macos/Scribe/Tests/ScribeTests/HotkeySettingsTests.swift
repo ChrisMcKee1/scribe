@@ -37,10 +37,10 @@ final class HotkeySettingsStoreTests: XCTestCase {
         super.tearDown()
     }
 
-    func testDefaultsToCapsLockWhenNothingStored() {
-        XCTAssertEqual(store.keyCode, 57)
+    func testDefaultsToRightOptionWhenNothingStored() {
+        XCTAssertEqual(store.keyCode, 61)
         XCTAssertEqual(store.keyCode, HotkeySettingsStore.defaultKeyCode)
-        XCTAssertEqual(store.binding.gesture, .toggle)
+        XCTAssertEqual(store.binding.gesture, .hold)
     }
 
     func testRoundTripsAStoredKeyCode() {

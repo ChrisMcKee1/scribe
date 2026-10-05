@@ -29,10 +29,16 @@ final class RuleReloadScenarioTests: XCTestCase {
         var builds: [Duration] = []
         for _ in 0..<Self.builds {
             let started = clock.now
-            _ = DictationRuleSnapshot(ruleSet, libraryEntries: libraryEntries)
+            _ = DictationRuleSnapshot(
+                ruleSet,
+                libraryEntries: libraryEntries,
+                cleanupVocabularyEntries: libraryEntries)
             builds.append(started.duration(to: clock.now))
         }
-        let snapshot = await DictationRuleSnapshot.compile(ruleSet, libraryEntries: libraryEntries)
+        let snapshot = await DictationRuleSnapshot.compile(
+            ruleSet,
+            libraryEntries: libraryEntries,
+            cleanupVocabularyEntries: libraryEntries)
         let rules = DictationRules(gate: StartupGate())
         var started = clock.now
         rules.install(snapshot)

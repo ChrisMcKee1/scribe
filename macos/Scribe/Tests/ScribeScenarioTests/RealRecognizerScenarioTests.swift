@@ -63,4 +63,255 @@ final class RealRecognizerScenarioTests: XCTestCase {
         report.note("failures", count: failures)
         report.write()
     }
+
+    func testLongCommittedFixtureUsesBoundedChunksWithTheInstalledRecognizer() async throws {
+        guard ProcessInfo.processInfo.environment["SCRIBE_REAL_ASR"] == "1" else {
+            throw XCTSkip("Set SCRIBE_REAL_ASR=1, with Foundry Local installed, to run the real recognizer.")
+        }
+        let clip = try ScenarioLibrary.shared().clip("long-passage")
+        let samples = clip.samples + [Float](repeating: 0, count: clip.sampleRate) + clip.samples
+        let spans = TranscriptionChunker.plan(samples: samples, sampleRate: clip.sampleRate)
+        XCTAssertEqual(spans.count, 2)
+        XCTAssertTrue(spans.allSatisfy { $0.count <= TranscriptionChunker.maxChunkSeconds * clip.sampleRate })
+
+        let scratch = try makeScenarioDirectory("asr-long")
+        let engine = TranscriptionEngine(
+            scratch: ScratchAudioDirectory(url: scratch.appendingPathComponent("asr", isDirectory: true)))
+        let backend = try engine.resolveBackend()
+        XCTAssertEqual(backend.kind, .foundryLocal)
+        XCTAssertEqual(backend.foundryModelAlias, TranscriptionBackendResolver.defaultFoundryModelAlias)
+
+        let result = try await engine.transcribe(samples: samples, sampleRate: Double(clip.sampleRate))
+        let expectedOverlap = ScenarioText.wordOverlap(expected: clip.text, actual: result.text)
+        let recognizedWords = ScenarioPrivacy.words(result.text)
+
+        XCTAssertGreaterThanOrEqual(expectedOverlap, ScenarioText.minimumOverlap)
+        XCTAssertGreaterThanOrEqual(recognizedWords.count, ScenarioPrivacy.words(clip.text).count * 3 / 2)
+    }
+
+    func testDegradedAndStereoCapturesThroughTheInstalledRecognizer() async throws {
+        guard ProcessInfo.processInfo.environment["SCRIBE_REAL_ASR"] == "1" else {
+            throw XCTSkip("Set SCRIBE_REAL_ASR=1, with the cached Foundry speech model, for real degraded audio.")
+        }
+        let clip = try ScenarioLibrary.shared().clip("longer")
+        let scratch = try makeScenarioDirectory("asr-degraded")
+        let engine = TranscriptionEngine(
+            scratch: ScratchAudioDirectory(url: scratch.appendingPathComponent("asr", isDirectory: true)))
+        let backend = try engine.resolveBackend()
+        XCTAssertEqual(backend.kind, .foundryLocal)
+        let report = ScenarioReport("real-asr-degraded")
+        let noisy = ScenarioAudio.added(
+            clip.samples, ScenarioAudio.noiseAtSNR(clip.samples, snrDb: 10, seed: 42))
+        let reverberant = ScenarioAudio.reflected(clip.samples, sampleRate: clip.sampleRate)
+        let equalNoise = ScenarioAudio.added(
+            clip.samples, ScenarioAudio.noiseAtSNR(clip.samples, snrDb: 0, seed: 43))
+        let noisyReflections = ScenarioAudio.added(
+            reverberant, ScenarioAudio.noiseAtSNR(reverberant, snrDb: 10, seed: 44))
+        let signals = [
+            ("noise-10db", noisy, ScenarioChannelLayout.mono, 16000.0),
+            ("noise-0db", equalNoise, .mono, 16000.0),
+            ("reflections", reverberant, .mono, 16000.0),
+            ("reflections-noise-10db", noisyReflections, .mono, 16000.0),
+            ("stereo-left", clip.samples, .stereoOne(voice: 0, otherHasFloor: false), 44100.0),
+            ("stereo-right-floor", clip.samples, .stereoOne(voice: 1, otherHasFloor: true), 48000.0),
+        ]
+        for (name, samples, layout, rate) in signals {
+            let audio = try ScenarioDeviceAudio.device(
+                playing: samples, at: rate, layout: layout, encoding: .float32, seed: 42)
+            let device = ScenarioCaptureDevice(audio: audio)
+            let capture = AudioCaptureEngine(makeDevice: { device })
+            let owner = RecordingID.next()
+            let opened = try await underWatchdog("degraded microphone open") {
+                try await capture.start(owner: owner, policy: .hold(maximumDuration: nil), events: { _ in })
+            }
+            XCTAssertEqual(opened, .live)
+            let stream = device.stream(
+                frameCounts: ScenarioAudio.frameCounts(total: audio.frameCount, seed: 42, within: 17...4801))
+            try await underWatchdog("degraded device delivery") { try await stream.finished.wait() }
+            let seal = try XCTUnwrap(capture.retire(owner: owner))
+            let sealed = try await underWatchdog("degraded capture seal") { await seal.audio }
+            let captured = try XCTUnwrap(sealed)
+            XCTAssertEqual(captured.summary.sampleRate, 16000)
+            XCTAssertEqual(captured.summary.droppedBufferCount, 0)
+            let result = try await engine.transcribe(samples: captured.samples, sampleRate: 16000)
+            let overlap = ScenarioText.wordOverlap(expected: clip.text, actual: result.text)
+            report.note("\(name).overlap", value: overlap, digits: 3)
+            report.note("\(name).samples", count: captured.samples.count)
+            XCTAssertGreaterThanOrEqual(overlap, ScenarioText.minimumOverlap, name)
+        }
+        report.write()
+    }
+
+    func testDurationAndDegradationSweepKeepsRepeatedSpeechAcrossChunkSeams() async throws {
+        guard ProcessInfo.processInfo.environment["SCRIBE_REAL_ASR"] == "1" else {
+            throw XCTSkip("Set SCRIBE_REAL_ASR=1 with the cached Foundry speech model for the duration sweep.")
+        }
+        let clip = try ScenarioLibrary.shared().clip("sentence")
+        let gap = [Float](repeating: 0, count: clip.sampleRate / 4)
+        let unit = clip.samples + gap
+        let scratch = try makeScenarioDirectory("asr-duration")
+        let engine = TranscriptionEngine(
+            scratch: ScratchAudioDirectory(url: scratch.appendingPathComponent("asr", isDirectory: true)))
+        XCTAssertEqual(try engine.resolveBackend().kind, .foundryLocal)
+        let report = ScenarioReport("real-asr-duration")
+        for seconds in [5, 20, 45, 90] {
+            let targetSamples = seconds * clip.sampleRate
+            let repetitions = targetSamples / unit.count
+            XCTAssertGreaterThan(repetitions, 0)
+            guard repetitions > 0 else { continue }
+            var clean: [Float] = []
+            for _ in 0..<repetitions { clean += unit }
+            clean += [Float](repeating: 0, count: targetSamples - clean.count)
+            let expected = Array(repeating: clip.text, count: repetitions).joined(separator: " ")
+            let reflected = ScenarioAudio.reflected(clean, sampleRate: clip.sampleRate)
+            let signals = [
+                ("clean", clean),
+                ("noise-10db", ScenarioAudio.added(clean, ScenarioAudio.noiseAtSNR(clean, snrDb: 10, seed: 81))),
+                (
+                    "reflections-noise-0db",
+                    ScenarioAudio.added(reflected, ScenarioAudio.noiseAtSNR(reflected, snrDb: 0, seed: 82))
+                ),
+            ]
+            for (condition, samples) in signals {
+                let name = "\(seconds)s-\(condition)"
+                XCTAssertEqual(samples.count, targetSamples)
+                let spans = TranscriptionChunker.plan(samples: samples, sampleRate: clip.sampleRate)
+                XCTAssertEqual(spans.reduce(0) { $0 + $1.count }, samples.count)
+                XCTAssertTrue(spans.allSatisfy { $0.count <= TranscriptionChunker.maxChunkSeconds * clip.sampleRate })
+                XCTAssertEqual(spans.first?.lowerBound, 0)
+                XCTAssertEqual(spans.last?.upperBound, samples.count)
+                for (left, right) in zip(spans, spans.dropFirst()) {
+                    XCTAssertEqual(left.upperBound, right.lowerBound)
+                }
+                let clock = ContinuousClock()
+                let began = clock.now
+                let result = try await engine.transcribe(samples: samples, sampleRate: Double(clip.sampleRate))
+                let overlap = ScenarioText.wordOverlap(expected: expected, actual: result.text)
+                let retained = ScenarioText.retainedWordShare(expected: expected, actual: result.text)
+                report.note("\(name).overlap", value: overlap, digits: 3)
+                report.note("\(name).retained", value: retained, digits: 3)
+                report.note("\(name).chunks", count: spans.count)
+                report.note("\(name).ms", value: ScenarioReport.milliseconds(began.duration(to: clock.now)), digits: 0)
+                XCTAssertGreaterThanOrEqual(overlap, ScenarioText.minimumOverlap, name)
+                XCTAssertGreaterThanOrEqual(retained, 0.8, "\(name): repeated speech was lost")
+            }
+        }
+        report.write()
+    }
+
+    func testVariedLongPassagesRetainContentWithAndWithoutNoise() async throws {
+        guard ProcessInfo.processInfo.environment["SCRIBE_REAL_ASR"] == "1" else {
+            throw XCTSkip("Set SCRIBE_REAL_ASR=1 with cached Foundry speech for varied long passages.")
+        }
+        let library = try ScenarioLibrary.shared()
+        let clips = try ["sentence", "pangram", "longer", "long-passage"].map { try library.clip($0) }
+        let gap = [Float](repeating: 0, count: 4000)
+        var samples: [Float] = []
+        var texts: [String] = []
+        for _ in 0..<2 {
+            for clip in clips {
+                samples += clip.samples + gap
+                texts.append(clip.text)
+            }
+        }
+        XCTAssertGreaterThan(samples.count, 60 * 16000)
+        let expected = texts.joined(separator: " ")
+        let scratch = try makeScenarioDirectory("asr-varied")
+        let engine = TranscriptionEngine(
+            scratch: ScratchAudioDirectory(url: scratch.appendingPathComponent("asr", isDirectory: true)))
+        XCTAssertEqual(try engine.resolveBackend().kind, .foundryLocal)
+        let report = ScenarioReport("real-asr-varied")
+        for (name, audio) in [
+            ("clean", samples),
+            ("noise-10db", ScenarioAudio.added(samples, ScenarioAudio.noiseAtSNR(samples, snrDb: 10, seed: 91))),
+        ] {
+            let spans = TranscriptionChunker.plan(samples: audio, sampleRate: 16000)
+            XCTAssertGreaterThan(spans.count, 2)
+            XCTAssertTrue(spans.allSatisfy { $0.count <= 30 * 16000 })
+            let result = try await engine.transcribe(samples: audio, sampleRate: 16000)
+            let retained = ScenarioText.retainedWordShare(expected: expected, actual: result.text)
+            report.note("\(name).retained", value: retained, digits: 3)
+            report.note("\(name).seconds", value: Double(audio.count) / 16000, digits: 2)
+            report.note("\(name).chunks", count: spans.count)
+            XCTAssertGreaterThanOrEqual(retained, 0.8, name)
+            for clip in clips {
+                let overlap = ScenarioText.wordOverlap(expected: clip.text, actual: result.text)
+                report.note("\(name).\(clip.name).overlap", value: overlap, digits: 3)
+                XCTAssertGreaterThanOrEqual(overlap, ScenarioText.minimumOverlap, "\(name).\(clip.name)")
+            }
+        }
+        report.write()
+    }
+
+    func testStereoCompetingSpeechKeepsTheDominantVoiceThroughCapture() async throws {
+        guard ProcessInfo.processInfo.environment["SCRIBE_REAL_ASR"] == "1" else {
+            throw XCTSkip("Set SCRIBE_REAL_ASR=1 with cached Foundry speech for stereo competing speech.")
+        }
+        let library = try ScenarioLibrary.shared()
+        let voice = try library.clip("longer")
+        let other = try library.clip("pangram")
+        var competing = [Float](repeating: 0, count: voice.samples.count)
+        for index in competing.indices { competing[index] = other.samples[index % other.samples.count] }
+        let gain = Float(ScenarioAudio.rms(voice.samples) / ScenarioAudio.rms(competing) / 10)
+        competing = ScenarioAudio.scaled(competing, by: gain)
+        let measured = 20 * log10(ScenarioAudio.rms(voice.samples) / ScenarioAudio.rms(competing))
+        XCTAssertEqual(measured, 20, accuracy: 0.001)
+        let scratch = try makeScenarioDirectory("asr-competing")
+        let engine = TranscriptionEngine(
+            scratch: ScratchAudioDirectory(url: scratch.appendingPathComponent("asr", isDirectory: true)))
+        XCTAssertEqual(try engine.resolveBackend().kind, .foundryLocal)
+        let report = ScenarioReport("real-asr-competing")
+        for side in 0...1 {
+            let channels = side == 0 ? [voice.samples, competing] : [competing, voice.samples]
+            let audio = ScenarioDeviceAudio(sampleRate: 16000, encoding: .float32, channels: channels)
+            let device = ScenarioCaptureDevice(audio: audio)
+            let capture = AudioCaptureEngine(makeDevice: { device })
+            let owner = RecordingID.next()
+            let opened = try await underWatchdog("competing microphone open") {
+                try await capture.start(owner: owner, policy: .hold(maximumDuration: nil), events: { _ in })
+            }
+            XCTAssertEqual(opened, .live)
+            let stream = device.stream(
+                frameCounts: ScenarioAudio.frameCounts(total: audio.frameCount, seed: 92, within: 17...4801))
+            try await underWatchdog("competing delivery") { try await stream.finished.wait() }
+            let seal = try XCTUnwrap(capture.retire(owner: owner))
+            let sealed = try await underWatchdog("competing seal") { await seal.audio }
+            let captured = try XCTUnwrap(sealed)
+            let expected = zip(voice.samples, competing).map { ($0 + $1) / 2 }
+            XCTAssertEqual(captured.samples, expected)
+            XCTAssertEqual(captured.summary.droppedBufferCount, 0)
+            let result = try await engine.transcribe(samples: captured.samples, sampleRate: 16000)
+            let overlap = ScenarioText.wordOverlap(expected: voice.text, actual: result.text)
+            let retained = ScenarioText.retainedWordShare(expected: voice.text, actual: result.text)
+            report.note("side\(side).overlap", value: overlap, digits: 3)
+            report.note("side\(side).retained", value: retained, digits: 3)
+            XCTAssertGreaterThanOrEqual(overlap, ScenarioText.minimumOverlap)
+            XCTAssertGreaterThanOrEqual(retained, 0.8)
+        }
+        report.write()
+    }
+
+    func testLongDigitalSilenceBetweenPassagesDoesNotDiscardEitherPassage() async throws {
+        guard ProcessInfo.processInfo.environment["SCRIBE_REAL_ASR"] == "1" else {
+            throw XCTSkip("Set SCRIBE_REAL_ASR=1 with cached Foundry speech for long digital pauses.")
+        }
+        let library = try ScenarioLibrary.shared()
+        let first = try library.clip("longer")
+        let last = try library.clip("pangram")
+        let samples = first.samples + [Float](repeating: 0, count: 65 * 16000) + last.samples
+        let spans = TranscriptionChunker.plan(samples: samples, sampleRate: 16000)
+        XCTAssertTrue(spans.contains { samples[$0].allSatisfy { $0 == 0 } })
+        let scratch = try makeScenarioDirectory("asr-digital-pause")
+        let engine = TranscriptionEngine(
+            scratch: ScratchAudioDirectory(url: scratch.appendingPathComponent("asr", isDirectory: true)))
+        XCTAssertEqual(try engine.resolveBackend().kind, .foundryLocal)
+        let result = try await engine.transcribe(samples: samples, sampleRate: 16000)
+        let report = ScenarioReport("real-asr-digital-pause")
+        for clip in [first, last] {
+            let retained = ScenarioText.retainedWordShare(expected: clip.text, actual: result.text)
+            report.note("\(clip.name).retained", value: retained, digits: 3)
+            XCTAssertGreaterThanOrEqual(retained, 0.8)
+        }
+        report.write()
+    }
 }

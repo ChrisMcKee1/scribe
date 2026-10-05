@@ -1,13 +1,12 @@
 import Foundation
 
-/// Which dictionary libraries are switched on, persisted in `defaults` as a set of library ids.
-/// Injectable so tests use a suite of their own instead of the user's real preferences.
-struct DictionaryLibrarySettings {
+/// `@unchecked Sendable` because `UserDefaults` is process-wide mutable state the compiler cannot model,
+/// but the access here is only through its documented thread-safe getters and setters.
+struct DictionaryLibrarySettings: @unchecked Sendable {
     static let enabledIdsKey = "ScribeEnabledDictionaryLibraryIds"
 
     let defaults: UserDefaults
 
-    /// The ids of every library the user has switched on. Order is not meaningful; membership is.
     var enabledLibraryIds: Set<String> {
         get { Set(defaults.stringArray(forKey: Self.enabledIdsKey) ?? []) }
         nonmutating set { defaults.set(Array(newValue), forKey: Self.enabledIdsKey) }
@@ -24,9 +23,6 @@ struct DictionaryLibrarySettings {
     }
 }
 
-/// The app's library switches in `UserDefaults.standard`: the same stopgap pattern used by
-/// `CleanupSettingsStore` and the overlay anchor, pending a general structured settings store on
-/// macOS.
 enum DictionaryLibrarySettingsStore {
     static var standard: DictionaryLibrarySettings {
         DictionaryLibrarySettings(defaults: .standard)
@@ -62,82 +58,94 @@ enum DictionaryLibraryServiceError: Error, LocalizedError {
     }
 }
 
-/// Manages the dictionary libraries available to the app: the built-in set that ships embedded
-/// plus any custom libraries the user has imported (stored as CSV files under `librariesDirectory`,
-/// `~/Library/Application Support/Scribe/Libraries` by default). Also composes the entries of the
-/// currently enabled libraries, which `TextPostProcessor` layers on top of the base dictionary.
-/// Direct port of Windows' `Scribe.Core.PostProcessing.DictionaryLibraryService`.
-final class DictionaryLibraryService {
+/// `@unchecked Sendable` because the service only reads immutable snapshots through collaborators that are safe for
+/// concurrent use in this app, but the compiler cannot prove that for `UserDefaults`, `FileManager` and the store.
+final class DictionaryLibraryService: @unchecked Sendable {
+    static let libraryStateKey = "word_pack_state_v1"
+    static let recentlyDeletedKey = "word_pack_recently_deleted_v1"
+
     let librariesDirectory: URL
     let settings: DictionaryLibrarySettings
+
     private let fileManager: FileManager
+    private let persistenceStore: PersistenceStore?
 
     init(
         fileManager: FileManager = .default,
         librariesDirectory overrideDirectory: URL? = nil,
-        settings: DictionaryLibrarySettings = DictionaryLibrarySettingsStore.standard
+        settings: DictionaryLibrarySettings = DictionaryLibrarySettingsStore.standard,
+        persistenceStore: PersistenceStore? = nil
     ) {
         self.fileManager = fileManager
         self.settings = settings
+        self.persistenceStore = persistenceStore
         if let overrideDirectory {
             self.librariesDirectory = overrideDirectory
         } else {
             let applicationSupportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            self.librariesDirectory =
-                applicationSupportURL
-                .appendingPathComponent("Scribe", isDirectory: true)
-                .appendingPathComponent("Libraries", isDirectory: true)
+            let scribeDirectory = applicationSupportURL.appendingPathComponent("Scribe", isDirectory: true)
+            self.librariesDirectory = scribeDirectory.appendingPathComponent("Libraries", isDirectory: true)
         }
     }
 
-    /// All libraries, built-in first then custom. Malformed custom files are skipped.
     func libraries() -> [DictionaryLibrary] {
-        BuiltInDictionaryLibraries.all + loadCustom()
+        LibraryPrecedence.order(loadCatalogLibraries().map(\.library))
     }
 
-    /// The de-duplicated entries of every library the user has switched on (per `settings`), for
-    /// layering on top of the base dictionary. Empty when nothing is enabled.
     func enabledLibraryEntries() -> [DictionaryEntry] {
-        let enabledIds = settings.enabledLibraryIds
-        guard !enabledIds.isEmpty else { return [] }
+        let enabledIDs = settings.enabledLibraryIds
+        guard !enabledIDs.isEmpty else { return [] }
 
-        let matching = libraries().filter { enabledIds.contains($0.id) }
+        let matching = LibraryPrecedence.enabled(libraries(), enabledIDs: enabledIDs)
         return DictionaryLibraryComposer.composeLibraries(matching)
     }
 
-    /// Imports a library from CSV text, writing it into the libraries folder as a new custom
-    /// library and returning it. The display name comes from the file's `name` header, else
-    /// `suggestedName` (typically the file name). Throws if the CSV has no usable entries.
     @discardableResult
     func `import`(csv: String, suggestedName: String?) throws -> DictionaryLibrary {
-        let file = DictionaryLibraryCsv.parse(csv)
+        try `import`(data: Data(csv.utf8), suggestedName: suggestedName)
+    }
+
+    @discardableResult
+    func `import`(data: Data, suggestedName: String?) throws -> DictionaryLibrary {
+        let file = DictionaryLibraryCsv.parseImport(data)
         if !file.errors.isEmpty {
-            throw DictionaryLibraryServiceError.invalidCsv(file.errors.prefix(5).joined(separator: "\n"))
+            throw DictionaryLibraryServiceError.invalidCsv(
+                file.errors.prefix(5).map(\.legacyMessage).joined(separator: "\n"))
         }
-        guard !file.entries.isEmpty else {
+        guard !file.terms.isEmpty else {
             throw DictionaryLibraryServiceError.noUsableEntries
         }
 
         let trimmedSuggestion = suggestedName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let name = file.name ?? (trimmedSuggestion?.isEmpty == false ? trimmedSuggestion : nil) ?? "Imported library"
+        let fallbackName = trimmedSuggestion?.isEmpty == false ? trimmedSuggestion : nil
+        let name = file.name ?? fallbackName ?? LibraryNaming.importedLibraryBaseName
         let category = file.category ?? "Custom"
 
         try fileManager.createDirectory(at: librariesDirectory, withIntermediateDirectories: true)
-        let id = uniqueId(baseSlug: slugify(name))
+        let id = LibraryNaming.newCustomID(name: name, takenIDs: allKnownIDs())
         let library = DictionaryLibrary(
-            id: id, name: name, category: category, description: file.description, builtIn: false, entries: file.entries
-        )
+            id: id,
+            name: name,
+            category: category,
+            description: file.description,
+            builtIn: false,
+            entries: file.terms.map(\.dictionaryEntry),
+            fileName: "\(id).csv",
+            basedOn: file.basedOn)
 
-        // Re-export through the library writer so the stored file is normalized and always
-        // carries a header, regardless of what the source file looked like.
-        let text = DictionaryLibraryCsv.export(library)
-        try text.write(
-            to: librariesDirectory.appendingPathComponent("\(id).csv"), atomically: true, encoding: .utf8)
+        let managed = try DictionaryLibraryCsv.exportManaged(
+            LibraryCsvContent(
+                name: library.name,
+                category: library.category,
+                description: library.description,
+                basedOn: library.basedOn,
+                rows: file.terms))
+        let url = librariesDirectory.appendingPathComponent("\(id).csv")
+        try managed.write(to: url, options: .atomic)
+        try updatePersistedStateAfterImport(id: id, contentHash: LibraryContentHash(data: managed))
         return library
     }
 
-    /// Removes a custom library by id (deletes its file and its enabled state). Built-in libraries
-    /// cannot be removed; turn them off in Settings instead, and attempting to throws.
     func remove(id: String) throws {
         guard !id.isEmpty else { return }
 
@@ -155,69 +163,632 @@ final class DictionaryLibraryService {
             try fileManager.removeItem(at: path)
         }
         settings.setEnabled(false, id: id)
+        try updatePersistedStateAfterRemoval(id: id)
     }
 
-    private func loadCustom() -> [DictionaryLibrary] {
-        guard
-            let fileURLs = try? fileManager.contentsOfDirectory(at: librariesDirectory, includingPropertiesForKeys: nil)
-        else {
+    func save(changeSet: LibraryChangeSet) throws {
+        guard !changeSet.isEmpty else { return }
+        try fileManager.createDirectory(at: librariesDirectory, withIntermediateDirectories: true)
+        let deletedDirectory = librariesDirectory.appendingPathComponent("deleted", isDirectory: true)
+        let editsDirectory = librariesDirectory.appendingPathComponent(
+            BuiltInLibraryOverlay.editsFolderName,
+            isDirectory: true)
+
+        var deletedMetadata = loadRecentlyDeletedMetadataSync()
+        for deletion in changeSet.deletions {
+            let url = librariesDirectory.appendingPathComponent("\(deletion.libraryID).csv", isDirectory: false)
+            guard fileManager.fileExists(atPath: url.path) else { continue }
+            try fileManager.createDirectory(at: deletedDirectory, withIntermediateDirectories: true)
+            let data = try Data(contentsOf: url)
+            let document = DictionaryLibraryCsv.parseManaged(data)
+            let taken = Set(
+                ((try? fileManager.contentsOfDirectory(atPath: deletedDirectory.path)) ?? [])
+                    + Array(deletedMetadata.keys))
+            let entryName = RecentlyDeletedStore.nextEntryName(
+                originalFileName: url.lastPathComponent,
+                stamp: Date(),
+                taken: taken)
+            let target = deletedDirectory.appendingPathComponent(entryName, isDirectory: false)
+            try fileManager.moveItem(at: url, to: target)
+            deletedMetadata[entryName] = RecentlyDeletedMetadata(
+                entryName: entryName,
+                originalID: deletion.libraryID,
+                name: document.name ?? BuiltInDictionaryLibraries.humanize(deletion.libraryID),
+                termCount: document.terms.count,
+                deletedAt: RecentlyDeletedStore.parseEntryName(entryName)?.deletedAt ?? Date(),
+                contentHash: LibraryContentHash(data: data).value)
+        }
+
+        for action in changeSet.recentlyDeletedActions {
+            let source = deletedDirectory.appendingPathComponent(action.entryName, isDirectory: false)
+            switch action.kind {
+            case .deletePermanently:
+                if fileManager.fileExists(atPath: source.path) {
+                    try fileManager.removeItem(at: source)
+                }
+                deletedMetadata.removeValue(forKey: action.entryName)
+            case .restore:
+                guard let restoreAsID = action.restoreAsID else { continue }
+                let target = librariesDirectory.appendingPathComponent("\(restoreAsID).csv", isDirectory: false)
+                guard fileManager.fileExists(atPath: source.path), !fileManager.fileExists(atPath: target.path) else {
+                    continue
+                }
+                try fileManager.moveItem(at: source, to: target)
+                deletedMetadata.removeValue(forKey: action.entryName)
+            }
+        }
+
+        for write in changeSet.writes {
+            guard let content = write.content else { continue }
+            if write.builtIn {
+                try fileManager.createDirectory(at: editsDirectory, withIntermediateDirectories: true)
+                let url = BuiltInLibraryOverlay.editsURL(root: librariesDirectory, id: write.libraryID)
+                if let edits = write.builtInEdits, !edits.terms.isEmpty {
+                    let data = try BuiltInLibraryOverlay.write(edits)
+                    try data.write(to: url, options: .atomic)
+                } else if fileManager.fileExists(atPath: url.path) {
+                    try fileManager.removeItem(at: url)
+                }
+            } else {
+                let managed = try DictionaryLibraryCsv.exportManaged(
+                    LibraryCsvContent(
+                        name: content.name,
+                        category: content.category,
+                        description: content.description,
+                        basedOn: content.basedOn,
+                        rows: content.entries.map(TermValues.init(entry:))))
+                try managed.write(
+                    to: librariesDirectory.appendingPathComponent("\(write.libraryID).csv", isDirectory: false),
+                    options: .atomic)
+            }
+        }
+
+        settings.enabledLibraryIds = Set(changeSet.localState.enabledIds)
+        try savePersistedState(changeSet.localState)
+        try saveRecentlyDeletedMetadataSync(deletedMetadata)
+    }
+
+    func loadCatalog() async throws -> LibraryCatalog {
+        let libraries = loadCatalogLibraries()
+        let state = try await loadResolvedState(for: libraries)
+        let decorated = decorate(libraries: libraries, with: state)
+        let recentlyDeleted = RecentlyDeletedStore.list(
+            deletedDirectory: librariesDirectory.appendingPathComponent("deleted", isDirectory: true),
+            metadata: try await loadRecentlyDeletedMetadata())
+        return LibraryCatalog(
+            generation: state.generation,
+            libraries: decorated,
+            localState: state,
+            recentlyDeleted: recentlyDeleted)
+    }
+
+    func listRecentlyDeleted() async throws -> [RecentlyDeletedLibrary] {
+        (try await loadCatalog()).recentlyDeleted
+    }
+
+    func pruneRecentlyDeleted(now: Date = Date()) throws -> Int {
+        let deletedDirectory = librariesDirectory.appendingPathComponent("deleted", isDirectory: true)
+        var metadata = loadRecentlyDeletedMetadataSync()
+        let entries = RecentlyDeletedStore.list(deletedDirectory: deletedDirectory, metadata: metadata)
+        var removed = 0
+        for entryName in RecentlyDeletedStore.expiredEntryNames(entries, now: now) {
+            let url = deletedDirectory.appendingPathComponent(entryName, isDirectory: false)
+            if fileManager.fileExists(atPath: url.path) {
+                try fileManager.removeItem(at: url)
+                removed += 1
+            }
+            metadata.removeValue(forKey: entryName)
+        }
+        if removed > 0 {
+            try saveRecentlyDeletedMetadataSync(metadata)
+        }
+        return removed
+    }
+
+    func loadVocabulary() async throws -> LibraryVocabulary {
+        let catalog = try await loadCatalog()
+        let composition = compose(catalog: catalog)
+        let permitted = catalog.libraries.reduce(into: [String: String?]()) { result, library in
+            let enabled = isEnabled(library.id, in: catalog.localState)
+            let usable = isUsable(library.state)
+            let permitted = isAIPermitted(library, state: catalog.localState)
+            guard enabled && usable && permitted else {
+                return
+            }
+            result[library.id.lowercased()] = .some(library.contentHash?.value)
+        }
+        return LibraryVocabulary(
+            generation: catalog.generation,
+            entries: composition.entries,
+            aiEntries: composition.aiEntries,
+            aiScope: AiVocabularyScope(generation: catalog.generation, permittedContent: permitted))
+    }
+
+    private func loadCatalogLibraries() -> [CatalogLibrary] {
+        let builtIns = loadBuiltIns()
+        let customs = loadCustomLibraries()
+        return sortCatalogLibraries(builtIns + customs)
+    }
+
+    private func loadBuiltIns() -> [CatalogLibrary] {
+        let editsRoot = librariesDirectory.appendingPathComponent(
+            BuiltInLibraryOverlay.editsFolderName,
+            isDirectory: true)
+        return BuiltInDictionaryLibraries.all.map { shipped in
+            let editsURL = BuiltInLibraryOverlay.editsURL(root: librariesDirectory, id: shipped.id)
+            let previousURL = editsRoot.appendingPathComponent("\(shipped.id).previous.json", isDirectory: false)
+            let previousExists = fileManager.fileExists(atPath: previousURL.path)
+
+            guard let data = try? Data(contentsOf: editsURL) else {
+                return CatalogLibrary(
+                    library: shipped,
+                    state: .available,
+                    contentHash: nil,
+                    origin: .existing,
+                    edits: nil,
+                    previousEditsAvailable: previousExists,
+                    readErrorCount: 0)
+            }
+
+            let result = BuiltInLibraryOverlay.read(libraryID: shipped.id, data: data)
+            switch result.state {
+            case .available:
+                let applied = BuiltInLibraryOverlay.apply(shipped: shipped, edits: result.edits)
+                return CatalogLibrary(
+                    library: applied,
+                    state: .available,
+                    contentHash: LibraryContentHash(data: data),
+                    origin: .existing,
+                    edits: result.edits,
+                    previousEditsAvailable: previousExists,
+                    readErrorCount: 0)
+            case .newer, .unreadable:
+                let paused = DictionaryLibrary(
+                    id: shipped.id,
+                    name: shipped.name,
+                    category: shipped.category,
+                    description: shipped.description,
+                    builtIn: true,
+                    entries: [],
+                    fileName: shipped.fileName,
+                    basedOn: shipped.basedOn)
+                return CatalogLibrary(
+                    library: paused,
+                    state: result.state,
+                    contentHash: LibraryContentHash(data: data),
+                    origin: .existing,
+                    edits: nil,
+                    previousEditsAvailable: previousExists,
+                    readErrorCount: 0)
+            default:
+                return CatalogLibrary(
+                    library: shipped,
+                    state: .available,
+                    contentHash: nil,
+                    origin: .existing,
+                    edits: nil,
+                    previousEditsAvailable: previousExists,
+                    readErrorCount: 0)
+            }
+        }
+    }
+
+    private func loadCustomLibraries() -> [CatalogLibrary] {
+        let fileURLs = libraryFiles()
+        guard !fileURLs.isEmpty else {
             return []
         }
 
-        var libraries: [DictionaryLibrary] = []
-        for fileURL in fileURLs.sorted(by: {
-            $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending
-        })
-        where fileURL.pathExtension.lowercased() == "csv" {
+        var libraries: [CatalogLibrary] = []
+        for fileURL in fileURLs where fileURL.pathExtension.lowercased() == "csv" {
             let id = fileURL.deletingPathExtension().lastPathComponent
-            guard !id.isEmpty, let text = try? String(contentsOf: fileURL, encoding: .utf8) else { continue }
+            guard !id.isEmpty, let data = try? Data(contentsOf: fileURL) else {
+                continue
+            }
 
-            let file = DictionaryLibraryCsv.parse(text)
-            guard !file.entries.isEmpty else { continue }
+            let file = DictionaryLibraryCsv.parseManaged(data)
+            let state: LibraryFileState
+            if file.terms.isEmpty && !file.errors.isEmpty {
+                state = .unreadable
+            } else if !file.errors.isEmpty {
+                state = .partlyReadable
+            } else {
+                state = .available
+            }
 
+            let library = DictionaryLibrary(
+                id: id,
+                name: file.name ?? BuiltInDictionaryLibraries.humanize(id),
+                category: file.category ?? "Custom",
+                description: file.description,
+                builtIn: false,
+                entries: file.terms.map(\.dictionaryEntry),
+                fileName: fileURL.lastPathComponent,
+                basedOn: file.basedOn)
             libraries.append(
-                DictionaryLibrary(
-                    id: id,
-                    name: file.name ?? BuiltInDictionaryLibraries.humanize(id),
-                    category: file.category ?? "Custom",
-                    description: file.description,
-                    builtIn: false,
-                    entries: file.entries))
+                CatalogLibrary(
+                    library: library,
+                    state: state,
+                    contentHash: LibraryContentHash(data: data),
+                    origin: .existing,
+                    edits: nil,
+                    previousEditsAvailable: false,
+                    readErrorCount: file.errors.count))
         }
         return libraries
     }
 
-    // Ensures the new custom library's id collides with neither a built-in id nor an existing file.
-    private func uniqueId(baseSlug: String) -> String {
-        let builtinIds = Set(BuiltInDictionaryLibraries.all.map { $0.id.lowercased() })
-
-        var candidate = baseSlug
-        var n = 2
-        while builtinIds.contains(candidate.lowercased())
-            || fileManager.fileExists(atPath: librariesDirectory.appendingPathComponent("\(candidate).csv").path)
-        {
-            candidate = "\(baseSlug)-\(n)"
-            n += 1
+    private func sortCatalogLibraries(_ libraries: [CatalogLibrary]) -> [CatalogLibrary] {
+        libraries.sorted { lhs, rhs in
+            LibraryPrecedence.compare(
+                id: lhs.id,
+                builtIn: lhs.builtIn,
+                fileName: lhs.fileName,
+                otherID: rhs.id,
+                otherBuiltIn: rhs.builtIn,
+                otherFileName: rhs.fileName) < 0
         }
-        return candidate
     }
 
-    // Lowercase, alphanumerics kept, every other run collapsed to a single hyphen; a safe file
-    // name and stable id derived from the library's display name.
-    private func slugify(_ value: String) -> String {
-        var result = ""
-        var pendingDash = false
-        for scalar in value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().unicodeScalars {
-            if CharacterSet.alphanumerics.contains(scalar) {
-                if pendingDash, !result.isEmpty {
-                    result.append("-")
-                }
-                result.unicodeScalars.append(scalar)
-                pendingDash = false
-            } else {
-                pendingDash = true
+    private func loadResolvedState(for libraries: [CatalogLibrary]) async throws -> LibraryLocalState {
+        guard let persistenceStore else {
+            return migratedState(for: libraries)
+        }
+
+        let raw = try await persistenceStore.loadStringSetting(key: Self.libraryStateKey)
+        var state = try decodeState(raw) ?? migratedState(for: libraries)
+        state.normalize()
+        let synced = synchronizeLegacyProjection(state: &state, libraries: libraries)
+        if raw == nil || synced {
+            try await saveState(state)
+        }
+        return state
+    }
+
+    private func decodeState(_ raw: String?) throws -> LibraryLocalState? {
+        guard let raw else {
+            return nil
+        }
+        guard let data = raw.data(using: .utf8) else {
+            return unreadableState()
+        }
+        do {
+            var state = try JSONDecoder().decode(LibraryLocalState.self, from: data)
+            state.normalize()
+            return state
+        } catch {
+            return unreadableState()
+        }
+    }
+
+    private func unreadableState() -> LibraryLocalState {
+        LibraryLocalState(
+            generation: 1,
+            enabledIds: [],
+            legacyEnabledIds: [],
+            aiPermissions: [:],
+            acceptedContent: [:],
+            legacyMarkers: [],
+            aiUpgradeNotice: [],
+            health: .unreadable,
+            aiPermissionsLost: true)
+    }
+
+    private func migratedState(for libraries: [CatalogLibrary]) -> LibraryLocalState {
+        var state = LibraryLocalState.absent
+        state.generation = 1
+        state.health = .ok
+        state.enabledIds = settings.enabledLibraryIds.sorted()
+        state.legacyEnabledIds = state.enabledIds
+        for library in libraries where !library.builtIn {
+            state.aiPermissions[library.id.lowercased()] = true
+            state.setAcceptedContent(library.contentHash, for: library.id)
+        }
+        let shipped = Self.shippedValues(from: libraries.filter(\.builtIn))
+        for library in libraries where !library.builtIn {
+            state.legacyMarkers.append(contentsOf: Self.upgradeMarkers(for: library, shipped: shipped))
+        }
+        for library in libraries where library.builtIn {
+            state.aiPermissions[library.id.lowercased()] = true
+            if library.contentHash != nil {
+                state.setAcceptedContent(library.contentHash, for: library.id)
             }
         }
-        return result.isEmpty ? "library" : result
+        state.normalize()
+        return state
+    }
+
+    private func synchronizeLegacyProjection(state: inout LibraryLocalState, libraries: [CatalogLibrary]) -> Bool {
+        let currentLegacy = Set(settings.enabledLibraryIds.map { $0.lowercased() })
+        let previousLegacy = state.legacyEnabledIdSet
+        guard currentLegacy != previousLegacy else {
+            return false
+        }
+
+        let groups = Dictionary(uniqueKeysWithValues: libraries.map { ($0.id.lowercased(), [$0.id.lowercased()]) })
+        var enabled = state.enabledIdSet
+        for added in currentLegacy.subtracting(previousLegacy) {
+            enabled.formUnion(groups[added] ?? [])
+        }
+        for removed in previousLegacy.subtracting(currentLegacy) {
+            enabled.subtract(groups[removed] ?? [])
+        }
+
+        state.enabledIds = Array(enabled).sorted()
+        state.legacyEnabledIds = Array(currentLegacy).sorted()
+        state.generation += 1
+        return true
+    }
+
+    private func decorate(libraries: [CatalogLibrary], with state: LibraryLocalState) -> [CatalogLibrary] {
+        let markersByID = Dictionary(grouping: state.legacyMarkers) { $0.libraryId.lowercased() }
+        return libraries.map { library in
+            let marked = Set((markersByID[library.id.lowercased()] ?? []).map(\.termKey))
+            let authored: Set<LibraryTermKey>
+            if library.builtIn {
+                authored = library.library.authoredKeys
+            } else {
+                authored = Set(library.library.entries.map { LibraryTermKey.from($0.pattern) })
+            }
+            let decoratedLibrary = DictionaryLibrary(
+                id: library.library.id,
+                name: library.library.name,
+                category: library.library.category,
+                description: library.library.description,
+                builtIn: library.library.builtIn,
+                entries: library.library.entries,
+                fileName: library.library.fileName,
+                basedOn: library.library.basedOn,
+                authoredKeys: authored,
+                legacyMarkedKeys: marked)
+            return CatalogLibrary(
+                library: decoratedLibrary,
+                state: library.state,
+                contentHash: library.contentHash,
+                origin: library.origin,
+                edits: library.edits,
+                previousEditsAvailable: library.previousEditsAvailable,
+                readErrorCount: library.readErrorCount)
+        }
+    }
+
+    private func compose(catalog: LibraryCatalog) -> LibraryComposition {
+        let activeLibraries = catalog.libraries.filter {
+            isEnabled($0.id, in: catalog.localState) && isUsable($0.state)
+        }
+        let activeBuiltInFolds = Self.shippedValues(from: activeLibraries.filter(\.builtIn))
+        var rulesByTier: [RuleTier: [ComposedLibraryRule]] = [.authored: [], .shipped: [], .legacy: []]
+
+        for library in activeLibraries {
+            for entry in library.library.entries where entry.enabled {
+                let key = LibraryTermKey.from(entry.pattern)
+                guard !key.isEmpty else { continue }
+                let tier: RuleTier
+                if library.library.legacyMarkedKeys.contains(key),
+                    activeBuiltInFolds[Self.markerFold(entry.pattern)] != nil
+                {
+                    tier = .legacy
+                } else if !library.builtIn || library.library.authoredKeys.contains(key) {
+                    tier = .authored
+                } else {
+                    tier = .shipped
+                }
+                rulesByTier[tier, default: []].append(
+                    ComposedLibraryRule(entry: entry, libraryId: library.id, key: key, tier: tier))
+            }
+        }
+
+        var seen = Set<LibraryTermKey>()
+        var rules: [ComposedLibraryRule] = []
+        for tier in [RuleTier.authored, .shipped, .legacy] {
+            for rule in rulesByTier[tier, default: []] where seen.insert(rule.key).inserted {
+                rules.append(rule)
+            }
+        }
+
+        let aiEntries = rules.filter { rule in
+            guard let library = library(named: rule.libraryId, in: activeLibraries) else {
+                return false
+            }
+            return isAIPermitted(library, state: catalog.localState)
+        }.map(\.entry)
+
+        let aiExcluded = Set(
+            activeLibraries
+                .filter { !isAIPermitted($0, state: catalog.localState) }
+                .map { $0.id.lowercased() }
+        )
+        return LibraryComposition(
+            rules: rules,
+            entries: rules.map(\.entry),
+            aiEntries: aiEntries,
+            aiExcludedLibraryIds: aiExcluded,
+            enabledLibraries: activeLibraries.map(\.library))
+    }
+
+    private func library(named id: String, in libraries: [CatalogLibrary]) -> CatalogLibrary? {
+        libraries.first { $0.id.caseInsensitiveCompare(id) == .orderedSame }
+    }
+
+    private func isEnabled(_ id: String, in state: LibraryLocalState) -> Bool {
+        state.enabledIdSet.contains(id.lowercased())
+    }
+
+    private func isUsable(_ state: LibraryFileState) -> Bool {
+        state == .available || state == .partlyReadable
+    }
+
+    private func isAIPermitted(_ library: CatalogLibrary, state: LibraryLocalState) -> Bool {
+        guard state.health == .absent || state.health == .ok else {
+            return false
+        }
+
+        let key = library.id.lowercased()
+        let accepted = state.acceptedContent[key]
+        if library.builtIn {
+            if let accepted, accepted != library.contentHash?.value {
+                return false
+            }
+        } else {
+            guard let accepted, accepted == library.contentHash?.value else {
+                return false
+            }
+        }
+
+        if let chosen = state.aiPermissions[key] {
+            return chosen
+        }
+        if state.aiPermissionsLost {
+            return false
+        }
+        return defaultAIPermission(for: library.origin, builtIn: library.builtIn, sourcePermission: nil)
+    }
+
+    private func defaultAIPermission(for origin: LibraryOrigin, builtIn: Bool, sourcePermission: Bool?) -> Bool {
+        if builtIn {
+            return true
+        }
+        switch origin {
+        case .existing:
+            return true
+        case .duplicated, .retiredBuiltIn:
+            return sourcePermission ?? false
+        default:
+            return false
+        }
+    }
+
+    private func saveState(_ state: LibraryLocalState) async throws {
+        guard let persistenceStore else { return }
+        let data = try JSONEncoder().encode(state)
+        let value = String(data: data, encoding: .utf8)
+        try await persistenceStore.saveStringSetting(key: Self.libraryStateKey, value: value)
+    }
+
+    private func updatePersistedStateAfterImport(id: String, contentHash: LibraryContentHash) throws {
+        guard let persistenceStore else { return }
+        let libraries = loadCatalogLibraries().filter { library in
+            library.id.caseInsensitiveCompare(id) != .orderedSame
+        }
+        let rawState = try persistenceStore.readStringSetting(key: Self.libraryStateKey)
+        var state = try decodeState(rawState) ?? migratedState(for: libraries)
+        state.generation = max(1, state.generation + 1)
+        state.setAcceptedContent(contentHash, for: id)
+        state.setAIPermission(false, for: id)
+        state.legacyEnabledIds = Array(settings.enabledLibraryIds).sorted()
+        state.normalize()
+        let value = String(data: try JSONEncoder().encode(state), encoding: .utf8)
+        try persistenceStore.writeStringSetting(key: Self.libraryStateKey, value: value)
+    }
+
+    private func updatePersistedStateAfterRemoval(id: String) throws {
+        guard let persistenceStore else { return }
+        if var state = try decodeState(
+            persistenceStore.readStringSetting(key: Self.libraryStateKey)
+        ) {
+            state.generation = max(1, state.generation + 1)
+            state.removeState(for: id)
+            state.normalize()
+            let value = String(data: try JSONEncoder().encode(state), encoding: .utf8)
+            try persistenceStore.writeStringSetting(key: Self.libraryStateKey, value: value)
+        }
+    }
+
+    private func savePersistedState(_ state: LibraryLocalState) throws {
+        guard let persistenceStore else { return }
+        let value = String(data: try JSONEncoder().encode(state), encoding: .utf8)
+        try persistenceStore.writeStringSetting(key: Self.libraryStateKey, value: value)
+    }
+
+    private func loadRecentlyDeletedMetadata() async throws -> [String: RecentlyDeletedMetadata] {
+        guard let persistenceStore else { return [:] }
+        return try decodeRecentlyDeletedMetadata(
+            try await persistenceStore.loadStringSetting(key: Self.recentlyDeletedKey))
+    }
+
+    private func loadRecentlyDeletedMetadataSync() -> [String: RecentlyDeletedMetadata] {
+        guard let persistenceStore,
+            let raw = try? persistenceStore.readStringSetting(key: Self.recentlyDeletedKey),
+            let decoded = try? decodeRecentlyDeletedMetadata(raw)
+        else {
+            return [:]
+        }
+        return decoded
+    }
+
+    private func saveRecentlyDeletedMetadataSync(_ metadata: [String: RecentlyDeletedMetadata]) throws {
+        guard let persistenceStore else { return }
+        let value = String(data: try JSONEncoder().encode(metadata), encoding: .utf8)
+        try persistenceStore.writeStringSetting(key: Self.recentlyDeletedKey, value: value)
+    }
+
+    private func decodeRecentlyDeletedMetadata(_ raw: String?) throws -> [String: RecentlyDeletedMetadata] {
+        guard let raw, let data = raw.data(using: .utf8) else {
+            return [:]
+        }
+        return (try? JSONDecoder().decode([String: RecentlyDeletedMetadata].self, from: data)) ?? [:]
+    }
+
+    private static func deletedStamp(now: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyyMMdd'T'HHmmss'Z'"
+        return formatter.string(from: now)
+    }
+
+    private func libraryFiles() -> [URL] {
+        (try? fileManager.contentsOfDirectory(
+            at: librariesDirectory,
+            includingPropertiesForKeys: nil
+        )) ?? []
+    }
+
+    private func allKnownIDs() -> [String] {
+        let builtIn = BuiltInDictionaryLibraries.all.map(\.id)
+        let custom = libraryFiles()
+            .filter { $0.pathExtension.lowercased() == "csv" }
+            .map { $0.deletingPathExtension().lastPathComponent }
+        return builtIn + custom
+    }
+
+    private static func shippedValues(from libraries: [CatalogLibrary]) -> [String: [TermValues]] {
+        var shipped: [String: [TermValues]] = [:]
+        for library in libraries where library.builtIn {
+            for entry in library.library.entries where entry.enabled {
+                let values = TermValues(entry: entry)
+                let fold = markerFold(values.spoken)
+                guard !fold.isEmpty else { continue }
+                shipped[fold, default: []].append(values)
+            }
+        }
+        return shipped
+    }
+
+    private static func upgradeMarkers(for library: CatalogLibrary, shipped: [String: [TermValues]]) -> [LegacyMarker] {
+        var seen = Set<LibraryTermKey>()
+        var markers: [LegacyMarker] = []
+        for entry in library.library.entries where entry.enabled {
+            let values = TermValues(entry: entry)
+            let key = LibraryTermKey.from(values.spoken)
+            guard !key.isEmpty,
+                let builtIn = shipped[markerFold(values.spoken)],
+                builtIn.contains(where: { !sameResult($0, values) }),
+                seen.insert(key).inserted
+            else {
+                continue
+            }
+            markers.append(LegacyMarker(libraryId: library.id, key: key.value))
+        }
+        return markers
+    }
+
+    private static func sameResult(_ lhs: TermValues, _ rhs: TermValues) -> Bool {
+        lhs.written == rhs.written && lhs.wholeWord == rhs.wholeWord
+    }
+
+    static func markerFold(_ value: String) -> String {
+        SpokenFormFold.fold(value.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }

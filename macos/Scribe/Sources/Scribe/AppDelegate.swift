@@ -14,7 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let overlayAnchorDefaultsKey = "ScribeOverlayAnchor"
 
     private var statusItem: NSStatusItem?
-    private var settingsWindowController: NSWindowController?
+    private var settingsWindowController: SettingsWindowController?
     /// Outlives the Settings window, which is released on close, so unsaved entries survive a close and reopen.
     private let settingsDrafts = SettingsDrafts()
     private var welcomeWindowController: NSWindowController?
@@ -32,8 +32,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var ruleRefresher = RuleSetRefresher<DictationRuleSnapshot>(
         load: { [persistenceStore, weak self] in
             let rules = try await persistenceStore.loadRuleSet()
-            let libraryEntries = await self?.enabledLibraryEntries() ?? []
-            return await DictationRuleSnapshot.compile(rules, libraryEntries: libraryEntries)
+            let vocabulary = try await self?.loadLibraryVocabulary() ?? .empty
+            return await DictationRuleSnapshot.compile(
+                rules,
+                libraryEntries: vocabulary.entries,
+                cleanupVocabularyEntries: vocabulary.aiEntries)
         },
         apply: { [weak self] snapshot in self?.installRules(snapshot) },
         onFailure: { [weak self] error in self?.reportRuleLoadFailure(error) })
@@ -46,24 +49,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let transcriptionEngine = TranscriptionEngine()
     private lazy var textInjector = TextInjector(logSink: { line in ScribeLog.legacyUnshapedLine(line) })
     private lazy var hotkeyManager = HotkeyManager()
-    let dictionaryLibraryService = DictionaryLibraryService()
+    private lazy var dictionaryLibraryService = DictionaryLibraryService(persistenceStore: persistenceStore)
+    private lazy var cleanupVocabularySource: any CleanupVocabularyLibrarySource = dictionaryLibraryService
     private let lastTranscriptStore = LastTranscriptStore()
     let pipelineReportStore = PipelineReportStore()
     private let overlayPanelController = OverlayPanelController()
     private lazy var trayPresenter = TrayPresenter(overlay: overlayPanelController)
-    private lazy var notifier: any DictationNotifying = Self.makeNotifier(recovery: lastTranscriptStore)
+    private var interruptionMonitor: DictationInterruptionMonitor?
+    private lazy var notifier: any DictationNotifying = Self.makeNotifier(
+        recovery: lastTranscriptStore, openSettings: { [weak self] in self?.openSettings(nil) })
     private lazy var startupNotices = StartupNotices { [weak self] notice in
         self?.notifier.notify(notice)
     }
-    private lazy var recentDictationsMenu = RecentDictationsMenu(store: lastTranscriptStore)
+    private lazy var recentDictationsMenu = RecentDictationsMenu(
+        store: lastTranscriptStore, notify: { [weak self] in self?.notifier.notify($0) })
     private lazy var dictationController = makeDictationController()
     private lazy var termination = makeTermination()
+    private let terminationApproval = ApplicationTerminationApproval()
     private var dictationMenuItem: NSMenuItem?
     private var pauseMenuItem: NSMenuItem?
     private var aiCleanupMenuItem: NSMenuItem?
     private var overlayPositionMenu: NSMenu?
+    private lazy var microphoneMenu = MicrophoneMenu()
     private var cleanupSettings = CleanupSettingsStore.live.snapshot()
     private var observations: [SettingsNotificationObservation] = []
+    private var quickAddIsOpening = false
+    private var quickAddOpenEpisode = TrayActionNoticeEpisode()
+    private var quickAddApplyEpisode = TrayActionNoticeEpisode()
 
     private var isAiCleanupEnabled: Bool {
         CleanupSettingsStore.live.isEnabled
@@ -84,6 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         checkAccessibility()
         requestMicrophoneAccessIfNeeded()
         configureHotkey()
+        interruptionMonitor = DictationInterruptionMonitor { [weak self] in
+            self?.dictationController.handleSessionInterruption()
+        }
         observeSettingsAndActivation()
         showWelcomeIfFirstRun()
     }
@@ -91,9 +106,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Quitting waits for Scribe to shut down in order (`ApplicationTermination`): a paste in progress puts the user's
     /// pasteboard back, and a recognizer, or an `az` or `foundry` a Settings check started, is stopped and reaped,
     /// before Scribe replies and exits. `applicationWillTerminate` alone would be too late for any of it. A second
-    /// Quit while that runs changes nothing: the first one replies.
+    /// Quit while that runs changes nothing: the first one replies. Pending Settings edits are resolved before
+    /// `ApplicationTermination` closes admission or starts teardown.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        termination.request()
+        if termination.isTerminating {
+            return termination.request()
+        }
+        return terminationApproval.request(
+            prepare: { [weak self] in
+                await self?.settingsWindowController?.prepareForApplicationTermination() ?? true
+            },
+            proceed: { [weak self] in _ = self?.termination.request() },
+            reject: { NSApp.reply(toApplicationShouldTerminate: false) })
     }
 
     private func makeTermination() -> ApplicationTermination {
@@ -101,7 +125,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let hotkeyManager = hotkeyManager
         return ApplicationTermination(
             work: ApplicationTermination.Work(
-                stopListening: { hotkeyManager.stop() },
+                stopListening: { [weak self] in
+                    hotkeyManager.stop()
+                    self?.startupNotices.close()
+                },
                 operations: .shared,
                 dictation: dictationController,
                 // Maintenance stops first: a reclaim in progress rolls back and frees the connection for the last
@@ -112,6 +139,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func makeDictationController() -> DictationController {
+        var configuration = DictationControllerConfigurationFactory.live()
+        configuration.noticeConfiguration = {
+            DictationNoticeConfiguration(
+                microphoneUID: AudioDeviceStore.live.selectedDeviceUID, shortcut: HotkeySettingsStore.live.binding)
+        }
         let controller = DictationController(
             services: DictationController.Services(
                 capture: LiveDictationCapture(engine: audioCaptureEngine),
@@ -127,17 +159,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 activity: foregroundActivity,
                 recovery: lastTranscriptStore,
                 reports: pipelineReportStore),
-            configuration: DictationController.Configuration(
-                toggleKeyStopsOnSilence: { HotkeySettingsStore.live.autoStopOnSilence }),
+            configuration: configuration,
             isPaused: UserDefaults.standard.bool(forKey: Self.isPausedDefaultsKey))
         controller.triggers = hotkeyManager
         return controller
     }
 
-    private static func makeNotifier(recovery: LastTranscriptStore) -> any DictationNotifying {
+    private func cleanupVocabularyEntries() async -> [DictionaryEntry] {
+        await cleanupVocabularySource.cleanupVocabularyEntries()
+    }
+
+    private static func makeNotifier(
+        recovery: LastTranscriptStore, openSettings: @escaping @MainActor () -> Void
+    ) -> any DictationNotifying {
         // The notification center needs an app bundle; a bare `swift run` binary has none.
         guard Bundle.main.bundleIdentifier != nil else { return SilentNotifier() }
-        return DictationNotificationCenter(center: .current(), recoveryGeneration: { recovery.generation })
+        return DictationNotificationCenter(
+            center: .current(), recoveryGeneration: { recovery.generation }, openScribeSettings: openSettings)
     }
 
     // MARK: - Startup
@@ -184,13 +222,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { await ruleRefresher.refresh() }
     }
 
-    /// Which dictionary libraries are switched on, read on the main actor where Settings changes them.
-    private func enabledLibraryEntries() -> [DictionaryEntry] {
-        dictionaryLibraryService.enabledLibraryEntries()
+    /// The committed word pack vocabulary snapshot every dictation reads, including the AI-permitted subset.
+    private func loadLibraryVocabulary() async throws -> LibraryVocabulary {
+        try await dictionaryLibraryService.loadVocabulary()
     }
 
     private func installRules(_ snapshot: DictationRuleSnapshot) {
         dictationRules.install(snapshot)
+        quickAddApplyEpisode.recovered()
+        startupNotices.recover(.rulesUnavailable)
         ScribeLog.info(
             .persistence, "Rules loaded", .count("dictionaryEntries", snapshot.dictionaryEntryCount),
             .count("libraryEntries", snapshot.libraryEntryCount), .count("snippets", snapshot.snippetCount),
@@ -200,6 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// A failed refresh keeps the rules already in use.
     private func reportRuleLoadFailure(_ error: any Error) {
         ScribeLog.error(.persistence, "Could not load the dictionary rules, snippets and app profiles", .failure(error))
+        if !dictationRules.isLoaded { startupNotices.report(.rulesUnavailable) }
     }
 
     private func reportStorageUnavailable(_ error: any Error) {
@@ -267,18 +308,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func retryHotkeyIfPermitted() {
-        guard !hotkeyManager.isRunning, HotkeyManager.hasInputMonitoringAccess(requesting: false) else { return }
+        if AXIsProcessTrusted() {
+            startupNotices.recover(.accessibilityMissing)
+        } else {
+            startupNotices.report(.accessibilityMissing)
+        }
+        guard HotkeyManager.hasInputMonitoringAccess(requesting: false) else {
+            startupNotices.report(.inputMonitoringMissing)
+            return
+        }
+        guard !hotkeyManager.isRunning else {
+            startupNotices.recover(.inputMonitoringMissing)
+            return
+        }
         if hotkeyManager.start(requestingAccess: false) {
+            startupNotices.recover(.inputMonitoringMissing)
             ScribeLog.info(.hotkey, "Input Monitoring was granted; the push-to-talk key works now")
+        } else {
+            startupNotices.report(.inputMonitoringMissing)
         }
     }
 
     /// Any preference write in the process, from the tray, Settings or elsewhere. Turning cleanup off, or changing
     /// its provider settings, drops the cached provider and its credential at once (`CleanupProviderCache`).
     private func cleanupSettingsMayHaveChanged() {
+        dictationController.noticeConfigurationMayHaveChanged()
         let current = CleanupSettingsStore.live.snapshot()
         let previous = cleanupSettings
         cleanupSettings = current
+        if previous != current {
+            dictationController.cleanupConfigurationChanged()
+        }
         if CleanupInvalidation.shouldInvalidate(from: previous, to: current) {
             dictationController.invalidateCleanup()
             ScribeLog.info(.cleanup, "Dropped the cached cleanup provider after a settings change")
@@ -300,8 +360,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(dictationItem)
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openSettings(_:)), keyEquivalent: ","))
         menu.addItem(overlayPositionMenuItem())
+        menu.addItem(microphoneMenu.item)
         menu.addItem(.separator())
-        let aiCleanupItem = NSMenuItem(title: "AI Cleanup", action: #selector(toggleAiCleanup(_:)), keyEquivalent: "")
+        let aiCleanupItem = NSMenuItem(title: "AI cleanup", action: #selector(toggleAiCleanup(_:)), keyEquivalent: "")
         aiCleanupItem.state = isAiCleanupEnabled ? .on : .off
         menu.addItem(aiCleanupItem)
         let pauseItem = NSMenuItem(title: "Pause Dictation", action: #selector(togglePaused(_:)), keyEquivalent: "")
@@ -328,9 +389,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         trayPresenter.statusButton = item.button
     }
 
-    /// Builds the "Overlay Position" submenu: a 9-anchor picker mirroring Windows' overlay position picker.
+    /// Builds the recording indicator position submenu: a 9-anchor picker mirroring Windows.
     private func overlayPositionMenuItem() -> NSMenuItem {
-        let submenuItem = NSMenuItem(title: "Overlay Position", action: nil, keyEquivalent: "")
+        let submenuItem = NSMenuItem(title: "Recording Indicator Position", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
         for anchor in OverlayAnchor.allCases {
             let item = NSMenuItem(
@@ -371,6 +432,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let store = CleanupSettingsStore.live
         store.isEnabled = !store.isEnabled
         sender.state = store.isEnabled ? .on : .off
+        notifier.notify(.cleanupActivation(store.isEnabled))
         if store.isEnabled {
             ScribeLog.info(.cleanup, "AI cleanup turned on from the tray")
         } else {
@@ -458,11 +520,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// from durable history the first time the ring is empty, so the popup has real transcripts to pick a word from.
     /// It shows and changes rules, so it waits for startup's first rule load (`startupGate`).
     @objc private func openQuickAdd(_ sender: Any?) {
+        guard !quickAddIsOpening, !termination.isTerminating else { return }
+        quickAddIsOpening = true
         Task { [weak self] in
             guard let self else { return }
+            defer { quickAddIsOpening = false }
             _ = await startupGate.wait()
             await seedLastTranscriptStoreFromHistory()
-            let existing = (try? await persistenceStore.loadAllDictionaryEntries()) ?? []
+            let existing: [DictionaryEntry]
+            do {
+                existing = try await persistenceStore.loadAllDictionaryEntries()
+            } catch {
+                ScribeLog.error(.settings, "Could not open Add to dictionary", .failure(error))
+                guard !termination.isTerminating else { return }
+                if quickAddOpenEpisode.failed() { notifier.notify(.quickAddOpenFailed) }
+                return
+            }
+            guard !termination.isTerminating else { return }
+            quickAddOpenEpisode.recovered()
             // The transcripts are taken only now, after the reads: a Clear that succeeded while they ran has emptied
             // the ring and made the read above stale, so the popup never shows text the user deleted.
             presentQuickAdd(recent: lastTranscriptStore.recent(), existing: existing)
@@ -475,12 +550,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 recentTranscripts: recent,
                 existing: existing,
                 onSave: { [weak self] result in self?.handleQuickAddSaved(result) },
-                onClose: { [weak self] in self?.quickAddWindowController?.close() },
-                persistAction: { [weak self] entry in
+                onClose: { [weak self] in
+                    self?.quickAddWindowController?.close()
+                    self?.quickAddWindowController = nil
+                },
+                persistAction: { [weak self] result in
                     guard let self else {
                         throw QuickAddPersistError.noPersistAction
                     }
-                    return try await self.persistQuickAddEntry(entry)
+                    return try await self.persistQuickAddEntries(result)
                 }))
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Add to Dictionary"
@@ -500,24 +578,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Writes the entry (insert for a new rule, update in place for an existing one, keyed by a non-zero id) and
     /// returns the row's id, mirroring Windows' `persist` delegate. The write waits on the storage queue, not the
     /// main actor.
-    private func persistQuickAddEntry(_ entry: DictionaryEntry) async throws -> Int64 {
-        if entry.id != 0 {
-            try await persistenceStore.saveDictionaryEntry(entry)
-            return entry.id
+    private func persistQuickAddEntries(_ result: DictionaryWordEditor.Result) async throws -> [DictionaryEntry] {
+        let inserts = result.addedEntries
+        let updates = result.editedEntry.map { [$0] } ?? []
+        try await persistenceStore.saveDictionaryChanges(inserts: inserts, updates: updates)
+
+        var saved: [DictionaryEntry] = []
+        if let updated = result.editedEntry {
+            saved.append(updated)
         }
-        return try await persistenceStore.addDictionaryEntry(entry)
+        if !inserts.isEmpty {
+            let existing = try await persistenceStore.loadAllDictionaryEntries()
+            for inserted in inserts {
+                if let savedEntry = existing.first(where: {
+                    $0.pattern == inserted.pattern
+                        && $0.replacement == inserted.replacement
+                        && $0.wholeWord == inserted.wholeWord
+                        && $0.enabled == inserted.enabled
+                }) {
+                    saved.append(savedEntry)
+                }
+            }
+        }
+        return saved
     }
 
-    /// After a successful save: refreshes the rules so the new one takes effect on the next dictation, repairs the
-    /// retained copy of the transcript the correction came from, and closes the popup. The log says only that a
-    /// rule was saved: rules are dictated content.
+    /// After a successful save: refreshes the rules so the new one takes effect on the next dictation and repairs the
+    /// retained copy of the transcript the correction came from. The popup decides whether this save closes it.
+    /// The log says only that a rule was saved: rules are dictated content.
     private func handleQuickAddSaved(_ result: QuickAddView.SavedResult) {
-        refreshPostProcessorRules()
+        Task { [weak self] in
+            guard let self else { return }
+            let refreshed = await ruleRefresher.refreshUntilSettled()
+            guard !termination.isTerminating else { return }
+            if refreshed == .applied {
+                quickAddApplyEpisode.recovered()
+                notifier.notify(QuickAddNotice.forRefresh(applied: true))
+            } else if quickAddApplyEpisode.failed() {
+                notifier.notify(QuickAddNotice.forRefresh(applied: false))
+            }
+        }
         if let source = result.sourceTranscript, let corrected = result.correctedTranscript {
             lastTranscriptStore.update(original: source, updated: corrected)
         }
         ScribeLog.info(.settings, "Saved a dictionary rule from Quick Add")
-        quickAddWindowController?.close()
     }
 
     /// Shows the one-time welcome window (non-modally, so the tray and dictation stay live behind it), then persists

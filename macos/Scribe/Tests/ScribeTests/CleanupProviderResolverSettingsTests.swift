@@ -78,21 +78,40 @@ final class CleanupProviderResolverSettingsTests: XCTestCase {
         assertNotConfigured(fixture.store, .openAIModelMissing)
     }
 
-    func testOpenAICompatibleResolvesWithItsCompletionsURLAndTheSecretRevision() throws {
+    func testOpenAICompatibleResolvesWithItsServiceURLAndTheSecretRevision() throws {
         let fixture = makeCleanupStore()
         fixture.store.providerKind = .openAICompatible
         fixture.store.openAIBaseURL = "https://openrouter.ai/api/v1"
         fixture.store.openAIModel = "some/model"
+        fixture.store.openAIApiStyle = .responses
         try fixture.store.setOpenAIApiKey("sk-test")
 
         XCTAssertEqual(
             try connection(fixture.store).target,
             .openAICompatible(
-                completionsURL: URL(string: "https://openrouter.ai/api/v1/chat/completions")!, model: "some/model",
-                apiKey: .secretStore(revision: fixture.store.secretRevision)))
+                serviceURL: URL(string: "https://openrouter.ai/api/v1")!,
+                model: "some/model",
+                apiKey: .secretStore(revision: fixture.store.secretRevision),
+                apiStyle: .responses))
         let provider = try makeProvider(fixture.store)
         XCTAssertEqual(provider.id, "openai-compatible")
         XCTAssertEqual(provider.displayName, "OpenAI-compatible endpoint")
+    }
+
+    func testAStaleLocalSelectionIsNotCapturedByARemoteConnection() throws {
+        let store = makeCleanupStore().store
+        store.providerKind = .openAICompatible
+        store.openAIBaseURL = "https://remote.example/v1"
+        store.openAIModel = "model"
+        store.selectedLocalApp = .ollama
+        store.ollamaContextTokens = 32768
+        let captured = try connection(store)
+        XCTAssertEqual(captured.localServerApp, .none)
+        XCTAssertEqual(captured.localContextTokens, 0)
+        let cache = CleanupProviderCache(
+            store: store, environment: [:],
+            factory: .testing(session: makeStubSession { request in StubReply.completion(request, "Cleaned.") }))
+        XCTAssertNil(cache.currentLocalTarget())
     }
 
     func testMicrosoftFoundryNeedsAnEndpointAndADeployment() {
@@ -143,6 +162,23 @@ final class CleanupProviderResolverSettingsTests: XCTestCase {
         }
         XCTAssertEqual(identity, .azureCli(tenantId: "contoso.onmicrosoft.com"))
         XCTAssertEqual(try makeProvider(fixture.store).id, "microsoft-foundry")
+    }
+
+    func testFoundryApiKeyWinsOverAnIncompleteServicePrincipalConfiguration() throws {
+        let fixture = makeCleanupStore()
+        fixture.store.providerKind = .microsoftFoundry
+        fixture.store.azureEndpoint = "https://my-res.openai.azure.com"
+        fixture.store.azureDeployment = "gpt-5-mini"
+        fixture.store.azureAuthMode = .servicePrincipal
+        fixture.store.azureApiKeySelected = true
+        try fixture.store.setAzureApiKey("foundry-key")
+
+        guard case .microsoftFoundry(_, _, let identity) = try connection(fixture.store).target else {
+            return XCTFail("Expected a Microsoft Foundry connection")
+        }
+        XCTAssertEqual(identity, .apiKey)
+        XCTAssertEqual(try makeProvider(fixture.store).id, "microsoft-foundry")
+        XCTAssertTrue(fixture.store.azureApiKeySelected)
     }
 
     /// The tenant goes into a URL path or an `az` argument, so one that could change either is refused.
@@ -250,8 +286,10 @@ final class CleanupProviderResolverSettingsTests: XCTestCase {
         XCTAssertEqual(
             resolved.target,
             .openAICompatible(
-                completionsURL: URL(string: "http://127.0.0.1:1234/v1/chat/completions")!, model: "local-model",
-                apiKey: .environment))
+                serviceURL: URL(string: "http://127.0.0.1:1234")!,
+                model: "local-model",
+                apiKey: .environment,
+                apiStyle: .chatCompletions))
         PrivacyCanary.assertAbsent(from: String(describing: resolved))
         XCTAssertEqual(log.all.first?.header("Authorization"), "Bearer \(PrivacyCanary.secret)")
     }

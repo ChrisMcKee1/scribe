@@ -3,8 +3,8 @@ import Foundation
 import os
 
 /// Scribe's logging facade. One call writes an event to the unified log (subsystem `com.scribe.macos`,
-/// one category per area) and, for every level above debug, one line to standard error, which is what
-/// a Terminal launch shows.
+/// one category per area) and, for every level above debug, one line to standard error. The app's
+/// entry point also observes the redacted rendering for bounded daily diagnostic files.
 ///
 /// Logs hold shapes, never content: no transcripts or dictation text, dictionary entries, snippet
 /// bodies, prompts, clipboard content, endpoints, keys or AI output (see PRIVACY.md). This API makes

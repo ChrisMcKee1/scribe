@@ -376,20 +376,24 @@ struct CleanupStoreFixture {
     let store: CleanupSettingsStore
     let defaults: UserDefaults
     let apiKeys: InMemorySecretStore
+    let azureApiKeys: InMemorySecretStore
     let clientSecrets: InMemorySecretStore
 }
 
 extension XCTestCase {
     func makeCleanupStore(
         apiKeys: InMemorySecretStore = InMemorySecretStore(),
-        clientSecrets: InMemorySecretStore = InMemorySecretStore()
+        clientSecrets: InMemorySecretStore = InMemorySecretStore(),
+        azureApiKeys: InMemorySecretStore = InMemorySecretStore()
     ) -> CleanupStoreFixture {
         let isolated = makeIsolatedDefaults(label: "cleanup")
         return CleanupStoreFixture(
             store: CleanupSettingsStore(
-                domain: .suite(isolated.suiteName), apiKeys: apiKeys, clientSecrets: clientSecrets),
+                domain: .suite(isolated.suiteName), apiKeys: apiKeys, clientSecrets: clientSecrets,
+                azureApiKeys: azureApiKeys),
             defaults: isolated.defaults,
             apiKeys: apiKeys,
+            azureApiKeys: azureApiKeys,
             clientSecrets: clientSecrets)
     }
 
@@ -687,7 +691,8 @@ extension CleanupProviderFactory {
         azureCliLaunch: AzureCliCredentialProvider.Launch? = nil,
         azureCliSearchPath: [String] = [],
         lane: AsyncLane = AsyncLane(),
-        clock: TestClock = TestClock()
+        clock: TestClock = TestClock(),
+        readLocalServer: (@Sendable (String, String?) async -> LocalServerState)? = nil
     ) -> CleanupProviderFactory {
         let missing: AzureCliCredentialProvider.Launch = { _ in throw ProcessRunnerError.launchFailed(errno: ENOENT) }
         let launch = azureCliLaunch ?? azureCli?.launch ?? missing
@@ -697,12 +702,24 @@ extension CleanupProviderFactory {
             azureCliSearchPath: azureCliSearchPath,
             azureCliLane: lane,
             azureCliLaunch: launch,
+            readLocalServer: readLocalServer ?? { endpoint, apiKey in
+                await LocalServerClient(session: session).read(endpoint, apiKey: apiKey)
+            },
             now: clock.now,
-            monotonicNow: clock.monotonicNow)
+            monotonicNow: clock.monotonicNow,
+            localModelLifecycle: LocalModelLifecycle(
+                idle: .zero,
+                actions: .init(unloadModel: { _, _, _ in true }, unloadInstance: { _, _, _ in true })),
+            foundryLocalContext: .init(lookup: { _ in 4096 }),
+            foundryLocalResidency: .alreadyResident)
     }
 }
 
 // MARK: - Work that never finishes, and reads held in the middle
+
+extension FoundryLocalResidencySource {
+    static var alreadyResident: Self { Self(isLoaded: { _ in true }, loadCached: { _ in }) }
+}
 
 /// Work that never finishes on its own: `hold()` suspends until its task is cancelled and then throws
 /// `CancellationError`, as a stalled `az`, a hung `foundry status` or a silent endpoint would, given that Scribe's

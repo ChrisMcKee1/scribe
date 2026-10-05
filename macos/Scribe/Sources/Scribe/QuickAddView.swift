@@ -15,22 +15,37 @@ struct QuickAddView: View {
     /// (nil when the rule did not change this particular transcript).
     struct SavedResult {
         let entry: DictionaryEntry
+        let savedEntries: [DictionaryEntry]
         let sourceTranscript: String?
         let correctedTranscript: String?
     }
 
-    let recentTranscripts: [String]
-    let existing: [DictionaryEntry]
     let onSave: (SavedResult) -> Void
     let onClose: () -> Void
 
+    @State private var recentTranscripts: [String]
+    @State private var existing: [DictionaryEntry]
     @State private var selectedTranscriptIndex = 0
     @State private var selection: QuickDictionaryAdd.WordRange = .none
-    @State private var heard = ""
+    @State private var forms = [""]
     @State private var written = ""
     @State private var wholeWord = true
     @State private var errorMessage: String?
     @State private var isSaving = false
+
+    init(
+        recentTranscripts: [String],
+        existing: [DictionaryEntry],
+        onSave: @escaping (SavedResult) -> Void,
+        onClose: @escaping () -> Void,
+        persistAction: (@MainActor (DictionaryWordEditor.Result) async throws -> [DictionaryEntry])? = nil
+    ) {
+        self.onSave = onSave
+        self.onClose = onClose
+        self.persistAction = persistAction
+        _recentTranscripts = State(initialValue: recentTranscripts)
+        _existing = State(initialValue: existing)
+    }
 
     private var transcript: String {
         recentTranscripts.indices.contains(selectedTranscriptIndex) ? recentTranscripts[selectedTranscriptIndex] : ""
@@ -41,7 +56,24 @@ struct QuickAddView: View {
     }
 
     private var plan: QuickDictionaryAdd.Plan {
-        QuickDictionaryAdd.build(pattern: heard, replacement: written, wholeWord: wholeWord, existing: existing)
+        QuickDictionaryAdd.build(
+            pattern: forms.first ?? "",
+            replacement: written,
+            wholeWord: wholeWord,
+            existing: existing)
+    }
+
+    private var editorResult: DictionaryWordEditor.Result {
+        let editedIndex = existing.firstIndex {
+            $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(
+                (forms.first ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            ) == .orderedSame
+        }
+        return DictionaryWordEditor.build(
+            existing: existing,
+            editedIndex: editedIndex,
+            replacement: written,
+            forms: forms)
     }
 
     var body: some View {
@@ -67,7 +99,7 @@ struct QuickAddView: View {
                 .labelsHidden()
                 .onChange(of: selectedTranscriptIndex) { _ in
                     selection = .none
-                    heard = ""
+                    forms = [""]
                 }
 
                 Text("Tap the word Scribe got wrong. Tap an adjacent chip to extend the phrase.")
@@ -78,7 +110,7 @@ struct QuickAddView: View {
                     ForEach(Array(tokens.enumerated()), id: \.offset) { index, token in
                         Button(token.text) {
                             selection = QuickDictionaryAdd.toggle(selection, index: index)
-                            heard = QuickDictionaryAdd.select(
+                            forms[0] = QuickDictionaryAdd.select(
                                 transcript, tokens: tokens, first: selection.first, last: selection.last)
                         }
                         .buttonStyle(.plain)
@@ -99,22 +131,42 @@ struct QuickAddView: View {
 
             Divider()
 
-            TextField("Heard (what Scribe wrote)", text: $heard)
+            ForEach(forms.indices, id: \.self) { index in
+                HStack {
+                    TextField(
+                        index == 0 ? "Heard (what Scribe wrote)" : "Another way Scribe hears it",
+                        text: binding(for: index))
+                    if index > 0 {
+                        Button(role: .destructive) {
+                            forms.remove(at: index)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            Button("Add another way") {
+                forms.append("")
+            }
             TextField("Should be", text: $written)
             Toggle("Whole word only", isOn: $wholeWord)
 
-            Text(plan.message)
+            Text(editorResult.error ?? plan.message)
                 .font(.caption)
-                .foregroundStyle(plan.kind == .invalid ? .red : .secondary)
+                .foregroundStyle(editorResult.succeeded ? (plan.kind == .invalid ? .red : .secondary) : .red)
 
             HStack {
                 Spacer()
                 Button("Cancel", action: onClose)
                     .accessibilityLabel("Cancel")
-                Button(saveButtonTitle) { save() }
+                Button("Save") { save(closeAfterSave: false) }
+                    .disabled(!editorResult.canSave || plan.kind == .invalid || isSaving)
+                    .accessibilityLabel("Save")
+                Button("Save and close") { save(closeAfterSave: true) }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!plan.canSave || isSaving)
-                    .accessibilityLabel(saveButtonTitle)
+                    .disabled(!editorResult.canSave || plan.kind == .invalid || isSaving)
+                    .accessibilityLabel("Save and close")
             }
 
             if let errorMessage {
@@ -125,16 +177,12 @@ struct QuickAddView: View {
         .frame(minWidth: 420, idealWidth: 460)
     }
 
-    private var saveButtonTitle: String {
-        plan.kind == .update ? "Update Rule" : "Save"
-    }
-
     private func isSelected(_ index: Int) -> Bool {
         !selection.isEmpty && index >= selection.first && index <= selection.last
     }
 
-    private func save() {
-        guard let entry = plan.entry, !isSaving else { return }
+    private func save(closeAfterSave: Bool) {
+        guard editorResult.canSave, !isSaving else { return }
 
         let sourceTranscript = transcript.isEmpty ? nil : transcript
         isSaving = true
@@ -143,19 +191,31 @@ struct QuickAddView: View {
         Task {
             defer { isSaving = false }
             do {
-                let savedID = try await persist(entry)
-                let saved = DictionaryEntry(
-                    id: savedID,
-                    pattern: entry.pattern,
-                    replacement: entry.replacement,
-                    wholeWord: entry.wholeWord,
-                    enabled: entry.enabled)
+                let savedEntries = try await persist(editorResult)
+                guard
+                    let saved = savedEntries.first ?? editorResult.editedEntry ?? editorResult.addedEntries.first
+                else {
+                    throw QuickAddPersistError.noPersistAction
+                }
                 let corrected = sourceTranscript.map { QuickDictionaryAdd.apply($0, entry: saved) }
+                let refreshedTranscript = corrected ?? sourceTranscript
+                if let refreshedTranscript, recentTranscripts.indices.contains(selectedTranscriptIndex) {
+                    recentTranscripts[selectedTranscriptIndex] = refreshedTranscript
+                }
+                merge(savedEntries)
+                selection = .none
+                forms = [""]
+                written = ""
+                wholeWord = true
                 onSave(
                     SavedResult(
                         entry: saved,
+                        savedEntries: savedEntries,
                         sourceTranscript: sourceTranscript,
                         correctedTranscript: (corrected != sourceTranscript) ? corrected : nil))
+                if closeAfterSave {
+                    onClose()
+                }
             } catch {
                 errorMessage = "Couldn't save that rule: \(error.localizedDescription)"
             }
@@ -165,13 +225,29 @@ struct QuickAddView: View {
     /// Injected so the view never opens the database itself: production passes a closure that inserts a new
     /// rule or updates the existing one through the store's asynchronous forms. `save()` only calls it for a
     /// plan that carries an entry.
-    var persistAction: (@MainActor (DictionaryEntry) async throws -> Int64)?
+    var persistAction: (@MainActor (DictionaryWordEditor.Result) async throws -> [DictionaryEntry])?
 
-    private func persist(_ entry: DictionaryEntry) async throws -> Int64 {
+    private func persist(_ result: DictionaryWordEditor.Result) async throws -> [DictionaryEntry] {
         guard let persistAction else {
             throw QuickAddPersistError.noPersistAction
         }
-        return try await persistAction(entry)
+        return try await persistAction(result)
+    }
+
+    private func binding(for index: Int) -> Binding<String> {
+        Binding(
+            get: { forms[index] },
+            set: { forms[index] = $0 })
+    }
+
+    private func merge(_ savedEntries: [DictionaryEntry]) {
+        for saved in savedEntries {
+            if let index = existing.firstIndex(where: { $0.id == saved.id }) {
+                existing[index] = saved
+            } else {
+                existing.append(saved)
+            }
+        }
     }
 }
 

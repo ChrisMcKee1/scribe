@@ -257,9 +257,13 @@ struct SystemInjectionPacing: InjectionPacing {
     }
 }
 
-/// Places dictated text into the focused application: through the Accessibility API when the focused
-/// element accepts it, otherwise by pasting through a briefly borrowed pasteboard, otherwise by typing it
-/// as Unicode keystrokes. The target is confirmed again before each of those steps.
+enum InjectionMethod {
+    case unicodeTyping
+    case accessibilityThenPaste
+}
+
+/// Types dictated text as Unicode keystrokes by default. The legacy Accessibility and paste path is
+/// available explicitly. The target is confirmed before every keystroke.
 ///
 /// Runs on the main actor with the AppKit and Accessibility calls it makes. Its waits suspend rather than
 /// block, and `LiveInjectionSystem` bounds every Accessibility request, so a delivery never freezes the
@@ -269,6 +273,7 @@ final class TextInjector {
     private let system: any InjectionSystem
     private let pacer: any InjectionPacing
     private let borrower: PasteboardBorrower
+    private let method: InjectionMethod
     private let logger = Logger(subsystem: "com.scribe.macos", category: "TextInjection")
     private let logSink: (String) -> Void
     private var isDelivering = false
@@ -299,11 +304,13 @@ final class TextInjector {
         system: any InjectionSystem,
         pacer: any InjectionPacing,
         borrower: PasteboardBorrower,
+        method: InjectionMethod = .unicodeTyping,
         logSink: @escaping (String) -> Void
     ) {
         self.system = system
         self.pacer = pacer
         self.borrower = borrower
+        self.method = method
         self.logSink = logSink
     }
 
@@ -478,6 +485,15 @@ final class TextInjector {
         // The focus question can take up to the messaging timeout; nothing has been sent yet.
         guard !Task.isCancelled else {
             return InjectionResult(delivery: .cancelled)
+        }
+
+        if method == .unicodeTyping {
+            return InjectionResult(
+                delivery: await typeText(
+                    text,
+                    to: requested.pinned(to: processIdentifier),
+                    processIdentifier: processIdentifier,
+                    shiftReturnLineBreaks: shiftReturnLineBreaks))
         }
 
         switch system.insertViaAccessibility(text, into: element) {

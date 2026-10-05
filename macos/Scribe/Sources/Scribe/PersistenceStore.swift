@@ -470,6 +470,61 @@ final class PersistenceStore: Sendable {
         }
     }
 
+    /// Search is applied before the result bound, over every stored row, not the recent page.
+    func loadHistoryRows(query: String = "", limit: Int = 200) async throws -> [StoredDictation] {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pattern =
+            "%"
+            + query.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "%", with: "\\%")
+            .replacingOccurrences(of: "_", with: "\\_") + "%"
+        return try await owner.withSessionAsync(.foreground) { session in
+            try Task.checkCancellation()
+            return try session.withStatement(
+                """
+                SELECT id, started_at, duration_seconds, sample_count, decode_ms, cleanup_ms,
+                    transcript_text, target_app
+                FROM dictation_history
+                WHERE ?1 = '' OR transcript_text LIKE ?2 ESCAPE '\\' OR target_app LIKE ?2 ESCAPE '\\'
+                ORDER BY id DESC LIMIT ?3;
+                """, .read
+            ) { statement in
+                try statement.bind(query, at: 1)
+                try statement.bind(pattern, at: 2)
+                try statement.bind(Int64(max(0, limit)), at: 3)
+                var rows: [StoredDictation] = []
+                while try statement.step() {
+                    try Task.checkCancellation()
+                    guard let id = statement.int64(at: 0),
+                        let timestamp = statement.text(at: 1),
+                        let date = session.date(from: timestamp)
+                    else { continue }
+                    rows.append(
+                        StoredDictation(
+                            id: id,
+                            record: DictationHistoryRecord(
+                                startedAt: date,
+                                durationSeconds: statement.double(at: 2) ?? 0,
+                                sampleCount: Int(statement.int64(at: 3) ?? 0),
+                                decodeMilliseconds: statement.double(at: 4),
+                                cleanupMilliseconds: statement.double(at: 5),
+                                transcriptText: statement.text(at: 6),
+                                targetApp: statement.text(at: 7))))
+                }
+                return rows
+            }
+        }
+    }
+
+    func removeHistoryRow(id: Int64) async throws {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.runUpdate("DELETE FROM dictation_history WHERE id = ?1;", in: session) { statement in
+                try statement.bind(id, at: 1)
+            }
+        }
+        removedText.record()
+    }
+
     /// The newest `limit` non-blank transcripts, newest first, for the tray's recovery ring. The
     /// chosen retention applies even before the next sweep runs, so text past the user's limit is
     /// never shown again; a missing or unreadable choice keeps everything, exactly as the sweep does.
@@ -675,6 +730,58 @@ final class PersistenceStore: Sendable {
             try statement.bind(retentionSettingKey, at: 1)
             try statement.bind(String(retention.storedDays), at: 2)
             try statement.run()
+        }
+    }
+
+    func loadStringSetting(key: String) async throws -> String? {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.readSetting(key: key, session)
+        }
+    }
+
+    func saveStringSetting(key: String, value: String?) async throws {
+        try await owner.withSessionAsync(.foreground) { session in
+            try Self.writeSetting(key: key, value: value, session)
+        }
+    }
+
+    func readStringSetting(key: String) throws -> String? {
+        try owner.withSession(.foreground) { session in
+            try Self.readSetting(key: key, session)
+        }
+    }
+
+    func writeStringSetting(key: String, value: String?) throws {
+        try owner.withSession(.foreground) { session in
+            try Self.writeSetting(key: key, value: value, session)
+        }
+    }
+
+    private static func readSetting(key: String, _ session: SQLiteSession) throws -> String? {
+        try session.withStatement("SELECT value FROM settings WHERE key = ?1;", .read) { statement in
+            try statement.bind(key, at: 1)
+            guard try statement.step() else {
+                return nil
+            }
+            return statement.text(at: 0)
+        }
+    }
+
+    private static func writeSetting(key: String, value: String?, _ session: SQLiteSession) throws {
+        if let value {
+            try session.withStatement(
+                "INSERT OR REPLACE INTO settings(key, value) VALUES (?1, ?2);",
+                .write
+            ) { statement in
+                try statement.bind(key, at: 1)
+                try statement.bind(value, at: 2)
+                try statement.run()
+            }
+        } else {
+            try session.withStatement("DELETE FROM settings WHERE key = ?1;", .write) { statement in
+                try statement.bind(key, at: 1)
+                try statement.run()
+            }
         }
     }
 
@@ -904,6 +1011,21 @@ final class PersistenceStore: Sendable {
             return
         }
         try owner.withSession(.foreground) { session in
+            try session.transaction(.write) {
+                try Self.writeDictionaryChanges(inserts: inserts, updates: updates, session)
+            }
+        }
+        if !updates.isEmpty {
+            removedText.record()
+        }
+    }
+
+    /// `applyDictionaryChanges(inserts:updates:)` for main-actor callers.
+    func saveDictionaryChanges(inserts: [DictionaryEntry], updates: [DictionaryEntry]) async throws {
+        guard !inserts.isEmpty || !updates.isEmpty else {
+            return
+        }
+        try await owner.withSessionAsync(.foreground) { session in
             try session.transaction(.write) {
                 try Self.writeDictionaryChanges(inserts: inserts, updates: updates, session)
             }

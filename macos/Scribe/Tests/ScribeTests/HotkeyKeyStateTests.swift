@@ -193,6 +193,7 @@ final class HotkeyManagerEventTests: XCTestCase {
         var startsRecording = true
         /// What the manager reads as the modifier state now.
         var flags: CGEventFlags = []
+        var keyIsDown = false
 
         var causes: [HotkeyReleaseCause] {
             releases.map { $0.cause }
@@ -201,7 +202,7 @@ final class HotkeyManagerEventTests: XCTestCase {
 
     private func makeManager(keyCode: CGKeyCode, recorder: Recorder) -> HotkeyManager {
         let manager = HotkeyManager(
-            keyCode: keyCode, readModifierFlags: { recorder.flags }, readKeyDown: { _ in false })
+            keyCode: keyCode, readModifierFlags: { recorder.flags }, readKeyDown: { _ in recorder.keyIsDown })
         manager.onPressed = { binding in
             recorder.presses.append(binding)
             return recorder.startsRecording
@@ -228,11 +229,27 @@ final class HotkeyManagerEventTests: XCTestCase {
         let recorder = Recorder()
         let manager = makeManager(keyCode: 61, recorder: recorder)
 
+        recorder.keyIsDown = true
         manager.receive(event(.flagsChanged, keyCode: 61, flags: rightOptionDown))
         XCTAssertTrue(manager.isEngaged)
         // Left Option going down meanwhile is another key's event.
         manager.receive(event(.flagsChanged, keyCode: 58, flags: [.maskAlternate]))
+        recorder.keyIsDown = false
         manager.receive(event(.flagsChanged, keyCode: 61, flags: []))
+
+        XCTAssertEqual(recorder.presses, [HotkeyBinding(keyCode: 61)])
+        XCTAssertEqual(recorder.causes, [.keyReleased])
+        XCTAssertFalse(manager.isEngaged)
+    }
+
+    func testHeldModifierReleaseUsesKeyStateWhenEventFlagsStillShowDown() {
+        let recorder = Recorder()
+        let manager = makeManager(keyCode: 61, recorder: recorder)
+
+        recorder.keyIsDown = true
+        manager.receive(event(.flagsChanged, keyCode: 61, flags: rightOptionDown))
+        recorder.keyIsDown = false
+        manager.receive(event(.flagsChanged, keyCode: 61, flags: rightOptionDown))
 
         XCTAssertEqual(recorder.presses, [HotkeyBinding(keyCode: 61)])
         XCTAssertEqual(recorder.causes, [.keyReleased])

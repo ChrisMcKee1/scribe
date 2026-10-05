@@ -44,6 +44,8 @@ enum DictationStopReason: String, Equatable, Sendable {
     case bindingChanged
     /// The event tap was disabled and, re-read afterwards, the key had been released meanwhile.
     case tapResynchronized
+    /// The session locked or slept while the dictation was live.
+    case sessionInterrupted
     /// Scribe is quitting; the recording is discarded.
     case shutdown
 }
@@ -80,7 +82,7 @@ extension CleanupPrompt {
     /// single-line contract added when the target needs it. Windows' `ResolveWritingStyleOverride`.
     static func writingStyle(profileStyle: String?, requireSingleLine: Bool) -> String {
         let trimmed = profileStyle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let style = trimmed.isEmpty ? defaultWritingStyle : trimmed
+        let style = trimmed.isEmpty ? CleanupPrompt.effectiveWritingStyle : trimmed
         return requireSingleLine ? style + " " + singleLineWritingStyle : style
     }
 }
@@ -109,6 +111,7 @@ private struct LiveRecording {
     /// The app profiles as they stood at activation, when the rules had loaded by then.
     var profiles: [AppProfile]?
     var deadline: Task<Void, Never>?
+    var localModelPreparation: LocalModelPreparation?
 }
 
 /// A stopped recording admitted to processing, with everything captured when it started. Its samples are sealed off
@@ -121,6 +124,8 @@ private struct AdmittedDictation: Sendable {
     let sealing: Task<CapturedAudio?, Never>
     let stopReason: DictationStopReason
     let lease: ForegroundActivity.Lease
+    let localModelPreparation: LocalModelPreparation?
+    let heldDuration: Duration
 }
 
 /// Where a cancelled dictation stopped, for the log.
@@ -215,12 +220,18 @@ final class DictationController {
         var toggleKeyStopsOnSilence: @MainActor @Sendable () -> Bool = { false }
         /// Line-break handling when no app profile overrides it.
         var newlineMode: NewlineInjectionMode = .smartFlatten
+        /// Whether the target gets one trailing space after each dictation. Read for the dictation being inserted, so
+        /// a change applies to the next delivery that reaches insertion.
+        var addSpaceAfterDictation: @MainActor @Sendable () -> Bool = { true }
         /// How long a notice stays on the pill.
         var noticeDuration: Duration = .milliseconds(1_800)
         /// A press while this many dictations are still processing is turned away, which bounds the audio held.
         var maximumDictationsInProcessing = 3
         /// How long shutdown waits for history already accepted to commit.
         var historyDrainTimeout: TimeInterval = 3
+        var noticeConfiguration: @MainActor @Sendable () -> DictationNoticeConfiguration = {
+            DictationNoticeConfiguration()
+        }
     }
 
     struct Services {
@@ -279,11 +290,19 @@ final class DictationController {
     private(set) var shutdownProgress = ShutdownProgress.notStarted
     private var recording: LiveRecording?
     private var dictations: [RecordingID: Task<Void, Never>] = [:]
+    private var localModelPreparations: [RecordingID: LocalModelPreparation] = [:]
     private let transcriptionTurns = DictationTurns()
     private let deliveryTurns = DictationTurns()
     private var revision: UInt64 = 0
-    private var levelDbfs = AudioLevelMeasurement.toDbfs(0)
+    private var levelMeter = PillLevelMeter()
+    private var level = 0.0
+    private var lastLevelAt: ContinuousClock.Instant?
     private var notices = DictationNoticeSchedule()
+    private var cleanupNoticeEpisode = CleanupNoticeEpisode()
+    private var problemEpisodes = DictationProblemEpisodes()
+    private var problemTickets: [RecordingID: DictationProblemEpisodes.Ticket] = [:]
+    private var selectionReports: Set<RecordingID> = []
+    private var noticeConfiguration: DictationNoticeConfiguration
     private var nextNoticeID: UInt64 = 0
     private var noticeTimer: Task<Void, Never>?
     private var shutdown: Task<DictationShutdownReport, Never>?
@@ -295,6 +314,7 @@ final class DictationController {
         self.services = services
         self.configuration = configuration
         self.isPaused = isPaused
+        self.noticeConfiguration = configuration.noticeConfiguration()
     }
 
     /// The recording admitted, opening or live, if any.
@@ -367,10 +387,14 @@ final class DictationController {
     func setPaused(_ paused: Bool) {
         guard paused != isPaused else { return }
         isPaused = paused
+        services.cleanup.notePause(paused)
         if paused {
             ScribeLog.info(.dictation, "Dictation paused")
         } else {
             ScribeLog.info(.dictation, "Dictation resumed")
+        }
+        if paused {
+            Task { await services.cleanup.releaseLocalModel(.pause) }
         }
         if paused, let current = recording {
             endRecording(current.id, reason: .paused)
@@ -379,9 +403,34 @@ final class DictationController {
         }
     }
 
+    /// The session locked or slept while a dictation was live or opening. Ends it through the normal stop path so
+    /// what was already captured is still processed.
+    func handleSessionInterruption() {
+        guard let current = recording else { return }
+        endRecording(current.id, reason: .sessionInterrupted)
+    }
+
     /// Drops the cached cleanup provider and credential, for when cleanup is switched off or its settings change.
     func invalidateCleanup() {
         services.cleanup.invalidate()
+    }
+
+    /// A new cleanup configuration starts a fresh notice episode and makes every old readiness check stale.
+    func cleanupConfigurationChanged() {
+        _ = cleanupNoticeEpisode.apply(.configurationChanged)
+        recording?.localModelPreparation?.cancel()
+        for preparation in localModelPreparations.values {
+            preparation.cancel()
+        }
+
+        present()
+    }
+
+    func noticeConfigurationMayHaveChanged() {
+        let current = configuration.noticeConfiguration()
+        guard current != noticeConfiguration else { return }
+        noticeConfiguration = current
+        problemEpisodes.configurationChanged()
     }
 
     /// Clear history started a new recovery generation: a notice about text kept before it, on the pill or waiting
@@ -396,17 +445,23 @@ final class DictationController {
     /// A meter reading or a stop request from the capture engine, on the main actor. Events of a recording that no
     /// longer holds the microphone are ignored: its owner has moved on.
     func handleCaptureEvent(_ event: CaptureEvent) {
+        if case .microphoneSelection(let selection) = event.kind {
+            reportMicrophoneSelection(selection, about: event.owner)
+            return
+        }
         guard !isClosing, let current = recording, current.id == event.owner else {
             checkpoints.ignoredCaptureEvents += 1
             return
         }
         switch event.kind {
-        case .level(let level):
+        case .level(let measurement):
             guard current.phase == .live else {
                 checkpoints.ignoredCaptureEvents += 1
                 return
             }
-            levelDbfs = level.rmsDbfs
+            let now = services.clock.now
+            level = levelMeter.update(measurement.peakAmplitude, sincePrevious: lastLevelAt?.duration(to: now) ?? .zero)
+            lastLevelAt = now
             present()
         case .stopRequested(let ending):
             let reason: DictationStopReason
@@ -416,6 +471,8 @@ final class DictationController {
             case .deviceChanged, .formatChanged, .conversionFailed: reason = .deviceFault
             }
             endRecording(current.id, reason: reason)
+        case .microphoneSelection:
+            break
         }
     }
 
@@ -459,6 +516,8 @@ final class DictationController {
         }
 
         let id = RecordingID.next()
+        noticeConfigurationMayHaveChanged()
+        problemTickets[id] = problemEpisodes.begin(id)
         let policy = CaptureStopPolicy(
             gesture: trigger.gesture,
             autoStopOnSilence: trigger.stopsOnSilence(toggleKeyOptedIn: configuration.toggleKeyStopsOnSilence()),
@@ -467,9 +526,22 @@ final class DictationController {
         notices.yieldToRecording()
         noticeTimer?.cancel()
         noticeTimer = nil
-        levelDbfs = AudioLevelMeasurement.toDbfs(0)
+        levelMeter.reset()
+        level = 0
+        lastLevelAt = nil
+        let preparation =
+            services.cleanup.isEnabled
+            ? LocalModelPreparation { [weak self] in
+                guard let self, !self.isClosing,
+                    self.recording?.id == id || self.dictations[id] != nil
+                else { return }
+                self.present()
+            }
+            : nil
         recording = LiveRecording(
-            id: id, trigger: trigger, policy: policy, admittedAt: services.clock.now, lease: services.activity.begin())
+            id: id, trigger: trigger, policy: policy, admittedAt: services.clock.now, lease: services.activity.begin(),
+            localModelPreparation: preparation)
+        preparation?.start(using: services.cleanup)
         ScribeLog.info(
             .dictation, "Recording admitted", .integer("dictation", id.rawValue), .name("trigger", trigger),
             .name("gesture", trigger.gesture), .flag("stopsOnSilence", policy.stopsOnSilence),
@@ -513,6 +585,9 @@ final class DictationController {
             return
         }
         checkpoints.openAnswers += 1
+        if outcome != .stoppedBeforeOpen, let ticket = problemTickets[id] {
+            problemEpisodes.recovered([.microphoneUnavailable, .microphoneAccess], under: ticket)
+        }
 
         // A stop that arrived while the device opened took the recording, and the engine closes or never opened the
         // device for it.
@@ -528,6 +603,8 @@ final class DictationController {
             // Only this controller stops its recordings, and it lets go of a recording when it does, so the engine
             // saw a stop from somewhere else: nothing is open and nothing was recorded.
             recording = nil
+            problemTickets[id] = nil
+            selectionReports.remove(id)
             opened.lease.end()
             settleToggle(of: opened)
             ScribeLog.warning(
@@ -557,6 +634,8 @@ final class DictationController {
         if !shown {
             showNextNoticeOrPresent()
         }
+        problemTickets[id] = nil
+        selectionReports.remove(id)
     }
 
     /// The recording's own ceiling, timed from its admission.
@@ -591,8 +670,17 @@ final class DictationController {
             .dictation, "Recording stopped", .integer("dictation", id.rawValue), .name("reason", reason),
             .duration("held", ended.admittedAt.duration(to: services.clock.now)),
             .flag("heldMicrophone", sealing != nil))
+        if !isClosing, reason == .deviceFault, let ticket = problemTickets[id],
+            problemEpisodes.failed(.microphoneDisconnected, under: ticket)
+        {
+            notify(.microphoneDisconnected)
+        } else if !isClosing, reason == .durationLimit, let duration = ended.policy.maximumDuration {
+            notify(.durationLimit(duration))
+        }
 
         guard !isClosing, let sealing else {
+            problemTickets[id] = nil
+            selectionReports.remove(id)
             ended.lease.end()
             showNextNoticeOrPresent()
             return
@@ -600,7 +688,11 @@ final class DictationController {
 
         let dictation = AdmittedDictation(
             id: id, trigger: ended.trigger, target: ended.target, profiles: ended.profiles, sealing: sealing,
-            stopReason: reason, lease: ended.lease)
+            stopReason: reason, lease: ended.lease, localModelPreparation: ended.localModelPreparation,
+            heldDuration: ended.admittedAt.duration(to: services.clock.now))
+        if let preparation = ended.localModelPreparation {
+            localModelPreparations[id] = preparation
+        }
         transcriptionTurns.enroll(id)
         deliveryTurns.enroll(id)
         dictations[id] = Task { [weak self] in
@@ -633,15 +725,34 @@ final class DictationController {
         // resampler's tail.
         let sealed = await dictation.sealing.value
         guard mayContinue else { return stopped(dictation, at: .beforeTranscription) }
+        if let selection = sealed?.microphoneSelection {
+            reportMicrophoneSelection(selection, about: id)
+        }
         guard let captured = sealed, !captured.samples.isEmpty else {
             return capturedNothing(dictation)
         }
         let summary = captured.summary
+        if let ticket = problemTickets[id] {
+            problemEpisodes.recovered([.tooQuick, .noAudio], under: ticket)
+            if let signal = summary.signal, signal.peak >= CaptureSignalReport.nearSilenceThreshold {
+                problemEpisodes.recovered([.onlySilence], under: ticket)
+            }
+            if dictation.stopReason != .deviceFault {
+                problemEpisodes.recovered([.microphoneDisconnected], under: ticket)
+            }
+        }
         ScribeLog.debug(
             .dictation, "Capture sealed", .integer("dictation", id.rawValue), .count("samples", captured.samples.count))
         var report = PipelineReport(
             dictationID: id.rawValue, capturedAt: summary.startedAt, trigger: dictation.trigger,
             stopReason: dictation.stopReason, captureDuration: summary.durationSeconds)
+        if DictationCaptureProblem.hasOnlySilence(summary.signal) {
+            report.failureStage = .capture
+            report.failureReason = DictationNotice.onlySilence.body
+            services.reports.publish(report)
+            postOutcome(.onlySilence, about: id, stage: .capture, notification: .onlySilence)
+            return
+        }
 
         // Raw speech recognition, one recognizer at a time, in dictation order.
         guard await transcriptionTurns.waitForTurn(id), mayContinue else {
@@ -669,7 +780,18 @@ final class DictationController {
         ScribeLog.info(
             .dictation, "Speech recognized", .integer("dictation", id.rawValue), .count("characters", raw.count),
             .duration("decode", decode), .name("backend", transcription.backend))
-        guard !Self.isBlank(raw) else { return nothingToInsert(dictation, report: report) }
+        guard !Self.isBlank(raw) else {
+            var empty = report
+            empty.failureStage = .decode
+            empty.failureReason = DictationNotice.noWordsRecognized.body
+            services.reports.publish(empty)
+            postOutcome(
+                .noWordsRecognized, about: id, stage: .recognition, notification: .noWordsRecognized)
+            return
+        }
+        if let ticket = problemTickets[id] {
+            problemEpisodes.recovered([.noWords, .recognizerMissing, .transcriptionFailed], under: ticket)
+        }
 
         // The user's rules and app profiles: startup's first load has to have finished (`StartupGate`).
         let rules = services.rules
@@ -694,6 +816,7 @@ final class DictationController {
         // snippet template or template-like replacement ever reaches a provider, a dash the user wrote survives, no
         // rule runs twice, and a reply that is the text sent gives exactly the cleanup-off text.
         let post: TextPostProcessingResult
+        var cleanupFallbackWasNotified = false
         var postDuration = Duration.zero
         if services.cleanup.isEnabled {
             let vocabularyStarted = clock.now
@@ -703,12 +826,25 @@ final class DictationController {
                 post = rules.postProcess(raw)
             } else {
                 report.sentText = pass.text
-                let stage = await cleanUp(pass.text, dictation: dictation, profile: profile, singleLine: singleLine)
+                let stage = await cleanUp(
+                    pass.text,
+                    dictationText: raw,
+                    dictation: dictation,
+                    readiness: dictation.localModelPreparation,
+                    profile: profile,
+                    singleLine: singleLine)
                 guard mayContinue else { return stopped(dictation, at: .duringCleanup) }
                 report.cleanupOutcome = stage.outcome
                 report.cleanupDuration = stage.requestDuration?.seconds
                 if stage.outcome == .fellBack {
-                    postOutcome(.cleanupFellBack, about: id, stage: .cleanup)
+                    let firstFailure = cleanupNoticeEpisode.apply(.failed)
+                    let pillIsBusy = recording != nil || notices.shown != nil || !notices.waiting.isEmpty
+                    if pillIsBusy {
+                        if firstFailure {
+                            notify(.cleanupFellBack)
+                        }
+                        cleanupFallbackWasNotified = true
+                    }
                 }
                 let finishStarted = clock.now
                 if let cleaned = stage.text {
@@ -738,16 +874,21 @@ final class DictationController {
         // Delivery in dictation order. The check after the wait is the last one: recovery and delivery follow with
         // no suspension in between.
         guard await deliveryTurns.waitForTurn(id), mayContinue else { return stopped(dictation, at: .beforeDelivery) }
-        services.recovery.set(insertion)
-        let recoveryGeneration = services.recovery.generation
         let deliveryStarted = clock.now
-        let injection: InjectionResult
-        if let destination = target?.injection {
-            injection = await services.injector.inject(text: insertion, into: destination, shiftReturnLineBreaks: true)
-        } else {
+        let injector = services.injector
+        let insertionResult = await DictationInsertion.insert(
+            insertion,
+            addSpaceAfterDictation: configuration.addSpaceAfterDictation(),
+            recovery: services.recovery
+        ) { typed in
+            if let destination = target?.injection {
+                return await injector.inject(text: typed, into: destination, shiftReturnLineBreaks: true)
+            }
             // A target that could not be captured is never taken to mean "wherever focus is now".
-            injection = InjectionResult(delivery: .targetUnknown)
+            return InjectionResult(delivery: .targetUnknown)
         }
+        let recoveryGeneration = insertionResult.recoveryGeneration
+        let injection = insertionResult.injection
         report.injectionDuration = deliveryStarted.duration(to: clock.now).seconds
         report.injectionResult = injection
         ScribeLog.log(
@@ -772,19 +913,43 @@ final class DictationController {
                 sampleCount: summary.sampleCount,
                 decodeMilliseconds: decode.seconds * 1_000,
                 cleanupMilliseconds: report.cleanupDuration.map { $0 * 1_000 },
-                transcriptText: insertion,
+                transcriptText: insertionResult.recorded,
                 targetApp: target?.bundleIdentifier ?? target?.processName),
             dictationID: id.rawValue)
         services.reports.publish(report)
-        announce(injection, of: dictation, transcript: insertion, recoveryGeneration: recoveryGeneration)
+        if report.cleanupOutcome == .cleaned || report.cleanupOutcome == .unchanged {
+            _ = cleanupNoticeEpisode.apply(.recovered)
+        }
+        announce(
+            injection,
+            cleanupOutcome: report.cleanupOutcome,
+            cleanupFallbackWasNotified: cleanupFallbackWasNotified,
+            of: dictation,
+            transcript: insertionResult.recorded,
+            recoveryGeneration: recoveryGeneration)
     }
 
     /// Sends `sent`, the raw transcript with the vocabulary rules applied, and checks the reply against it.
     private func cleanUp(
-        _ sent: String, dictation: AdmittedDictation, profile: AppProfile?, singleLine: Bool
+        _ sent: String,
+        dictationText raw: String,
+        dictation: AdmittedDictation,
+        readiness: LocalModelPreparation?,
+        profile: AppProfile?,
+        singleLine: Bool
     ) async -> CleanupStage {
         let id = dictation.id
         let clock = services.clock
+        if let readiness {
+            let result = await readiness.wait()
+            guard mayContinue else { return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil) }
+            guard result.permitsCleanup else {
+                ScribeLog.warning(
+                    .cleanup, "Local model was not ready, so the raw transcript is used",
+                    .integer("dictation", id.rawValue), .name("readiness", result))
+                return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil)
+            }
+        }
         let provider: any CleanupProvider
         do {
             provider = try await services.cleanup.provider()
@@ -798,16 +963,97 @@ final class DictationController {
         }
         guard mayContinue else { return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil) }
 
-        let style = CleanupPrompt.writingStyle(profileStyle: profile?.writingStylePrompt, requireSingleLine: singleLine)
-        let request = CleanupRequest(
-            transcript: CleanupPrompt.wrapTranscript(sent),
-            writingStylePrompt: CleanupPrompt.systemPrompt(
-                writingStyle: style, useLocalPrompt: provider.usesLocalCleanupPrompt),
-            singleLineMode: singleLine)
-        let started = clock.now
-        let response: CleanupResponse
+        let settings = services.cleanup.currentSettings()
+        let vocabulary = services.rules.cleanupVocabulary
+        let context: Int?
         do {
-            response = try await provider.clean(request)
+            context = try await provider.contextForPlanning()
+        } catch {
+            if mayContinue {
+                ScribeLog.warning(
+                    .cleanup, "Local context could not be read, so the raw transcript is used",
+                    .integer("dictation", id.rawValue), .failure(error))
+            }
+            return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil)
+        }
+        guard mayContinue else { return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil) }
+        let tuning = LocalModelTuning.forSettings(settings)
+        let profileStyle = profile?.writingStylePrompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedStyle =
+            profileStyle.flatMap { $0.isEmpty ? nil : $0 }
+            ?? CleanupPrompt.effectiveOverride(settings.writingStyle, defaultValue: CleanupPrompt.defaultWritingStyle)
+        let style = CleanupPrompt.writingStyle(profileStyle: selectedStyle, requireSingleLine: singleLine)
+        let promptWithoutGlossary = CleanupPrompt.systemPrompt(
+            writingStyle: style,
+            useLocalPrompt: provider.usesLocalCleanupPrompt,
+            frontierPrompt: settings.frontierPrompt, localPrompt: settings.localPrompt)
+        let outputCeiling = cleanupOutputCeiling(for: settings, transcript: sent)
+        let segments: [LocalCleanupPlan.Segment]
+        do {
+            if outputCeiling != nil {
+                let configured = ContextBudget.sanitize(tuning.contextTokens)
+                let ceiling = configured > 0 ? configured : ContextBudget.assumedContextTokens
+                segments = try LocalCleanupPlan.make(
+                    text: sent, instructions: promptWithoutGlossary,
+                    contextTokens: min(ceiling, context ?? ceiling)
+                ).segments
+            } else {
+                segments = [LocalCleanupPlan.Segment(text: sent, separator: "")]
+            }
+        } catch {
+            ScribeLog.warning(
+                .cleanup, "The local cleanup request could not fit, so the raw transcript is used",
+                .integer("dictation", id.rawValue), .failure(error))
+            return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil)
+        }
+        let glossary = cleanupGlossary(
+            vocabulary: vocabulary,
+            rawDictation: raw,
+            segments: segments,
+            promptWithoutGlossary: promptWithoutGlossary,
+            tuning: tuning,
+            observedContext: context,
+            useLocalPrompt: provider.usesLocalCleanupPrompt,
+            outputCeiling: outputCeiling)
+        let prompt = CleanupPrompt.systemPrompt(
+            writingStyle: style,
+            useLocalPrompt: provider.usesLocalCleanupPrompt,
+            glossary: glossary,
+            frontierPrompt: settings.frontierPrompt, localPrompt: settings.localPrompt)
+        let started = clock.now
+        var answer = ""
+        do {
+            for segment in segments {
+                try Task.checkCancellation()
+                guard mayContinue else { throw CancellationError() }
+                let remaining = LocalCleanupPlan.answerTimeLimit - started.duration(to: clock.now).seconds
+                if segments.count > 1, remaining <= 0 { throw CleanupProviderError.timedOut }
+                let response = try await provider.clean(
+                    CleanupRequest(
+                        transcript: CleanupPrompt.wrapTranscript(segment.text), writingStylePrompt: prompt,
+                        singleLineMode: singleLine,
+                        timeout: segments.count > 1 ? remaining : nil,
+                        maxOutputTokens: outputCeiling == nil ? nil : ContextBudget.cleanupOutputCeiling(segment.text)))
+                try Task.checkCancellation()
+                guard mayContinue else { throw CancellationError() }
+                if segments.count > 1, started.duration(to: clock.now).seconds >= LocalCleanupPlan.answerTimeLimit {
+                    throw CleanupProviderError.timedOut
+                }
+                if segments.count == 1 {
+                    answer = response.cleanedText
+                    continue
+                }
+                switch CleanupResponseGuard.sanitize(candidate: response.cleanedText, original: segment.text) {
+                case .accepted(let cleaned):
+                    answer += cleaned + segment.separator
+                case .rejected(let reason):
+                    ScribeLog.warning(
+                        .cleanup, "An AI cleanup segment was rejected, so the whole raw transcript is used",
+                        .integer("dictation", id.rawValue), .name("reason", reason))
+                    return CleanupStage(
+                        outcome: .fellBack, text: nil, requestDuration: started.duration(to: clock.now))
+                }
+            }
         } catch {
             let elapsed = started.duration(to: clock.now)
             if mayContinue {
@@ -820,9 +1066,10 @@ final class DictationController {
         let elapsed = started.duration(to: clock.now)
 
         // Against the text the model was sent; the guard also normalizes the reply's dashes.
-        switch CleanupResponseGuard.sanitize(candidate: response.cleanedText, original: sent) {
+        switch CleanupResponseGuard.sanitize(candidate: answer, original: sent) {
         case .accepted(let cleaned):
             let outcome: DictationCleanupOutcome = cleaned == sent ? .unchanged : .cleaned
+            _ = cleanupNoticeEpisode.apply(.recovered)
             ScribeLog.info(
                 .cleanup, "AI cleanup finished", .integer("dictation", id.rawValue), .name("outcome", outcome),
                 .duration("cleanup", elapsed))
@@ -832,6 +1079,59 @@ final class DictationController {
                 .cleanup, "The AI cleanup reply was rejected, so the raw transcript is used",
                 .integer("dictation", id.rawValue), .name("reason", reason), .duration("cleanup", elapsed))
             return CleanupStage(outcome: .fellBack, text: nil, requestDuration: elapsed)
+        }
+    }
+
+    private func cleanupGlossary(
+        vocabulary: CleanupVocabulary,
+        rawDictation: String,
+        segments: [LocalCleanupPlan.Segment],
+        promptWithoutGlossary: String,
+        tuning: LocalModelTuning,
+        observedContext: Int?,
+        useLocalPrompt: Bool,
+        outputCeiling: Int?
+    ) -> String? {
+        let defaultGlossary = vocabulary.glossary(
+            maxTerms: CleanupPrompt.glossaryTermBudget(useLocalPrompt: useLocalPrompt),
+            mode: .mentioned,
+            dictation: rawDictation)
+
+        let selectedContext = ContextBudget.sanitize(tuning.contextTokens)
+        let configuredContext =
+            selectedContext > 0
+            ? selectedContext
+            : (outputCeiling != nil ? ContextBudget.assumedContextTokens : 0)
+        let context = observedContext.map { min(configuredContext, $0) } ?? configuredContext
+        guard context > 0, outputCeiling != nil else {
+            return defaultGlossary
+        }
+
+        let budget =
+            segments.map {
+                ContextBudget.vocabularyTokens(
+                    context, instructions: promptWithoutGlossary,
+                    transcript: CleanupPrompt.wrapTranscript($0.text),
+                    outputCeiling: ContextBudget.cleanupOutputCeiling($0.text))
+            }.min() ?? 0
+        let maxTerms =
+            tuning.sendWholeVocabulary
+            ? .max
+            : CleanupPrompt.glossaryTermBudget(useLocalPrompt: useLocalPrompt)
+        return vocabulary.glossary(
+            mode: .mentioned,
+            everything: tuning.sendWholeVocabulary,
+            dictation: rawDictation,
+            tokenBudget: budget,
+            maxTerms: maxTerms)
+    }
+
+    private func cleanupOutputCeiling(for settings: CleanupSettingsSnapshot, transcript: String) -> Int? {
+        switch LocalModelTuning.appForSettings(settings) {
+        case .none:
+            return nil
+        case .ollama, .lmStudio:
+            return ContextBudget.cleanupOutputCeiling(transcript)
         }
     }
 
@@ -850,20 +1150,22 @@ final class DictationController {
                 .recognizerMissing, about: dictation.id, stage: .recognition,
                 notification: .recognizerMissing(issue))
         } else {
-            postOutcome(.transcriptionFailed, about: dictation.id, stage: .recognition)
+            postOutcome(
+                .transcriptionFailed, about: dictation.id, stage: .recognition, notification: .transcriptionFailed)
         }
     }
 
-    /// The recording held the microphone and captured nothing, such as a quick tap. Nothing to transcribe; a device
-    /// fault says the microphone was lost.
+    /// An empty capture distinguishes a quick tap from a microphone that supplied nothing; a fault names the
+    /// interrupted recording rather than blaming a new microphone open.
     private func capturedNothing(_ dictation: AdmittedDictation) {
         ScribeLog.info(.dictation, "The recording captured nothing", .integer("dictation", dictation.id.rawValue))
-        if dictation.stopReason == .deviceFault {
-            postOutcome(.microphoneUnavailable, about: dictation.id, stage: .capture)
-        }
+        let kind = DictationCaptureProblem.empty(held: dictation.heldDuration, reason: dictation.stopReason)
+        postOutcome(
+            kind, about: dictation.id, stage: .capture,
+            notification: kind == .tooQuick ? .tooQuick(dictation.trigger) : kind == .noAudio ? .noAudio : nil)
     }
 
-    /// An empty transcript is nothing to insert, not an error: no notice, no history entry.
+    /// Rules intentionally removed everything: no notice or history entry, unlike blank recognition on real audio.
     private func nothingToInsert(_ dictation: AdmittedDictation, report: PipelineReport) {
         ScribeLog.info(.dictation, "Nothing to insert", .integer("dictation", dictation.id.rawValue))
         services.reports.publish(report)
@@ -878,17 +1180,28 @@ final class DictationController {
     /// The pill's notice and, when the text did not go in, a notification with the transcript to copy. Both are
     /// refused when Clear history has removed that transcript since it was kept.
     private func announce(
-        _ injection: InjectionResult, of dictation: AdmittedDictation, transcript: String, recoveryGeneration: UInt64
+        _ injection: InjectionResult,
+        cleanupOutcome: DictationCleanupOutcome,
+        cleanupFallbackWasNotified: Bool,
+        of dictation: AdmittedDictation,
+        transcript: String,
+        recoveryGeneration: UInt64
     ) {
         let id = dictation.id
         switch injection.delivery {
-        case .accessibility, .pasted, .typed, .nothingToInsert:
+        case .accessibility, .pasted, .typed:
             if dictation.stopReason == .deviceFault {
                 postOutcome(.microphoneStoppedEarly, about: id, stage: .capture)
             } else if dictation.stopReason == .durationLimit {
                 postOutcome(.durationLimitReached, about: id, stage: .capture)
+            } else if cleanupOutcome == .fellBack {
+                if !cleanupFallbackWasNotified {
+                    postOutcome(.typedWithoutCleanup, about: id, stage: .delivery)
+                }
+            } else {
+                postOutcome(.typed, about: id, stage: .delivery)
             }
-        case .cancelled:
+        case .nothingToInsert, .cancelled:
             return
         case .targetChanged, .targetUnknown, .targetUnresponsive, .noFocusedElement, .failed:
             postOutcome(
@@ -919,6 +1232,10 @@ final class DictationController {
         transcriptionTurns.finish(dictation.id)
         deliveryTurns.finish(dictation.id)
         dictations[dictation.id] = nil
+        dictation.localModelPreparation?.cancel()
+        localModelPreparations[dictation.id] = nil
+        problemTickets[dictation.id] = nil
+        selectionReports.remove(dictation.id)
         dictation.lease.end()
         showNextNoticeOrPresent()
     }
@@ -958,7 +1275,9 @@ final class DictationController {
                 .overlay, "The pill is taken, so a notice is posted as a notification", .name("kind", kind),
                 .name("stage", stage))
             if let fallback = Self.fallbackNotification(for: kind) {
-                notify(fallback)
+                if fallback.kind != .cleanupFellBack || cleanupNoticeEpisode.apply(.failed) {
+                    if notification == nil { notifyProblem(fallback, about: source) }
+                }
             }
         case .rejected(let rejection):
             checkpoints.rejectedNotices += 1
@@ -968,17 +1287,56 @@ final class DictationController {
             return false
         }
         if let notification {
-            notify(notification)
+            notifyProblem(notification, about: source)
         }
         return shown
     }
 
     private static func fallbackNotification(for kind: OverlayNotice) -> DictationNotice? {
         switch kind {
-        case .cleanupFellBack: return .cleanupFellBack
+        case .cleanupFellBack, .typedWithoutCleanup: return .cleanupFellBack
         case .transcriptionFailed: return .transcriptionFailed
+        case .tooQuick: return .tooQuick(.menu)
+        case .noAudio: return .noAudio
+        case .onlySilence: return .onlySilence
+        case .noWordsRecognized: return .noWordsRecognized
         default: return nil
         }
+    }
+    private func reportMicrophoneSelection(_ selection: MicrophoneSelectionOutcome, about id: RecordingID) {
+        guard !isClosing, recording?.id == id || dictations[id] != nil,
+            let ticket = problemTickets[id], selectionReports.insert(id).inserted
+        else { return }
+        noticeConfigurationMayHaveChanged()
+        if problemEpisodes.selectionOpened(
+            selection, under: ticket,
+            matchesCommittedSelection: selection.requestedUID == noticeConfiguration.microphoneUID, retained: true)
+        {
+            notify(.fallbackMicrophone(selection.result))
+        }
+    }
+
+    private func notifyProblem(_ notice: DictationNotice, about source: RecordingID?) {
+        let problem: DictationProblemEpisodes.Problem
+        switch notice.kind {
+        case .microphoneUnavailable: problem = .microphoneUnavailable
+        case .microphoneAccessNeeded: problem = .microphoneAccess
+        case .transcriptionFailed: problem = .transcriptionFailed
+        case .recognizerMissing: problem = .recognizerMissing
+        case .tooQuick: problem = .tooQuick
+        case .noAudio: problem = .noAudio
+        case .onlySilence: problem = .onlySilence
+        case .noWordsRecognized: problem = .noWords
+        default:
+            // Recovery notices belong to a transcript, not a fault episode: never suppress the copy action.
+            notify(notice)
+            return
+        }
+        noticeConfigurationMayHaveChanged()
+        guard let source, let ticket = problemTickets[source],
+            problemEpisodes.failed(problem, under: ticket)
+        else { return }
+        notify(notice)
     }
 
     /// Puts `outcome` on the pill for `configuration.noticeDuration`, under the revision `present()` allocates now.
@@ -988,7 +1346,8 @@ final class DictationController {
         notices.didShow(outcome, token: revision &+ 1)
         let token = present()
         let clock = services.clock
-        let until = clock.now.advanced(by: configuration.noticeDuration)
+        let hold = outcome.kind.pillOutcome?.hold ?? configuration.noticeDuration
+        let until = clock.now.advanced(by: hold)
         noticeTimer = Task { [weak self] in
             do {
                 try await clock.sleep(until: until)
@@ -1025,14 +1384,16 @@ final class DictationController {
     private var overlayState: OverlayState {
         if let recording {
             if recording.phase == .live {
-                return .listening(levelDbfs: levelDbfs)
+                return .listening(level: level)
             }
-            return dictations.isEmpty ? .hidden : .processing
+            if dictations.isEmpty { return .hidden }
+            return localModelPreparations.values.contains(where: \.isStarting) ? .startingLocalModel : .processing
         }
         if let shown = notices.shown {
             return .notice(shown.notice.kind)
         }
-        return dictations.isEmpty ? .hidden : .processing
+        if dictations.isEmpty { return .hidden }
+        return localModelPreparations.values.contains(where: \.isStarting) ? .startingLocalModel : .processing
     }
 
     /// Hands the current state to the presenter under the next revision, and returns that revision. Once shutdown has
@@ -1077,6 +1438,8 @@ final class DictationController {
 
     private func runShutdown(stoppingMaintenance: (@Sendable () -> Void)?) async -> DictationShutdownReport {
         isClosing = true
+        problemTickets = [:]
+        selectionReports = []
         notices.close()
         noticeTimer?.cancel()
         noticeTimer = nil
@@ -1085,6 +1448,7 @@ final class DictationController {
         if let discarded {
             recording = nil
             discarded.deadline?.cancel()
+            discarded.localModelPreparation?.cancel()
             discardedSeal = services.capture.retire(owner: discarded.id)
             discarded.lease.end()
             ScribeLog.info(
@@ -1095,6 +1459,10 @@ final class DictationController {
         // away every later update, so nothing a stopping dictation does can show again.
         presentClosed()
         let running = Array(dictations.values)
+        recording?.localModelPreparation?.cancel()
+        for preparation in localModelPreparations.values {
+            preparation.cancel()
+        }
         ScribeLog.info(
             .dictation, "Shutting down: nothing new starts and dictations in progress are stopped",
             .flag("recording", discarded != nil), .count("processing", running.count))
@@ -1113,6 +1481,7 @@ final class DictationController {
         _ = await discardedSeal?.value
         await services.capture.waitUntilIdle()
 
+        await services.cleanup.releaseLocalModel(.shutdown)
         shutdownProgress = .drainingHistory
         let history = services.history
         let timeout = configuration.historyDrainTimeout

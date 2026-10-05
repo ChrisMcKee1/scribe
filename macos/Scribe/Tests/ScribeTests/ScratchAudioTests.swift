@@ -79,7 +79,38 @@ final class ScratchAudioTests: XCTestCase {
 
         XCTAssertThrowsError(try scratch.writeRecording(samples: [0.1], sampleRate: 0))
         XCTAssertThrowsError(try scratch.writeRecording(samples: [0.1], sampleRate: .infinity))
+        for rate in [0.5, 16_000.5, Double(UInt32.max) / 4 + 1] {
+            XCTAssertThrowsError(try scratch.writeRecording(samples: [0.1], sampleRate: rate)) {
+                XCTAssertEqual($0 as? ScratchAudioError, ScratchAudioError(operation: .invalidAudio, errno: EINVAL))
+            }
+        }
         XCTAssertFalse(exists(scratch.url))
+    }
+
+    func testNonfiniteSamplesAreRefusedBeforeCreatingTheScratchDirectory() throws {
+        let root = try makeTemporaryDirectory(label: "scratch-nonfinite")
+        let scratch = ScratchAudioDirectory(url: root.appendingPathComponent("asr", isDirectory: true))
+        for sample in [Float.nan, .infinity, -.infinity] {
+            XCTAssertThrowsError(try scratch.writeRecording(samples: [0.1, sample], sampleRate: 16_000)) {
+                XCTAssertEqual($0 as? ScratchAudioError, ScratchAudioError(operation: .invalidAudio, errno: EINVAL))
+            }
+            XCTAssertFalse(exists(scratch.url))
+        }
+    }
+
+    func testFiniteSampleBitsAreWrittenWithoutClampingOrFiltering() throws {
+        let root = try makeTemporaryDirectory(label: "scratch-finite")
+        let scratch = ScratchAudioDirectory(url: root.appendingPathComponent("asr", isDirectory: true))
+        let samples: [Float] = [
+            -0.0, .leastNonzeroMagnitude, .leastNormalMagnitude, -.greatestFiniteMagnitude, .greatestFiniteMagnitude,
+        ]
+        let file = try scratch.writeRecording(samples: samples, sampleRate: 16_000)
+        defer { scratch.remove(file) }
+        let data = try Data(contentsOf: file.url)
+        let bits = data.dropFirst(44).withUnsafeBytes { raw in
+            (0..<samples.count).map { raw.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self) }
+        }
+        XCTAssertEqual(bits, samples.map(\.bitPattern))
     }
 
     func testTheSweepRemovesOnlyAbandonedRecordingsOfProcessesThatAreGone() throws {

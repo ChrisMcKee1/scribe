@@ -800,14 +800,18 @@ actor AzureServicePrincipalCredentialProvider: AzureCredentialProvider {
 /// Windows' `AzureCredentialFactory`: building a credential per dictation would ask `az` or Entra again every time. A
 /// service principal's secret is represented by the store's `secretRevision`, never by its value. Printing or dumping
 /// one shows only the auth mode, never the tenant or client id.
+/// A selected Microsoft Foundry authentication method. API-key identities deliberately carry no secret; only the
+/// provider resolver reads the key from Keychain when it builds a request.
 enum AzureIdentity: Hashable, Sendable, CustomStringConvertible, CustomReflectable {
     case azureCli(tenantId: String?)
     case servicePrincipal(tenantId: String, clientId: String, secretRevision: String)
+    case apiKey
 
     var description: String {
         switch self {
         case .azureCli: return "AzureIdentity(azureCli)"
         case .servicePrincipal: return "AzureIdentity(servicePrincipal)"
+        case .apiKey: return "AzureIdentity(apiKey)"
         }
     }
 

@@ -6,13 +6,41 @@ import Foundation
 /// database id (`id: 0`): a library is composed into the effective dictionary in memory, never
 /// written into the `dictionary_entries` table, so enabling or disabling one never touches the
 /// user's own entries. Direct port of Windows' `Scribe.Core.PostProcessing.DictionaryLibrary`.
-struct DictionaryLibrary: Equatable {
+struct DictionaryLibrary: Equatable, Sendable {
     let id: String
     let name: String
     let category: String
     let description: String?
     let builtIn: Bool
     let entries: [DictionaryEntry]
+    let fileName: String?
+    let basedOn: String?
+    let authoredKeys: Set<LibraryTermKey>
+    let legacyMarkedKeys: Set<LibraryTermKey>
+
+    init(
+        id: String,
+        name: String,
+        category: String,
+        description: String?,
+        builtIn: Bool,
+        entries: [DictionaryEntry],
+        fileName: String? = nil,
+        basedOn: String? = nil,
+        authoredKeys: Set<LibraryTermKey> = [],
+        legacyMarkedKeys: Set<LibraryTermKey> = []
+    ) {
+        self.id = id
+        self.name = name
+        self.category = category
+        self.description = description
+        self.builtIn = builtIn
+        self.entries = entries
+        self.fileName = fileName
+        self.basedOn = basedOn
+        self.authoredKeys = authoredKeys
+        self.legacyMarkedKeys = legacyMarkedKeys
+    }
 
     /// Only the entries whose `enabled` flag is set.
     var enabledEntries: [DictionaryEntry] { entries.filter(\.enabled) }

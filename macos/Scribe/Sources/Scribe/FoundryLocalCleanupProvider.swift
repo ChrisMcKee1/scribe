@@ -23,10 +23,21 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
     /// spike-free latency curve. See CLEANUP-MODEL-BENCHMARK.md.
     let modelAlias: String
     private let status: FoundryLocalStatusSource
+    private let context: FoundryLocalContextSource
+    private let residency: FoundryLocalResidencySource
+    private let modelLane: AsyncLane
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
     private let now: @Sendable () -> ContinuousClock.Instant
     private let endpoint = OSAllocatedUnfairLock<ResolvedEndpoint?>(initialState: nil)
+    var requiresOutputLimit: Bool { true }
+
+    func contextForPlanning() async throws -> Int? {
+        let reported = try await context.lookup(modelAlias)
+        try Task.checkCancellation()
+        guard reported > 0 else { throw CleanupProviderError.localContextUnknown }
+        return min(reported, ContextBudget.assumedContextTokens)
+    }
 
     private struct ResolvedEndpoint: Sendable {
         let completionsURL: URL
@@ -36,37 +47,161 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
     init(
         modelAlias: String = CleanupSettingsStore.defaultFoundryLocalModelAlias,
         status: FoundryLocalStatusSource = .live(),
+        context: FoundryLocalContextSource = .live(),
+        residency: FoundryLocalResidencySource = .live(),
+        modelLane: AsyncLane = FoundryLocalResidencySource.sharedLane,
         timeout: TimeInterval = 30,
         session: URLSession = CleanupProviderFactory.cleanupSession,
         now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) {
         self.modelAlias = modelAlias
         self.status = status
+        self.context = context
+        self.residency = residency
+        self.modelLane = modelLane
         self.timeout = timeout
-        self.transport = ChatCompletionsTransport(session: session)
+        self.transport = ChatCompletionsTransport(
+            session: URLSession(
+                configuration: Self.localConfiguration(session.configuration),
+                delegate: LocalServerClient.RedirectRefusingURLSessionDelegate(), delegateQueue: nil))
         self.now = now
+    }
+
+    static func localConfiguration(_ configuration: URLSessionConfiguration) -> URLSessionConfiguration {
+        configuration.connectionProxyDictionary = [:] as [AnyHashable: Any]
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.httpCookieStorage = nil
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return configuration
+    }
+
+    deinit {
+        transport.session.invalidateAndCancel()
     }
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
         let (url, wasCached) = try await completionsURL()
+        _ = try await boundedRequest(request)
+        try await ensureLoaded()
         do {
             return try await send(request, to: url)
         } catch let error as CleanupProviderError where wasCached && error.isConnectionRefusal {
             forget(url)
             ScribeLog.info(.cleanup, "Foundry Local no longer answers at the endpoint it reported; asking again")
             let (fresh, _) = try await completionsURL()
+            _ = try await boundedRequest(request)
+            try await ensureLoaded()
             return try await send(request, to: fresh)
         }
     }
 
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async throws -> LocalModelPreparationResult {
+        _ = try await boundedRequest(LocalModelReadiness.request)
+        return try await modelLane.run {
+            try await LocalModelReadiness.prepare(
+                isResident: { try await self.residency.isLoaded(self.modelAlias) },
+                isCurrent: isCurrent,
+                onStarting: onStarting,
+                start: { try await self.loadAndConfirm() })
+        }
+    }
+
+    private func ensureLoaded() async throws {
+        try await OperationDeadline.run(within: LocalModelDefaults.startWait) {
+            try await self.modelLane.run {
+                if try await !self.residency.isLoaded(self.modelAlias) {
+                    try await self.loadAndConfirm()
+                }
+            }
+        }
+    }
+
+    private func loadAndConfirm() async throws {
+        try Task.checkCancellation()
+        try CleanupRequestLifetime.current?.check()
+        try CleanupSendHandoff.current?.perform {}
+        try await residency.loadCached(modelAlias)
+        try Task.checkCancellation()
+        guard try await residency.isLoaded(modelAlias) else { throw LocalModelReadinessError.unavailable }
+        _ = try await boundedRequest(LocalModelReadiness.request)
+    }
+
     private func send(_ request: CleanupRequest, to url: URL) async throws -> CleanupResponse {
+        let bounded = try await boundedRequest(request)
         let completion = try await transport.complete(
-            request, at: url, model: modelAlias, bearerToken: nil, temperature: CleanupSampling.onDeviceTemperature,
+            bounded, at: url, model: modelAlias, bearerToken: nil, temperature: CleanupSampling.onDeviceTemperature,
             defaultTimeout: timeout, provider: .foundryLocal)
         return CleanupResponse(
             cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: modelAlias)
     }
 
+    private func boundedRequest(_ request: CleanupRequest) async throws -> CleanupRequest {
+        let limit = try await contextForPlanning()
+        guard let limit else { throw CleanupProviderError.localContextUnknown }
+        let bounded = CleanupRequest(
+            transcript: request.transcript, writingStylePrompt: request.writingStylePrompt,
+            singleLineMode: request.singleLineMode, timeout: request.timeout,
+            maxOutputTokens: request.maxOutputTokens ?? ContextBudget.cleanupOutputCeiling(request.transcript))
+        guard ContextBudget.requestFits(bounded, contextTokens: limit) else {
+            throw CleanupProviderError.localRequestTooLarge
+        }
+        return bounded
+    }
+
+}
+
+struct FoundryLocalContextSource: Sendable {
+    let lookup: @Sendable (String) async throws -> Int
+
+    static func live(environment: [String: String] = ProcessInfo.processInfo.environment) -> Self {
+        Self { model in
+            guard !model.isEmpty, !model.hasPrefix("-"),
+                let cli = FoundryLocalCLI.locate(environment: environment)
+            else { throw CleanupProviderError.localContextUnknown }
+            let outcome: ProcessRunner.Outcome
+            do {
+                outcome = try await ProcessRunner.run(
+                    cli, arguments: ["model", "info", model, "-o", "json"], timeout: FoundryLocalCLI.statusTimeout)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw CleanupProviderError.localContextUnknown
+            }
+
+            if outcome.terminationReason == .cancelled { throw CancellationError() }
+            guard outcome.terminationReason == .finished, outcome.exitStatus == 0,
+                outcome.terminationSignal == nil, !outcome.standardOutput.isTruncated
+            else {
+                throw CleanupProviderError.localContextUnknown
+            }
+            return try capacity(from: outcome.standardOutput.data, model: model)
+        }
+    }
+
+    static func capacity(from data: Data, model requested: String) throws -> Int {
+        struct Metadata: Decodable {
+            struct Model: Decodable {
+                let alias: String?
+                let id: String?
+                let type: String?
+                let contextLength: Int?
+            }
+            let model: Model
+        }
+        guard let reported = try? JSONDecoder().decode(Metadata.self, from: data).model,
+            reported.alias == requested || reported.id == requested,
+            reported.type?.lowercased() == "chat", let capacity = reported.contextLength, capacity > 0
+        else { throw CleanupProviderError.localContextUnknown }
+        return min(capacity, ContextBudget.assumedContextTokens)
+    }
+}
+
+extension FoundryLocalCleanupProvider {
     /// The endpoint to use now, and whether it came from an earlier lookup.
     private func completionsURL() async throws -> (url: URL, wasCached: Bool) {
         let checkedAt = now()
@@ -77,6 +212,9 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
         }
 
         let base = try await status.lookup()
+        guard FoundryLocalStatus.isLocalEndpoint(base) else {
+            throw CleanupProviderError.endpointUnavailable(.foundryLocalEndpointNotLocal)
+        }
         guard let url = OpenAICompatibleEndpoint.chatCompletionsURL(for: base) else {
             throw CleanupProviderError.endpointUnavailable(.foundryLocalStatusUnreadable)
         }
@@ -125,6 +263,9 @@ struct FoundryLocalStatusSource: Sendable {
             case .finished:
                 break
             }
+            guard outcome.terminationSignal == nil, !outcome.standardOutput.isTruncated else {
+                throw CleanupProviderError.endpointUnavailable(.foundryLocalStatusUnreadable)
+            }
             let base = try FoundryLocalStatus.baseURL(
                 fromStatusOutput: outcome.standardOutput.data, exitStatus: outcome.exitStatus)
             ScribeLog.debug(.cleanup, "Read Foundry Local's endpoint", .duration("elapsed", outcome.duration))
@@ -149,6 +290,16 @@ enum FoundryLocalCLI {
 /// The part of `foundry status -o json` the provider reads. See TranscriptionEngine.swift for the sibling
 /// `foundry transcribe -o json` contract, a different JSON shape.
 enum FoundryLocalStatus {
+    static func isLocalEndpoint(_ url: URL) -> Bool {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+            let scheme = components.scheme?.lowercased(), scheme == "http" || scheme == "https",
+            components.user == nil, components.password == nil,
+            components.query == nil, components.fragment == nil,
+            let host = url.host(percentEncoded: false)?.lowercased()
+        else { return false }
+        return host == "localhost" || LocalAiServer.isLiteralLoopbackHost(host)
+    }
+
     private struct Status: Decodable {
         struct Service: Decodable {
             let ready: Bool?
@@ -165,10 +316,11 @@ enum FoundryLocalStatus {
             throw CleanupProviderError.endpointUnavailable(
                 exitStatus == 0 ? .foundryLocalStatusUnreadable : .foundryLocalNotReady)
         }
-        guard status.service.ready == true, let text = status.service.webUrls?.first, let url = URL(string: text),
-            let host = url.host(percentEncoded: false), !host.isEmpty
-        else {
+        guard status.service.ready == true, let text = status.service.webUrls?.first, let url = URL(string: text) else {
             throw CleanupProviderError.endpointUnavailable(.foundryLocalNotReady)
+        }
+        guard isLocalEndpoint(url) else {
+            throw CleanupProviderError.endpointUnavailable(.foundryLocalEndpointNotLocal)
         }
         return url
     }

@@ -1,8 +1,9 @@
 import Foundation
+import os
 
 /// Cloud AI cleanup via Microsoft Foundry (Azure), reached directly over REST rather than through an SDK (Azure's .NET
-/// Agent Framework and Azure.Identity have no macOS-relevant Swift equivalent). Authenticates with the user's own
-/// Azure CLI session or a pinned Entra service principal (see AzureCredential.swift).
+/// Agent Framework and Azure.Identity have no macOS-relevant Swift equivalent). Authenticates with an API key, the
+/// user's Azure CLI session or a pinned Entra service principal (see AzureCredential.swift).
 ///
 /// Requests go to the account's unified inference endpoint, `{account}/openai/v1/chat/completions`, with `model` set to
 /// the deployment name, whichever endpoint shape was saved. Windows 0.4.3 routes the same way after a Foundry project's
@@ -13,6 +14,41 @@ import Foundation
 /// directly, mirroring how Windows' service-principal mode hides ARM discovery (a data-plane-only permission
 /// footprint), applied to both auth modes here.
 final class MicrosoftFoundryCleanupProvider: CleanupProvider {
+    private enum Authentication: Sendable {
+        case entra(any AzureCredentialProvider)
+        case apiKey(String)
+    }
+
+    private enum AzureReasoningEffort: String, Equatable {
+        case none
+        case low
+    }
+
+    private enum AzureReasoningMode: Equatable, Sendable {
+        case none
+        case low
+        case omitted
+
+        var field: String? {
+            switch self {
+            case .none: return AzureReasoningEffort.none.rawValue
+            case .low: return AzureReasoningEffort.low.rawValue
+            case .omitted: return nil
+            }
+        }
+
+        var next: AzureReasoningMode? {
+            switch self {
+            case .none: return .low
+            case .low: return .omitted
+            case .omitted: return nil
+            }
+        }
+    }
+
+    private static let reasoningField = "reasoning_effort"
+    private static let promptCacheField = "prompt_cache_options"
+    private static let promptCacheExplicitMode = "explicit"
     /// The audience of the unified `/openai/v1/` endpoint, the one Windows requests
     /// (`AzureOpenAIResponsesClientFactory.AzureAIScope`). The dated deployments route took the Cognitive Services
     /// audience instead.
@@ -23,21 +59,59 @@ final class MicrosoftFoundryCleanupProvider: CleanupProvider {
     let deployment: String
     /// `{account}/openai/v1/chat/completions`.
     let completionsURL: URL
-    private let credential: any AzureCredentialProvider
+    private let promptCachingEnabled: @Sendable () -> Bool
+    private let authentication: Authentication
     private let timeout: TimeInterval
     private let transport: ChatCompletionsTransport
+    private let reasoningMode = OSAllocatedUnfairLock(initialState: AzureReasoningMode.none)
 
     /// - Parameter inferenceBase: The account's `/openai/v1/` base, from `inferenceBase(for:)`.
-    init(
+    convenience init(
         inferenceBase: URL,
         deployment: String,
+        promptCachingEnabled: @escaping @Sendable () -> Bool = { CleanupSettingsStore.live.azurePromptCaching },
         credential: any AzureCredentialProvider,
         timeout: TimeInterval = 30,
         session: URLSession = CleanupProviderFactory.cleanupSession
     ) {
+        self.init(
+            inferenceBase: inferenceBase,
+            deployment: deployment,
+            promptCachingEnabled: promptCachingEnabled,
+            authentication: .entra(credential),
+            timeout: timeout,
+            session: session)
+    }
+
+    convenience init(
+        inferenceBase: URL,
+        deployment: String,
+        promptCachingEnabled: @escaping @Sendable () -> Bool = { CleanupSettingsStore.live.azurePromptCaching },
+        apiKey: String,
+        timeout: TimeInterval = 30,
+        session: URLSession = CleanupProviderFactory.cleanupSession
+    ) {
+        self.init(
+            inferenceBase: inferenceBase,
+            deployment: deployment,
+            promptCachingEnabled: promptCachingEnabled,
+            authentication: .apiKey(apiKey),
+            timeout: timeout,
+            session: session)
+    }
+
+    private init(
+        inferenceBase: URL,
+        deployment: String,
+        promptCachingEnabled: @escaping @Sendable () -> Bool,
+        authentication: Authentication,
+        timeout: TimeInterval,
+        session: URLSession
+    ) {
         self.deployment = deployment
         self.completionsURL = inferenceBase.appendingPathComponent("chat").appendingPathComponent("completions")
-        self.credential = credential
+        self.promptCachingEnabled = promptCachingEnabled
+        self.authentication = authentication
         self.timeout = timeout
         self.transport = ChatCompletionsTransport(session: session)
     }
@@ -64,16 +138,68 @@ final class MicrosoftFoundryCleanupProvider: CleanupProvider {
     }
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
-        let token: AzureAccessToken
-        do {
-            token = try await credential.accessToken(scope: Self.inferenceScope)
-        } catch let error as AzureCredentialError {
-            throw CleanupProviderError.credentialUnavailable(error)
+        let bearerToken: String?
+        let apiKey: String?
+        switch authentication {
+        case .entra(let credential):
+            do {
+                bearerToken = try await credential.accessToken(scope: Self.inferenceScope).token
+                apiKey = nil
+            } catch let error as AzureCredentialError {
+                throw CleanupProviderError.credentialUnavailable(error)
+            }
+        case .apiKey(let key):
+            bearerToken = nil
+            apiKey = key
         }
-        let completion = try await transport.complete(
-            request, at: completionsURL, model: deployment, bearerToken: token.token, temperature: nil,
-            defaultTimeout: timeout, provider: .microsoftFoundry)
-        return CleanupResponse(
-            cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: deployment)
+        var mode = reasoningMode.withLock { $0 }
+        while true {
+            do {
+                let completion = try await transport.complete(
+                    request,
+                    at: completionsURL,
+                    model: deployment,
+                    bearerToken: bearerToken,
+                    apiKey: apiKey,
+                    temperature: nil,
+                    reasoningEffort: mode.field,
+                    promptCacheMode: promptCachingEnabled() ? nil : Self.promptCacheExplicitMode,
+                    defaultTimeout: timeout,
+                    provider: .microsoftFoundry)
+                return CleanupResponse(
+                    cleanedText: completion.text,
+                    latency: completion.latency,
+                    providerID: id,
+                    modelID: deployment)
+            } catch let error as CleanupProviderError {
+                if !promptCachingEnabled(), Self.namesField(Self.promptCacheField, in: error) {
+                    throw error
+                }
+                guard let next = Self.retryMode(after: mode, for: error) else {
+                    throw error
+                }
+                let currentMode = mode
+                mode = reasoningMode.withLock { state in
+                    if state == currentMode {
+                        state = next
+                    }
+                    return state
+                }
+            }
+        }
+    }
+
+    private static func retryMode(
+        after mode: AzureReasoningMode,
+        for error: CleanupProviderError
+    ) -> AzureReasoningMode? {
+        guard namesField(reasoningField, in: error) else { return nil }
+        return mode.next
+    }
+
+    private static func namesField(_ field: String, in error: CleanupProviderError) -> Bool {
+        guard case .rejected(let status, _, let reply) = error, status == 400 else { return false }
+        return reply.code?.localizedCaseInsensitiveContains(field) == true
+            || reply.message?.localizedCaseInsensitiveContains(field) == true
     }
 }

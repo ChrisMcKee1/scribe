@@ -14,6 +14,8 @@ struct PipelineLine: Sendable {
     let reply: String
     /// The reply as the pipeline carries it on, after the response guard, which also normalizes dashes.
     let cleaned: String
+    /// The text the pipeline keeps for history and recovery, before the target-only trailing space.
+    let recorded: String
     /// The text that must reach the target.
     let delivered: String
 }
@@ -32,6 +34,10 @@ struct PipelineScript: Sendable {
 
     func line(cleaned: String) -> PipelineLine? {
         lines.first(where: { $0.cleaned == cleaned }) ?? line(raw: cleaned)
+    }
+
+    func line(recorded: String) -> PipelineLine? {
+        lines.first { $0.recorded == recorded }
     }
 
     func line(delivered: String) -> PipelineLine? {
@@ -219,6 +225,27 @@ final class ScenarioCleanupModel: CleanupProvider {
 final class ScenarioCleanupSource: DictationCleaning {
     let model: ScenarioCleanupModel
     var isEnabled = true
+    var settings = CleanupSettingsSnapshot(
+        isEnabled: true,
+        providerKind: .foundryLocal,
+        foundryLocalModelAlias: CleanupSettingsStore.defaultFoundryLocalModelAlias,
+        ollamaModel: CleanupSettingsStore.defaultOllamaModel,
+        selectedLocalApp: .none,
+        openAIBaseURL: "",
+        openAIModel: "",
+        openAIApiStyle: .chatCompletions,
+        ollamaContextTokens: 0,
+        lmStudioContextTokens: 0,
+        foundryLocalSendWholeVocabulary: false,
+        ollamaSendWholeVocabulary: false,
+        lmStudioSendWholeVocabulary: false,
+        azureEndpoint: "",
+        azureDeployment: "",
+        azureAuthMode: .azureCli,
+        azureTenantId: "",
+        azureClientId: "",
+        otherServiceApiStyle: .chatCompletions,
+        secretRevision: "")
     private(set) var invalidations = 0
 
     init(model: ScenarioCleanupModel) {
@@ -227,6 +254,10 @@ final class ScenarioCleanupSource: DictationCleaning {
 
     func provider() async throws -> any CleanupProvider {
         model
+    }
+
+    func currentSettings() -> CleanupSettingsSnapshot {
+        settings
     }
 
     func invalidate() {
@@ -259,6 +290,10 @@ final class ScenarioRules: DictationRuleSource {
 
     var appProfiles: [AppProfile] {
         rules.appProfiles
+    }
+
+    var cleanupVocabulary: CleanupVocabulary {
+        rules.cleanupVocabulary
     }
 
     func postProcess(_ text: String) -> TextPostProcessingResult {
@@ -336,7 +371,7 @@ final class ScenarioHistory: DictationHistoryWriting {
     }
 
     func enqueue(_ record: DictationHistoryRecord, dictationID: UInt64) -> Bool {
-        journal.record(.historyQueued, script.line(delivered: record.transcriptText ?? "")?.clip.name ?? "?")
+        journal.record(.historyQueued, script.line(recorded: record.transcriptText ?? "")?.clip.name ?? "?")
         let accepted = writer.enqueue(record, dictationID: dictationID)
         queued.increment()
         return accepted

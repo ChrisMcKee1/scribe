@@ -116,6 +116,18 @@ from clipboard history (Win+V) and from cross-device cloud clipboard sync.
 
 ### Diagnostic information
 
+The native macOS app also keeps shape-only daily logs in
+`~/Library/Application Support/Scribe/Logs`. Its queued writer redacts device and
+profile names and paths, and excludes legacy unshaped events entirely. Files are
+kept for seven days with soft limits of 16 MB per day and 64 MB total. A day at its
+limit takes no more entries; old files are removed on the first event of a new
+day and before export, never the active day's file. A write failure cannot stop
+dictation. Save diagnostics on Diagnostics or About creates a zip containing
+only these redacted logs and a system-shape report, never the database, saved
+settings, recordings or Apple's unified logs. Review the archive before sharing.
+The Windows-specific historical redaction and retention details below do not
+describe the macOS log files.
+
 Scribe writes diagnostic logs locally. Logs may include application lifecycle
 events, the selected audio device, the name of the focused application,
 performance measurements, model and provider configuration identifiers, and
@@ -181,6 +193,13 @@ endpoint.
 
 AI features are optional. The default Foundry Local provider runs on the device,
 so the text it cleans, its instructions and your vocabulary stay on the device.
+
+The native macOS app requires Foundry Local's reported cleanup address to be
+HTTP or HTTPS on literal loopback or `localhost`, without embedded credentials,
+query or fragment. It sends no text to an address outside that boundary.
+Its Foundry Local transport bypasses proxies, refuses redirects, and keeps no
+cookies or response cache. A rejected address makes cleanup unavailable rather
+than changing where the text goes.
 
 A model on this PC, Foundry Local or Ollama or LM Studio at its own address, can
 also receive your whole vocabulary. With "Send your whole vocabulary when it
@@ -250,6 +269,39 @@ needed, whatever that time. These requests go
 only to that app on this PC and carry nothing you said, only an API key you
 saved for that address, if any: the one saved now, as cleanup requests carry, or,
 to free a copy Scribe loaded with a key you have since replaced, that earlier key.
+
+On macOS, with a context size chosen for Ollama, each native cleanup or readying
+request first asks the configured local address for that model's context limit.
+This metadata request carries only the model name and any key saved for that
+address, not dictated text, instructions or vocabulary. Scribe caps the chosen
+size at that limit and refuses to send the text if the full request does not fit,
+or if Ollama does not report a limit.
+After the answer, Scribe reads Ollama's loaded-model list at that same address
+with no request body, only that address's saved key if any. A smaller reported
+context caps later requests by that provider. An answer whose request did not
+fit the observed context, or whose loaded size cannot be confirmed, is refused
+and Scribe keeps the recognized text. This check cannot prevent a first request
+from meeting a previously unknown runtime cap, nor exclude changes another app
+makes to the shared model while the requests run.
+
+On macOS, LM Studio's own-size mode checks the actual loaded context before
+sending user content, just as a chosen size does. If no copy is held, Scribe
+first sends only a fixed one-token "ok" request with fixed instructions to load
+it, then reads the loaded size again. That request carries no dictated text,
+vocabulary or user instructions. An unknown, unreadable or insufficient size
+refuses the actual completion. An omitted output ceiling becomes an enforced
+4,096-token limit so the reserved output is bounded on the wire too. This
+cannot exclude another app changing the shared copy between the read and send.
+
+On macOS, Ollama at its own size keeps Chat Completions. Scribe checks that the
+full request fits the smaller of the reported loaded size and a conservative
+4,096-token default before sending user content. If nothing is held, only the
+fixed one-token readying request loads it before a fresh size reading. A larger
+copy another app loaded does not enlarge this budget. Actual requests carry an
+output ceiling and their answers are checked against a fresh loaded-size read;
+unknown or insufficient context refuses the answer and keeps recognized text.
+Ollama's own default can be below the assumed size, and another app can replace
+the copy between reads. The after-answer check cannot retract already sent text.
 
 AI cleanup never sends audio, your snippet templates, your dictation history, or
 the name of the focused application.

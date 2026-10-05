@@ -28,12 +28,17 @@ enum TranscriptionError: LocalizedError, Equatable {
     case emptyOutput
     /// The recognizer's reply could not be read.
     case malformedOutput
+    /// A newly selected Foundry speech model has not been explicitly downloaded.
+    case speechModelNotCached
+    /// Foundry does not list the saved speech alias in this runtime's catalog.
+    case speechModelNotListed
+    /// Foundry could not confirm whether the selected speech model is cached.
+    case speechModelCacheUnavailable
 
     var errorDescription: String? {
         switch self {
         case .backendMissing(.foundryCliNotFound):
-            return "Scribe could not find Foundry Local. Install it with "
-                + "`brew install microsoft/foundrylocal/foundrylocal`, or set SCRIBE_FOUNDRY_CLI."
+            return FoundryLocalSetupText.missing
         case .backendMissing(.whisperCliNotFound):
             return "Could not find whisper-cli. Install whisper-cpp or set SCRIBE_WHISPER_CLI."
         case .backendMissing(.whisperModelNotFound):
@@ -58,6 +63,13 @@ enum TranscriptionError: LocalizedError, Equatable {
             return "The speech recognizer returned no text."
         case .malformedOutput:
             return "The speech recognizer's reply could not be read."
+        case .speechModelNotCached:
+            return
+                "The selected speech model is not downloaded. Open Advanced settings and download it before dictating."
+        case .speechModelNotListed:
+            return "Foundry Local does not list the selected speech model. Choose a listed model in Advanced settings."
+        case .speechModelCacheUnavailable:
+            return "Scribe could not check the selected speech model. Check Foundry Local and try again."
         }
     }
 }
@@ -112,7 +124,9 @@ struct TranscriptionBackendResolver: Sendable {
         return TranscriptionBackendResolver(
             environment: environment,
             searchPath: ProcessRunner.defaultSearchPath(environment: environment),
-            whisperCliCandidates: ["/opt/homebrew/opt/whisper-cpp/bin/whisper-cli"],
+            whisperCliCandidates: [
+                "/opt/homebrew/opt/whisper-cpp/bin/whisper-cli", "/usr/local/opt/whisper-cpp/bin/whisper-cli",
+            ],
             whisperModelCandidates: [
                 sourceRoot.appendingPathComponent("Models/whisper/ggml-tiny.en.bin").path(percentEncoded: false),
                 currentDirectory.appendingPathComponent("macos/Scribe/Models/whisper/ggml-tiny.en.bin")
@@ -122,7 +136,7 @@ struct TranscriptionBackendResolver: Sendable {
     }
 
     /// Throws `TranscriptionError.backendMissing`.
-    func resolve() throws -> TranscriptionBackendConfiguration {
+    func resolve(foundryModelAlias: String? = nil) throws -> TranscriptionBackendConfiguration {
         let fileManager = FileManager.default
         if let cli = environment["SCRIBE_WHISPER_CLI"], let model = environment["SCRIBE_WHISPER_MODEL"],
             fileManager.isExecutableFile(atPath: cli), fileManager.fileExists(atPath: model)
@@ -136,13 +150,32 @@ struct TranscriptionBackendResolver: Sendable {
                 kind: .foundryLocal,
                 cliURL: foundry,
                 modelURL: nil,
-                foundryModelAlias: environment["SCRIBE_FOUNDRY_ASR_MODEL"] ?? Self.defaultFoundryModelAlias)
+                foundryModelAlias: environment["SCRIBE_FOUNDRY_ASR_MODEL"] ?? foundryModelAlias
+                    ?? Self.defaultFoundryModelAlias)
         }
 
-        let cli =
-            whisperCliCandidates.first(where: fileManager.isExecutableFile(atPath:)).map { URL(fileURLWithPath: $0) }
-            ?? ProcessRunner.locateExecutable(named: "whisper-cli", searchPath: searchPath)
-        let model = whisperModelCandidates.first(where: fileManager.fileExists(atPath:))
+        let cli: URL?
+        if let override = environment["SCRIBE_WHISPER_CLI"] {
+            guard fileManager.isExecutableFile(atPath: override) else {
+                throw TranscriptionError.backendMissing(.whisperCliNotFound)
+            }
+            cli = URL(fileURLWithPath: override)
+        } else {
+            cli =
+                whisperCliCandidates.first(where: fileManager.isExecutableFile(atPath:)).map {
+                    URL(fileURLWithPath: $0)
+                }
+                ?? ProcessRunner.locateExecutable(named: "whisper-cli", searchPath: searchPath)
+        }
+        let model: String?
+        if let override = environment["SCRIBE_WHISPER_MODEL"] {
+            guard fileManager.fileExists(atPath: override) else {
+                throw TranscriptionError.backendMissing(.whisperModelNotFound)
+            }
+            model = override
+        } else {
+            model = whisperModelCandidates.first(where: fileManager.fileExists(atPath:))
+        }
         if let cli, let model {
             return Self.whisper(cli: cli, model: URL(fileURLWithPath: model))
         }
@@ -157,6 +190,10 @@ struct TranscriptionBackendResolver: Sendable {
             return URL(fileURLWithPath: override)
         }
         return ProcessRunner.locateExecutable(named: "foundry", searchPath: searchPath)
+    }
+
+    func foundryExecutable() -> URL? {
+        locateFoundry()
     }
 
     private static func whisper(cli: URL, model: URL) -> TranscriptionBackendConfiguration {
@@ -230,6 +267,7 @@ final class TranscriptionEngine: Sendable {
     private let deadlines: TranscriptionDeadlines
     private let resolutionLifetime: Duration
     private let killGracePeriod: Duration
+    private let selectedFoundryModelAlias: @Sendable () -> String
     private let now: @Sendable () -> ContinuousClock.Instant
     private let state = OSAllocatedUnfairLock(initialState: State())
 
@@ -246,6 +284,9 @@ final class TranscriptionEngine: Sendable {
         deadlines: TranscriptionDeadlines = TranscriptionDeadlines(),
         resolutionLifetime: Duration = TranscriptionEngine.defaultResolutionLifetime,
         killGracePeriod: Duration = ProcessRunner.defaultKillGracePeriod,
+        selectedFoundryModelAlias: @escaping @Sendable () -> String = {
+            AdvancedDictationSettingsStore.live.speechModelAlias
+        },
         now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
     ) {
         self.resolver = resolver
@@ -253,6 +294,7 @@ final class TranscriptionEngine: Sendable {
         self.deadlines = deadlines
         self.resolutionLifetime = resolutionLifetime
         self.killGracePeriod = killGracePeriod
+        self.selectedFoundryModelAlias = selectedFoundryModelAlias
         self.now = now
     }
 
@@ -260,9 +302,11 @@ final class TranscriptionEngine: Sendable {
     func resolveBackend() throws -> TranscriptionBackendConfiguration {
         let instant = now()
         let lifetime = resolutionLifetime
+        let requestedAlias = resolver.environment["SCRIBE_FOUNDRY_ASR_MODEL"] ?? selectedFoundryModelAlias()
         let cached = state.withLock { state -> TranscriptionBackendConfiguration? in
             guard let resolved = state.resolved, let resolvedAt = state.resolvedAt,
-                resolvedAt.duration(to: instant) < lifetime
+                resolvedAt.duration(to: instant) < lifetime,
+                resolved.kind != .foundryLocal || resolved.foundryModelAlias == requestedAlias
             else {
                 return nil
             }
@@ -273,7 +317,7 @@ final class TranscriptionEngine: Sendable {
         }
 
         do {
-            let backend = try resolver.resolve()
+            let backend = try resolver.resolve(foundryModelAlias: requestedAlias)
             state.withLock { state in
                 state.resolved = backend
                 state.resolvedAt = instant
@@ -298,6 +342,29 @@ final class TranscriptionEngine: Sendable {
     func transcribe(samples: [Float], sampleRate: Double) async throws -> TranscriptionResult {
         let backend = try resolveBackend()
         guard !Task.isCancelled else { throw TranscriptionError.cancelled }
+        do {
+            try ScratchAudioDirectory.validateRecording(samples: samples, sampleRate: sampleRate)
+        } catch let error as ScratchAudioError {
+            ScribeLog.error(
+                .transcription, "Capture audio is invalid", .name("step", error.operation),
+                .integer("errno", error.errno))
+            throw TranscriptionError.audioWriteFailed(errno: error.errno)
+        }
+        if samples.isEmpty || samples.allSatisfy({ $0 == 0 }) {
+            ScribeLog.warning(
+                .transcription, "Capture contains no audio or only digital silence", .count("samples", samples.count))
+            throw TranscriptionError.emptyOutput
+        }
+        try await requireFoundryModelIsCached(backend)
+
+        if backend.kind == .foundryLocal,
+            let integerSampleRate = Self.integerSampleRate(sampleRate),
+            samples.count > TranscriptionChunker.maxChunkSeconds * integerSampleRate
+        {
+            let spans = TranscriptionChunker.plan(samples: samples, sampleRate: integerSampleRate)
+            return try await runChunks(
+                backend, samples: samples, sampleRate: sampleRate, spans: spans)
+        }
 
         let file: ScratchAudioFile
         do {
@@ -314,13 +381,126 @@ final class TranscriptionEngine: Sendable {
         return try await run(backend, audioURL: file.url, audioSeconds: audioSeconds)
     }
 
+    private static func integerSampleRate(_ sampleRate: Double) -> Int? {
+        guard sampleRate.isFinite, sampleRate > 0, sampleRate.rounded(.towardZero) == sampleRate,
+            sampleRate <= Double(Int.max / TranscriptionChunker.maxChunkSeconds)
+        else {
+            return nil
+        }
+        return Int(sampleRate)
+    }
+
+    private func runChunks(
+        _ backend: TranscriptionBackendConfiguration,
+        samples: [Float],
+        sampleRate: Double,
+        spans: [Range<Int>]
+    ) async throws -> TranscriptionResult {
+        ScribeLog.info(
+            .transcription, "Transcribing long capture in bounded chunks",
+            .count("chunks", spans.count), .integer("maxChunkSeconds", TranscriptionChunker.maxChunkSeconds))
+
+        var parts: [String] = []
+        parts.reserveCapacity(spans.count)
+        var duration: Duration = .zero
+        var deadline: Duration = .zero
+        var standardOutputBytes = 0
+        var standardErrorBytes = 0
+        var usedColdBudget = false
+        var outputHeldAfterExit = false
+        var silentChunks = 0
+
+        do {
+            for span in spans {
+                guard !Task.isCancelled else { throw TranscriptionError.cancelled }
+                // A zero-only chunk cannot carry speech. Its empty answer must not discard surrounding speech.
+                if samples[span].allSatisfy({ $0 == 0 }) {
+                    silentChunks += 1
+                    continue
+                }
+
+                let file: ScratchAudioFile
+                do {
+                    file = try scratch.writeRecording(
+                        samples: Array(samples[span]), sampleRate: sampleRate)
+                } catch let error as ScratchAudioError {
+                    ScribeLog.error(
+                        .transcription, "Could not write the recording for the recognizer",
+                        .name("step", error.operation), .integer("errno", error.errno))
+                    throw TranscriptionError.audioWriteFailed(errno: error.errno)
+                }
+                defer { scratch.remove(file) }
+
+                let result = try await run(
+                    backend, audioURL: file.url, audioSeconds: Double(span.count) / sampleRate)
+                if parts.isEmpty {
+                    usedColdBudget = result.diagnostics.usedColdBudget
+                }
+                parts.append(result.text)
+                duration += result.diagnostics.duration
+                deadline += result.diagnostics.deadline
+                standardOutputBytes += result.diagnostics.standardOutputBytes
+                standardErrorBytes += result.diagnostics.standardErrorBytes
+                outputHeldAfterExit = outputHeldAfterExit || result.diagnostics.outputHeldAfterExit
+            }
+        } catch {
+            markCold(backend)
+            throw error
+        }
+
+        guard !parts.isEmpty else {
+            ScribeLog.warning(
+                .transcription, "Long capture contains only digital silence", .count("chunks", silentChunks))
+            throw TranscriptionError.emptyOutput
+        }
+        let text = parts.joined(separator: " ")
+        let diagnostics = TranscriptionDiagnostics(
+            duration: duration,
+            deadline: deadline,
+            usedColdBudget: usedColdBudget,
+            standardOutputBytes: standardOutputBytes,
+            standardErrorBytes: standardErrorBytes,
+            outputHeldAfterExit: outputHeldAfterExit)
+        ScribeLog.info(
+            .transcription, "Transcribed long capture",
+            .name("backend", backend.kind), .count("chunks", spans.count),
+            .count("silentChunks", silentChunks),
+            .count("characters", text.count), .count("stdoutBytes", standardOutputBytes),
+            .count("stderrBytes", standardErrorBytes))
+        return TranscriptionResult(text: text, backend: backend.kind, diagnostics: diagnostics)
+    }
+
     /// Transcribes a WAV file the caller owns, for the `--transcribe-wav` verb. Throws `TranscriptionError`.
     func transcribe(wavFileAt url: URL) async throws -> TranscriptionResult {
         guard url.pathExtension.lowercased() == "wav" else { throw TranscriptionError.unsupportedAudioFile }
         let backend = try resolveBackend()
+        try await requireFoundryModelIsCached(backend)
         // Estimated at the sparsest common WAV density, 8 kHz 16-bit mono, so the deadline can only err long.
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         return try await run(backend, audioURL: url, audioSeconds: Double(max(0, size - 44)) / 16_000)
+    }
+
+    private func requireFoundryModelIsCached(_ backend: TranscriptionBackendConfiguration) async throws {
+        guard backend.kind == .foundryLocal else { return }
+        guard backend.foundryModelAlias != Self.defaultFoundryModelAlias else { return }
+        do {
+            let models = try await FoundrySpeechModelCatalog.list(cliURL: backend.cliURL)
+            guard let model = models.first(where: { $0.alias == backend.foundryModelAlias }) else {
+                throw TranscriptionError.speechModelNotListed
+            }
+            guard let isCached = model.isCached else {
+                throw TranscriptionError.speechModelCacheUnavailable
+            }
+            guard isCached else {
+                throw TranscriptionError.speechModelNotCached
+            }
+        } catch is CancellationError {
+            throw TranscriptionError.cancelled
+        } catch let error as TranscriptionError {
+            throw error
+        } catch {
+            throw TranscriptionError.speechModelCacheUnavailable
+        }
     }
 
     // MARK: - Running the recognizer
@@ -422,18 +602,22 @@ final class TranscriptionEngine: Sendable {
         case .finished:
             break
         }
+        if let signal = outcome.terminationSignal {
+            throw TranscriptionError.terminatedBySignal(signal)
+        }
+        guard !outcome.standardOutput.isTruncated else { throw TranscriptionError.malformedOutput }
 
         switch kind {
         case .foundryLocal:
             // Foundry reports success and its structured errors as JSON on standard output, and some failures
             // still exit 0, so the reply is read before the exit status is trusted.
             if let reply = FoundryReply.find(in: outcome.standardOutput.data) {
+                if reply.reportsError {
+                    throw TranscriptionError.backendReportedError
+                }
                 let text = reply.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 if !text.isEmpty {
                     return text
-                }
-                if reply.reportsError {
-                    throw TranscriptionError.backendReportedError
                 }
                 if reply.text != nil {
                     throw TranscriptionError.emptyOutput
@@ -444,7 +628,10 @@ final class TranscriptionEngine: Sendable {
             throw output.isEmpty ? TranscriptionError.emptyOutput : TranscriptionError.malformedOutput
         case .whisperCpp:
             try throwForAbnormalExit(outcome)
-            let text = outcome.standardOutput.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let decoded = String(data: outcome.standardOutput.data, encoding: .utf8) else {
+                throw TranscriptionError.malformedOutput
+            }
+            let text = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { throw TranscriptionError.emptyOutput }
             return text
         }
@@ -503,7 +690,8 @@ private struct FoundryReply: Decodable {
         if let reply = try? decoder.decode(FoundryReply.self, from: data) {
             return reply
         }
-        let lines = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline)
+        guard let output = String(data: data, encoding: .utf8) else { return nil }
+        let lines = output.split(whereSeparator: \.isNewline)
         for line in lines.reversed() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix("{"), let reply = try? decoder.decode(FoundryReply.self, from: Data(trimmed.utf8))

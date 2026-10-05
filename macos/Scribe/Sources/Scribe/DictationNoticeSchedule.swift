@@ -16,7 +16,8 @@ extension OverlayNotice {
         switch self {
         case .stillProcessing:
             return .feedback
-        case .cleanupFellBack, .transcriptionFailed, .microphoneStoppedEarly, .durationLimitReached:
+        case .typed, .typedWithoutCleanup, .cleanupFellBack, .transcriptionFailed, .microphoneStoppedEarly,
+            .durationLimitReached, .tooQuick, .noAudio, .onlySilence, .noWordsRecognized:
             return .informational
         case .microphoneAccessNeeded, .microphoneUnavailable, .recognizerMissing, .textKept, .partlyInserted,
             .mayNotBeInserted, .accessibilityNeeded:
@@ -29,7 +30,13 @@ extension OverlayNotice {
     /// rather than the pill saying it later as well. Such a notification is posted before the dictation's delivery, so
     /// it says nothing about whether the text went in.
     var notifiesWhenThePillIsBusy: Bool {
-        self == .cleanupFellBack || self == .transcriptionFailed
+        switch self {
+        case .cleanupFellBack, .typedWithoutCleanup, .transcriptionFailed, .tooQuick, .noAudio, .onlySilence,
+            .noWordsRecognized:
+            return true
+        default:
+            return false
+        }
     }
 }
 

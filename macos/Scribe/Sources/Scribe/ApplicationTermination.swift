@@ -61,7 +61,9 @@ final class AuxiliaryOperations {
             await beforeStart()
             // A cancellation forwarded before this task got here: the operation never starts.
             try Task.checkCancellation()
-            return try await operation()
+            let result = try await operation()
+            try Task.checkCancellation()
+            return result
         }
         running[id] = Running(
             cancel: { task.cancel() },
@@ -69,7 +71,9 @@ final class AuxiliaryOperations {
         defer { running[id] = nil }
         // A cancellation of work already admitted is forwarded to it.
         return try await withTaskCancellationHandler {
-            try await task.value
+            let result = try await task.value
+            try Task.checkCancellation()
+            return result
         } onCancel: {
             task.cancel()
         }
@@ -150,5 +154,33 @@ final class ApplicationTermination {
     /// Returns once the reply has been sent.
     func waitUntilReplied() async {
         await running?.value
+    }
+}
+
+/// Defers AppKit's quit decision until Settings has approved pending edits. Repeated system quit requests share the
+/// first approval operation, so they cannot open duplicate prompts or start shutdown twice.
+@MainActor
+final class ApplicationTerminationApproval {
+    private var operation: Task<Void, Never>?
+
+    var isPending: Bool {
+        operation != nil
+    }
+
+    func request(
+        prepare: @escaping @MainActor @Sendable () async -> Bool,
+        proceed: @escaping @MainActor @Sendable () -> Void,
+        reject: @escaping @MainActor @Sendable () -> Void
+    ) -> NSApplication.TerminateReply {
+        guard operation == nil else { return .terminateLater }
+        operation = Task { @MainActor [weak self] in
+            defer { self?.operation = nil }
+            guard await prepare() else {
+                reject()
+                return
+            }
+            proceed()
+        }
+        return .terminateLater
     }
 }

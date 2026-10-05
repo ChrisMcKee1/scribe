@@ -295,6 +295,8 @@ final class FakeCapture: DictationCapturing {
     var holdsSeals = false
     var openError: (any Error)?
     var samples = [Float](repeating: 0.25, count: 8_000)
+    var signal: CaptureSignalReport?
+    var microphoneSelection: MicrophoneSelectionOutcome?
     private(set) var starts: [Start] = []
     private(set) var stops: [RecordingID] = []
     private(set) var idleWaits = 0
@@ -325,7 +327,9 @@ final class FakeCapture: DictationCapturing {
         stops.append(owner)
         guard opened.contains(owner), !handedOver.contains(owner) else { return nil }
         handedOver.insert(owner)
-        let audio = CapturedAudio(owner: owner, samples: samples, summary: Self.summary(sampleCount: samples.count))
+        let audio = CapturedAudio(
+            owner: owner, samples: samples, summary: Self.summary(sampleCount: samples.count, signal: signal),
+            microphoneSelection: microphoneSelection)
         guard holdsSeals else {
             return Task { () -> CapturedAudio? in audio }
         }
@@ -380,14 +384,14 @@ final class FakeCapture: DictationCapturing {
         stops.filter { $0 == owner }.count
     }
 
-    static func summary(sampleCount: Int) -> AudioCaptureSummary {
+    static func summary(sampleCount: Int, signal: CaptureSignalReport? = nil) -> AudioCaptureSummary {
         AudioCaptureSummary(
             startedAt: Date(timeIntervalSince1970: 1_000_000),
             stoppedAt: Date(timeIntervalSince1970: 1_000_001),
             sampleCount: sampleCount,
             sampleRate: 16_000,
             ending: .stoppedByOwner,
-            signal: nil,
+            signal: signal,
             acceptedBufferCount: 1,
             droppedBufferCount: 0,
             resamplerFlush: .notNeeded)
@@ -487,6 +491,12 @@ final class GatedCleanupProvider: CleanupProvider {
     nonisolated let displayName = "Gated cleanup"
     nonisolated let usesLocalCleanupPrompt = false
     private(set) var requests: [CleanupRequest] = []
+    var planningContext: Int?
+    var planningError: CleanupProviderError?
+    func contextForPlanning() async throws -> Int? {
+        if let planningError { throw planningError }
+        return planningContext
+    }
     var reply: (CleanupRequest) async throws -> String = { request in
         RecordingCleanupProvider.transcript(in: request)
     }
@@ -501,9 +511,35 @@ final class GatedCleanupProvider: CleanupProvider {
 @MainActor
 final class FakeCleanup: DictationCleaning {
     var isEnabled = false
+    var readinessResult: LocalModelPreparationResult = .notApplicable
+    var readinessGate: DictationGate<LocalModelPreparationResult>?
     var providerError: (any Error)?
     var cleanupProvider: any CleanupProvider
+    var settings = CleanupSettingsSnapshot(
+        isEnabled: false,
+        providerKind: .foundryLocal,
+        foundryLocalModelAlias: CleanupSettingsStore.defaultFoundryLocalModelAlias,
+        ollamaModel: CleanupSettingsStore.defaultOllamaModel,
+        selectedLocalApp: .none,
+        openAIBaseURL: "",
+        openAIModel: "",
+        openAIApiStyle: .chatCompletions,
+        ollamaContextTokens: 0,
+        lmStudioContextTokens: 0,
+        foundryLocalSendWholeVocabulary: false,
+        ollamaSendWholeVocabulary: false,
+        lmStudioSendWholeVocabulary: false,
+        azureEndpoint: "",
+        azureDeployment: "",
+        azureAuthMode: .azureCli,
+        azureTenantId: "",
+        azureClientId: "",
+        otherServiceApiStyle: .chatCompletions,
+        secretRevision: "")
     private(set) var invalidations = 0
+    private(set) var releases: [LocalModelReleaseReason] = []
+
+    func releaseLocalModel(_ reason: LocalModelReleaseReason) async { releases.append(reason) }
 
     init(provider: any CleanupProvider = GatedCleanupProvider()) {
         cleanupProvider = provider
@@ -519,6 +555,29 @@ final class FakeCleanup: DictationCleaning {
             throw providerError
         }
         return cleanupProvider
+    }
+
+    func prepareLocalModel(
+        isCurrent: @escaping @MainActor @Sendable () async -> Bool,
+        onStarting: @escaping @MainActor @Sendable () async -> Void
+    ) async -> LocalModelPreparationResult {
+        guard await isCurrent() else { return .configurationChanged }
+        if let readinessGate {
+            await onStarting()
+            do {
+                return try await readinessGate.wait()
+            } catch {
+                return .cancelled
+            }
+        }
+        if readinessResult == .started {
+            await onStarting()
+        }
+        return readinessResult
+    }
+
+    func currentSettings() -> CleanupSettingsSnapshot {
+        settings
     }
 
     func invalidate() {
@@ -850,11 +909,12 @@ final class DictationHarness {
     /// Applies rules as the app's refresher would; `libraries` are the entries of the switched-on libraries.
     func load(
         dictionary: [DictionaryEntry] = [], snippets: [Snippet] = [], profiles: [AppProfile] = [],
-        libraries: [DictionaryEntry] = [], openingGate: Bool = true
+        libraries: [DictionaryEntry] = [], cleanupLibraries: [DictionaryEntry]? = nil, openingGate: Bool = true
     ) {
         rules.apply(
             PersistenceRuleSet(dictionaryEntries: dictionary, snippets: snippets, appProfiles: profiles),
-            libraryEntries: libraries)
+            libraryEntries: libraries,
+            cleanupVocabularyEntries: cleanupLibraries ?? libraries)
         if openingGate {
             gate.open(.ready)
         }

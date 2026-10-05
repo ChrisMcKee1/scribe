@@ -10,6 +10,140 @@ import os
 /// Quit cancels that work and waits for it before it replies.
 @MainActor
 final class ApplicationTerminationTests: XCTestCase {
+    func testCancelledAuxiliaryCallerRejectsLateSuccessAfterSettlement() async {
+        let gate = SettingsTestGate()
+        let operations = AuxiliaryOperations()
+        let task = Task {
+            try await operations.run {
+                await gate.pass()
+                return 42
+            }
+        }
+        await gate.waitForArrival()
+        task.cancel()
+        XCTAssertEqual(operations.runningCount, 1)
+        await gate.open()
+        do {
+            _ = try await task.value
+            XCTFail("A cancelled operation must not return late success")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        XCTAssertEqual(operations.runningCount, 0)
+        do {
+            let value = try await operations.run { 43 }
+            XCTAssertEqual(value, 43)
+        } catch {
+            XCTFail("Cancellation must not close later admission")
+        }
+    }
+
+    func testQuitRejectsNoncooperativeLateAuxiliarySuccessAndDrains() async {
+        let gate = SettingsTestGate()
+        let operations = AuxiliaryOperations()
+        let task = Task {
+            try await operations.run {
+                await gate.pass()
+                return 42
+            }
+        }
+        await gate.waitForArrival()
+        operations.beginClosing()
+        XCTAssertEqual(operations.runningCount, 1)
+        await gate.open()
+        do {
+            _ = try await task.value
+            XCTFail("Quit must reject a cancelled operation's late result")
+        } catch {
+            XCTAssertTrue(error is CancellationError)
+        }
+        await operations.waitUntilFinished()
+        XCTAssertEqual(operations.runningCount, 0)
+        let starts = SendableCounter()
+        do {
+            _ = try await operations.run { starts.increment() }
+            XCTFail("Quit must keep admission closed")
+        } catch {
+            XCTAssertEqual(error as? AuxiliaryOperations.Refusal, .closed)
+        }
+        XCTAssertEqual(starts.value, 0)
+    }
+
+    func testCancelledConnectionCallerCannotShowLateReachableResult() async {
+        let gate = SettingsTestGate()
+        let backing = CleanupSettingsBackingFake()
+        backing.stored.isEnabled = true
+        var access = backing.access
+        access.checkConnection = {
+            await gate.pass()
+            return CleanupConnectionCheck(reachable: true, message: "late successful connection")
+        }
+        let model = CleanupSettingsModel(
+            access: access, drafts: backing.drafts, center: backing.center, operations: AuxiliaryOperations())
+        let task = Task { await model.testConnection() }
+        await gate.waitForArrival()
+        task.cancel()
+        await gate.open()
+        await task.value
+        XCTAssertFalse(model.isTesting)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(model.statusMessage, "Test Connection was cancelled.")
+    }
+
+    func testSettingsApprovalPrecedesShutdownAndCoalescesRepeatedRequests() async {
+        let approval = ApplicationTerminationApproval()
+        let entered = AudioTestSignalLatch()
+        let release = AudioTestSignalLatch()
+        let prepares = SendableCounter()
+        let proceeds = SendableCounter()
+        let rejects = SendableCounter()
+
+        let first = approval.request(
+            prepare: {
+                prepares.increment()
+                entered.signal()
+                return await release.wait()
+            },
+            proceed: { proceeds.increment() },
+            reject: { rejects.increment() })
+        XCTAssertEqual(first, .terminateLater)
+        let prepared = await entered.wait()
+        XCTAssertTrue(prepared)
+
+        let repeated = approval.request(
+            prepare: {
+                prepares.increment()
+                return true
+            },
+            proceed: { proceeds.increment() },
+            reject: { rejects.increment() })
+        XCTAssertEqual(repeated, .terminateLater)
+        XCTAssertEqual(prepares.value, 1, "a repeated quit started a second settings prompt")
+        XCTAssertEqual(proceeds.value, 0, "shutdown began before settings approval")
+
+        release.signal()
+        await waitUntil("approved termination to proceed") { !approval.isPending }
+        XCTAssertEqual(proceeds.value, 1)
+        XCTAssertEqual(rejects.value, 0)
+    }
+
+    func testRejectedSettingsApprovalCancelsQuitWithoutStartingShutdown() async {
+        let approval = ApplicationTerminationApproval()
+        let proceeds = SendableCounter()
+        let rejects = SendableCounter()
+
+        XCTAssertEqual(
+            approval.request(
+                prepare: { false },
+                proceed: { proceeds.increment() },
+                reject: { rejects.increment() }),
+            .terminateLater)
+
+        await waitUntil("rejected termination to reply") { !approval.isPending }
+        XCTAssertEqual(proceeds.value, 0)
+        XCTAssertEqual(rejects.value, 1)
+    }
+
     private func makeScript(_ body: String, in directory: URL) throws -> URL {
         let url = directory.appendingPathComponent("probe")
         try Data("#!/bin/sh\n\(body)\n".utf8).write(to: url)
@@ -88,6 +222,56 @@ final class ApplicationTerminationTests: XCTestCase {
         XCTAssertTrue(refused != nil, "the refused check did not return")
         XCTAssertEqual(starts.value, 1, "a check after Quit started a child")
         XCTAssertEqual(model.errorMessage?.contains("quitting"), true)
+    }
+
+    func testQuitCancelsAndReapsAnExplicitSpeechModelDownload() async throws {
+        let directory = try makeTemporaryDirectory(label: "quit-speech-download")
+        let ready = directory.appendingPathComponent("ready")
+        let pidFile = directory.appendingPathComponent("pid")
+        let script = try makeScript(
+            """
+            trap '' TERM
+            echo $$ > '\(pidFile.path(percentEncoded: false))'
+            : > '\(ready.path(percentEncoded: false))'
+            exec sleep 30
+            """, in: directory)
+        let operations = AuxiliaryOperations()
+
+        let download = Task { @MainActor in
+            do {
+                try await operations.run {
+                    try await FoundrySpeechModelCatalog.download(alias: "whisper-base", cliURL: script)
+                }
+                return true
+            } catch {
+                return false
+            }
+        }
+        let started = await FileGate.waitForFile(at: ready, timeout: .seconds(30))
+        XCTAssertTrue(started)
+        let pid = try XCTUnwrap(
+            pid_t(try String(contentsOf: pidFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        XCTAssertEqual(operations.runningCount, 1)
+
+        let replies = Collected<Bool>()
+        let termination = ApplicationTermination(
+            work: ApplicationTermination.Work(
+                stopListening: {},
+                operations: operations,
+                dictation: makeHarness().controller,
+                stopMaintenance: nil,
+                removeScratchAudio: {}),
+            reply: { replies.values.append(ProcessResources.isAlive(pid)) })
+
+        XCTAssertEqual(termination.request(), .terminateLater)
+        let replied = await finishes(within: 30) { await termination.waitUntilReplied() }
+        XCTAssertTrue(replied, "Quit did not wait for the speech download to stop")
+
+        XCTAssertEqual(replies.values, [false], "Quit replied while the model download child was alive")
+        XCTAssertTrue(ProcessResources.waitForExit(of: pid, timeout: .seconds(10)))
+        XCTAssertEqual(operations.runningCount, 0)
+        let downloadSucceeded = await download.value
+        XCTAssertFalse(downloadSucceeded)
     }
 
     /// The Usage Insights summary goes through the same barrier: Quit cancels it and waits for it to return, and a

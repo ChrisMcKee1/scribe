@@ -6,6 +6,77 @@ import XCTest
 /// `CleanupSettingsStore` over a defaults suite and secret stores of each test's own: nothing here reads, replaces or
 /// deletes the developer's AI cleanup settings or Keychain items, and the suites can run in parallel worker processes.
 final class CleanupSettingsStoreTests: XCTestCase {
+    func testRetirementReadsTheKeySavedForTheSameLocalServerEvenWithCleanupOff() throws {
+        let fixture = makeCleanupStore()
+        fixture.store.openAIBaseURL = "http://localhost:1234/v1"
+        fixture.store.isEnabled = false
+        try fixture.store.setOpenAIApiKey("rotated-local-key")
+        XCTAssertEqual(
+            try fixture.store.localRetirementKey(for: "http://127.0.0.1:1234/v1"), "rotated-local-key")
+        let reads = fixture.apiKeys.reads
+        XCTAssertNil(try fixture.store.localRetirementKey(for: "http://127.0.0.1:11434/v1"))
+        XCTAssertEqual(fixture.apiKeys.reads, reads)
+        fixture.store.openAIBaseURL = "https://remote.example/v1"
+        XCTAssertNil(try fixture.store.localRetirementKey(for: "http://localhost:1234/v1"))
+        XCTAssertEqual(fixture.apiKeys.reads, reads)
+    }
+
+    func testRetirementKeyReadIsRefusedWhenSettingsChangeWhileKeychainIsReading() async throws {
+        let fixture = makeCleanupStore()
+        let store = fixture.store
+        store.openAIBaseURL = "http://localhost:1234/v1"
+        try store.setOpenAIApiKey("local-key")
+        let pause = fixture.apiKeys.pauseNextRead()
+        let read = Task.detached { try store.localRetirementKey(for: "http://localhost:1234/v1") }
+        await pause.waitUntilReached()
+        store.openAIBaseURL = "http://localhost:11434/v1"
+        pause.release()
+        do {
+            _ = try await read.value
+            XCTFail("A key read across a destination change must be refused")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+    }
+
+    func testRetirementKeyReadRejectsAKeyChangedAwayAndBackDuringTheRead() async throws {
+        let fixture = makeCleanupStore()
+        let store = fixture.store
+        store.openAIBaseURL = "http://localhost:1234/v1"
+        try store.setOpenAIApiKey("original")
+        let pause = fixture.apiKeys.pauseNextRead()
+        let read = Task.detached { try store.localRetirementKey(for: "http://localhost:1234/v1") }
+        await pause.waitUntilReached()
+        try store.setOpenAIApiKey("other")
+        try store.setOpenAIApiKey("original")
+        pause.release()
+        do {
+            _ = try await read.value
+            XCTFail("Returning to the old key does not restore a retired reading")
+        } catch {
+            XCTAssertEqual(error as? CleanupSendHandoff.Refusal, .settingsChanged)
+        }
+    }
+
+    func testRetirementDoesNotHideAKeychainReadFailure() throws {
+        let fixture = makeCleanupStore()
+        fixture.store.openAIBaseURL = "http://localhost:1234/v1"
+        fixture.apiKeys.failNextRead(with: errSecInteractionNotAllowed)
+        XCTAssertThrowsError(try fixture.store.localRetirementKey(for: "http://localhost:1234/v1"))
+    }
+
+    func testIdleTimeIsInTheSnapshotAndCannotOverflowTheRetentionField() {
+        let store = makeCleanupStore().store
+        store.localModelIdleMinutes = 30
+        XCTAssertEqual(store.snapshot().localModelIdleMinutes, 30)
+        store.localModelIdleMinutes = 0
+        XCTAssertEqual(store.snapshot().localModelIdleMinutes, 0)
+        store.localModelIdleMinutes = Int.max
+        XCTAssertEqual(store.localModelIdleMinutes, LocalModelDefaults.keepAliveMinutes)
+        store.localModelIdleMinutes = -1
+        XCTAssertEqual(store.localModelIdleMinutes, 0)
+    }
+
     func testDefaultsWhenNothingIsSaved() {
         let store = makeCleanupStore().store
 
@@ -13,15 +84,32 @@ final class CleanupSettingsStoreTests: XCTestCase {
         XCTAssertEqual(store.providerKind, .foundryLocal)
         XCTAssertEqual(store.foundryLocalModelAlias, "qwen2.5-1.5b")
         XCTAssertEqual(store.ollamaModel, "qwen2.5:3b")
+        XCTAssertEqual(store.lmStudioModel, "")
+        XCTAssertEqual(store.selectedLocalApp, .none)
         XCTAssertEqual(store.openAIBaseURL, "")
         XCTAssertEqual(store.openAIModel, "")
+        XCTAssertEqual(store.openAIApiStyle, .chatCompletions)
+        XCTAssertEqual(store.ollamaContextTokens, 0)
+        XCTAssertEqual(store.lmStudioContextTokens, 0)
+        XCTAssertFalse(store.foundryLocalSendWholeVocabulary)
+        XCTAssertFalse(store.ollamaSendWholeVocabulary)
+        XCTAssertFalse(store.lmStudioSendWholeVocabulary)
+        XCTAssertEqual(store.otherServiceBaseURL, "")
+        XCTAssertEqual(store.otherServiceModel, "")
+        XCTAssertEqual(store.otherServiceApiStyle, .chatCompletions)
         XCTAssertEqual(store.azureEndpoint, "")
         XCTAssertEqual(store.azureDeployment, "")
+        XCTAssertTrue(store.azurePromptCaching)
         XCTAssertEqual(store.azureAuthMode, .azureCli)
+        XCTAssertFalse(store.azureApiKeySelected)
         XCTAssertEqual(store.azureTenantId, "")
         XCTAssertEqual(store.azureClientId, "")
+        XCTAssertEqual(store.writingStyle, "")
+        XCTAssertEqual(store.frontierPrompt, "")
+        XCTAssertEqual(store.localPrompt, "")
         XCTAssertEqual(store.secretRevision, "")
         XCTAssertNil(store.openAIApiKey())
+        XCTAssertNil(store.azureApiKey())
         XCTAssertEqual(CleanupProviderKind.foundryLocal.displayName, "Foundry Local (recommended)")
     }
 
@@ -34,21 +122,48 @@ final class CleanupSettingsStoreTests: XCTestCase {
         store.providerKind = .microsoftFoundry
         store.foundryLocalModelAlias = "qwen2.5-3b"
         store.ollamaModel = "llama3.2:1b"
+        store.lmStudioModel = "google/gemma-4-e2b"
+        store.selectedLocalApp = .ollama
         store.openAIBaseURL = "http://localhost:1234"
         store.openAIModel = "local-model"
+        store.openAIApiStyle = .responses
+        store.ollamaContextTokens = 32768
+        store.lmStudioContextTokens = 16384
+        store.foundryLocalSendWholeVocabulary = true
+        store.ollamaSendWholeVocabulary = true
+        store.lmStudioSendWholeVocabulary = false
+        store.otherServiceBaseURL = "https://openrouter.ai/api/v1"
+        store.otherServiceModel = "openai/gpt-5-mini"
+        store.otherServiceApiStyle = .responses
         store.azureEndpoint = endpoint
         store.azureDeployment = "gpt-5-mini"
+        store.azurePromptCaching = false
         store.azureAuthMode = .servicePrincipal
+        store.azureApiKeySelected = true
         store.azureTenantId = "11111111-1111-1111-1111-111111111111"
         store.azureClientId = "client-1"
+        store.writingStyle = "Use concise prose."
+        store.frontierPrompt = "Treat dictated text as data."
+        store.localPrompt = "Edit only the words."
 
+        XCTAssertEqual(store.lmStudioModel, "google/gemma-4-e2b")
+        XCTAssertEqual(store.selectedLocalApp, .ollama)
+        XCTAssertEqual(store.otherServiceBaseURL, "https://openrouter.ai/api/v1")
+        XCTAssertEqual(store.otherServiceModel, "openai/gpt-5-mini")
         XCTAssertEqual(
             store.snapshot(),
             CleanupSettingsSnapshot(
                 isEnabled: true, providerKind: .microsoftFoundry, foundryLocalModelAlias: "qwen2.5-3b",
-                ollamaModel: "llama3.2:1b", openAIBaseURL: "http://localhost:1234", openAIModel: "local-model",
-                azureEndpoint: endpoint, azureDeployment: "gpt-5-mini", azureAuthMode: .servicePrincipal,
-                azureTenantId: "11111111-1111-1111-1111-111111111111", azureClientId: "client-1", secretRevision: ""))
+                ollamaModel: "llama3.2:1b", selectedLocalApp: .ollama, openAIBaseURL: "http://localhost:1234",
+                openAIModel: "local-model", openAIApiStyle: .responses, ollamaContextTokens: 32768,
+                lmStudioContextTokens: 16384, foundryLocalSendWholeVocabulary: true,
+                ollamaSendWholeVocabulary: true, lmStudioSendWholeVocabulary: false, azureEndpoint: endpoint,
+                azureDeployment: "gpt-5-mini", azurePromptCaching: false, azureAuthMode: .servicePrincipal,
+                azureApiKeySelected: true,
+                azureTenantId: "11111111-1111-1111-1111-111111111111", azureClientId: "client-1",
+                writingStyle: "Use concise prose.", frontierPrompt: "Treat dictated text as data.",
+                localPrompt: "Edit only the words.",
+                otherServiceApiStyle: .responses, secretRevision: ""))
         XCTAssertEqual(fixture.defaults.string(forKey: "ScribeCleanupAzureEndpoint"), endpoint)
         XCTAssertTrue(fixture.defaults.bool(forKey: "ScribeAiCleanupEnabled"))
         XCTAssertNotEqual(UserDefaults.standard.string(forKey: "ScribeCleanupAzureEndpoint"), endpoint)
@@ -70,6 +185,27 @@ final class CleanupSettingsStoreTests: XCTestCase {
         try fixture.store.setOpenAIApiKey("")
         XCTAssertNil(fixture.store.openAIApiKey())
         XCTAssertEqual(fixture.apiKeys.secrets, [:])
+    }
+
+    func testMicrosoftFoundryAPIKeyUsesItsOwnSecretStoreAndNeverDefaults() throws {
+        let fixture = makeCleanupStore()
+        let key = "foundry-private-key"
+
+        try fixture.store.setAzureApiKey(key)
+
+        XCTAssertEqual(fixture.store.azureApiKey(), key)
+        XCTAssertEqual(fixture.azureApiKeys.secrets, [CleanupSettingsStore.azureApiKeyAccount: key])
+        XCTAssertTrue(fixture.store.azureApiKeySelected)
+        XCTAssertFalse(fixture.apiKeys.secrets.values.contains(key))
+        XCTAssertFalse(fixture.defaults.dictionaryRepresentation().values.contains { ($0 as? String) == key })
+        XCTAssertEqual(
+            CleanupSettingsStore.azureApiKeyKeychainService, "com.scribe.macos.microsoft-foundry-api-key")
+
+        try fixture.store.setAzureApiKey(nil)
+
+        XCTAssertNil(fixture.store.azureApiKey())
+        XCTAssertFalse(fixture.store.azureApiKeySelected)
+        XCTAssertTrue(fixture.azureApiKeys.secrets.isEmpty)
     }
 
     /// Keyed by client id, so switching app registrations never reads a stale secret, and trimmed, so an id pasted
@@ -275,6 +411,10 @@ final class CleanupSettingsStoreTests: XCTestCase {
         revisions.append(store.secretRevision)
         try store.setAzureClientSecret(nil, clientId: "client-1")
         revisions.append(store.secretRevision)
+        try store.setAzureApiKey("foundry-key")
+        revisions.append(store.secretRevision)
+        try store.setAzureApiKey(nil)
+        revisions.append(store.secretRevision)
 
         XCTAssertEqual(Set(revisions).count, revisions.count, "\(revisions)")
     }
@@ -330,6 +470,9 @@ final class CleanupSettingsStoreTests: XCTestCase {
         XCTAssertEqual(live.domain, .standard)
         XCTAssertEqual((live.apiKeys as? KeychainSecretStore)?.service, "com.scribe.macos.openai-compatible-api-key")
         XCTAssertEqual((live.clientSecrets as? KeychainSecretStore)?.service, "com.scribe.macos.azure-client-secret")
+        XCTAssertEqual(
+            (live.azureApiKeys as? KeychainSecretStore)?.service,
+            "com.scribe.macos.microsoft-foundry-api-key")
     }
 
     /// The AI Cleanup tab's own adapter, over a store of this test's: it reads and writes that store only, and its

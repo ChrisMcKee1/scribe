@@ -37,6 +37,17 @@ struct DictationNotice: Equatable, Sendable {
         case cleanupFellBack
         case transcriptionFailed
         case startup
+        case tooQuick
+        case noAudio
+        case onlySilence
+        case noWordsRecognized
+        case fallbackMicrophone
+        case microphoneDisconnected
+        case durationLimit
+        case copied
+        case copyFailed
+        case quickAdd
+        case cleanupActivation
     }
 
     let kind: Kind
@@ -65,8 +76,9 @@ struct DictationNotice: Equatable, Sendable {
     static func notInserted(_ transcript: String, recoveryGeneration: UInt64) -> DictationNotice {
         DictationNotice(
             kind: .notInserted,
-            title: "Dictation could not be inserted",
-            body: "Use \u{201C}Copy Transcript\u{201D} below or the Recent Dictations menu to recover it.",
+            title: "Couldn't type your dictation",
+            body: "The window changed or didn't accept the text. Use \u{201C}Copy Transcript\u{201D} below or "
+                + "open Scribe's menu bar icon and choose Recent Dictations, then paste it.",
             recoveryText: transcript,
             recoveryGeneration: recoveryGeneration,
             settingsPane: nil)
@@ -75,8 +87,8 @@ struct DictationNotice: Equatable, Sendable {
     static func partlyInserted(_ transcript: String, recoveryGeneration: UInt64) -> DictationNotice {
         DictationNotice(
             kind: .partlyInserted,
-            title: "Dictation was only partly inserted",
-            body: "Scribe stopped part way through typing it. Use \u{201C}Copy Transcript\u{201D} below or the "
+            title: "Couldn't type all of your dictation",
+            body: "This app didn't accept all of the text. Use \u{201C}Copy Transcript\u{201D} below or the "
                 + "Recent Dictations menu to recover the full text.",
             recoveryText: transcript,
             recoveryGeneration: recoveryGeneration,
@@ -110,16 +122,16 @@ struct DictationNotice: Equatable, Sendable {
     /// own outcome to report.
     static let cleanupFellBack = DictationNotice(
         kind: .cleanupFellBack,
-        title: "AI cleanup could not be used",
-        body: "AI cleanup failed or gave a reply that could not be used for this dictation.",
+        title: "AI cleanup isn't working",
+        body: "Scribe types what it hears. To check AI cleanup, open Settings, AI cleanup.",
         recoveryText: nil,
         settingsPane: nil)
 
-    /// Posted only when the pill could not say so at the time (`OverlayNotice.notifiesWhenThePillIsBusy`).
     static let transcriptionFailed = DictationNotice(
         kind: .transcriptionFailed,
-        title: "A dictation could not be transcribed",
-        body: "The speech recognizer failed, so nothing was inserted. Please dictate it again.",
+        title: "Dictation didn't finish",
+        body: "Something went wrong while Scribe turned your speech into text. Try again. If it keeps happening, "
+            + "open Settings, Diagnostics.",
         recoveryText: nil,
         settingsPane: nil)
 
@@ -132,8 +144,9 @@ struct DictationNotice: Equatable, Sendable {
 
     static let microphoneUnavailable = DictationNotice(
         kind: .microphoneUnavailable,
-        title: "The microphone could not be opened",
-        body: "Check the microphone chosen in Scribe's Settings > Input, then dictate again.",
+        title: "Couldn't start recording",
+        body:
+            "Scribe couldn't open your microphone. Check that it's connected, or choose another in Settings, Dictation.",
         recoveryText: nil,
         settingsPane: nil)
 
@@ -145,6 +158,109 @@ struct DictationNotice: Equatable, Sendable {
                 ?? "Install Foundry Local, then dictate again.",
             recoveryText: nil,
             settingsPane: nil)
+    }
+
+    static func tooQuick(_ trigger: DictationTrigger) -> DictationNotice {
+        let instruction =
+            trigger.gesture == .hold
+            ? "That was too quick. Hold your shortcut while you speak, then let go."
+            : "That was too quick. Start recording, speak, then stop it."
+        return DictationNotice(
+            kind: .tooQuick, title: "Nothing recorded", body: instruction, recoveryText: nil, settingsPane: nil)
+    }
+
+    static let noAudio = DictationNotice(
+        kind: .noAudio, title: "No sound recorded",
+        body: "Scribe didn't get any sound from your microphone. Check that it's connected, or choose another in "
+            + "Settings, Dictation.", recoveryText: nil, settingsPane: nil)
+
+    static let onlySilence = DictationNotice(
+        kind: .onlySilence, title: "Only silence recorded",
+        body: "Your microphone may be muted. Unmute it and try again.", recoveryText: nil, settingsPane: nil)
+
+    static let noWordsRecognized = DictationNotice(
+        kind: .noWordsRecognized, title: "No words recognized",
+        body: "Scribe didn't catch any words. Try again, a little closer to the microphone.",
+        recoveryText: nil, settingsPane: nil)
+
+    static func fallbackMicrophone(_ result: MicrophoneSelectionOutcome.Result) -> DictationNotice {
+        let body =
+            result == .systemDefault
+            ? "Your chosen microphone isn't available, so Scribe is recording from the system default microphone. "
+                + "To choose another, open Settings, Dictation."
+            : "Scribe couldn't confirm your chosen microphone. Check that it's connected, or choose another in "
+                + "Settings, Dictation."
+        return DictationNotice(
+            kind: .fallbackMicrophone,
+            title: result == .systemDefault ? "Using another microphone" : "Check your microphone",
+            body: body, recoveryText: nil, settingsPane: nil)
+    }
+
+    static let microphoneDisconnected = DictationNotice(
+        kind: .microphoneDisconnected, title: "Microphone stopped",
+        body: "Your microphone stopped during the dictation. Check that it's connected, then try again.",
+        recoveryText: nil, settingsPane: nil)
+
+    static func durationLimit(_ duration: Duration) -> DictationNotice {
+        let minutes = max(1, Int(duration.components.seconds / 60))
+        let unit = minutes == 1 ? "minute" : "minutes"
+        return DictationNotice(
+            kind: .durationLimit, title: "Dictation stopped at \(minutes) \(unit)",
+            body: "Scribe stopped recording and is processing what it heard. The recording limit is shown in "
+                + "Settings, Advanced.", recoveryText: nil, settingsPane: nil)
+    }
+
+    static let copiedRecentDictation = DictationNotice(
+        kind: .copied, title: "Copied",
+        body: "That dictation is on the clipboard. Press Command+V to paste it.", recoveryText: nil, settingsPane: nil)
+
+    static let copyFailed = DictationNotice(
+        kind: .copyFailed, title: "Couldn't copy",
+        body: "Another app may be using the clipboard. Try again in a moment.", recoveryText: nil, settingsPane: nil)
+
+    static let quickAddOpenFailed = DictationNotice(
+        kind: .quickAdd, title: "Couldn't open Add to dictionary",
+        body: "Try again, or add the word in Settings, Dictionary.", recoveryText: nil, settingsPane: nil)
+
+    static let quickAddSaved = DictationNotice(
+        kind: .quickAdd, title: "Saved to your dictionary",
+        body: "Scribe uses it from your next dictation.", recoveryText: nil, settingsPane: nil)
+
+    static let quickAddNotInUse = DictationNotice(
+        kind: .quickAdd, title: "Saved, but not in use yet",
+        body: "Scribe saved your word but couldn't start using it. Quit and reopen Scribe to use it.",
+        recoveryText: nil, settingsPane: nil)
+
+    static func cleanupActivation(_ enabled: Bool) -> DictationNotice {
+        DictationNotice(
+            kind: .cleanupActivation, title: enabled ? "AI cleanup is on" : "AI cleanup is off",
+            body: enabled
+                ? "Scribe uses the AI cleanup service saved in Settings. Until it's ready, Scribe types what it hears."
+                : "Scribe types what it hears, with your dictionary and voice snippets.",
+            recoveryText: nil, settingsPane: nil)
+    }
+
+    var playsSound: Bool {
+        switch kind {
+        case .copied, .cleanupActivation, .fallbackMicrophone:
+            return false
+        case .quickAdd:
+            return title != Self.quickAddSaved.title
+        default:
+            return true
+        }
+    }
+
+    var opensScribeSettings: Bool {
+        switch kind {
+        case .transcriptionFailed, .microphoneUnavailable, .noAudio, .fallbackMicrophone,
+            .microphoneDisconnected, .durationLimit, .cleanupFellBack, .quickAdd:
+            return kind != .quickAdd || title != Self.quickAddSaved.title
+        case .startup:
+            return settingsPane == nil
+        default:
+            return false
+        }
     }
 
     /// One notice for everything that went wrong at startup, or nil when nothing did. It opens the first privacy
@@ -180,6 +296,12 @@ struct DictationNotice: Equatable, Sendable {
     }
 }
 
+enum QuickAddNotice {
+    static func forRefresh(applied: Bool) -> DictationNotice {
+        applied ? .quickAddSaved : .quickAddNotInUse
+    }
+}
+
 /// Collects what went wrong at startup and posts it once, as one notice, after every startup step that can report
 /// a problem has settled: the storage and rule load, and the notification permission request (a notice posted
 /// before macOS answers it is dropped).
@@ -194,6 +316,7 @@ final class StartupNotices {
     private var pending: Set<Step> = [.storage, .notifications]
     private let post: @MainActor (DictationNotice) -> Void
     private(set) var hasPosted = false
+    private var isClosed = false
 
     init(post: @escaping @MainActor (DictationNotice) -> Void) {
         self.post = post
@@ -203,13 +326,25 @@ final class StartupNotices {
         problems
     }
 
-    /// Adds a problem, unless the notice has already gone out.
+    /// The startup batch is sent once; a later fault starts a new episode only after actual recovery.
     func report(_ problem: StartupProblem) {
-        guard !hasPosted, !problems.contains(problem) else { return }
+        guard !isClosed, !problems.contains(problem) else { return }
         problems.append(problem)
+        if hasPosted, let notice = DictationNotice.startup([problem]) {
+            post(notice)
+        }
+    }
+
+    func recover(_ problem: StartupProblem) {
+        problems.removeAll { $0 == problem }
+    }
+
+    func close() {
+        isClosed = true
     }
 
     func settle(_ step: Step) {
+        guard !isClosed else { return }
         pending.remove(step)
         guard pending.isEmpty, !hasPosted else { return }
         hasPosted = true
@@ -266,6 +401,8 @@ final class DictationNotificationCenter: DictationNotifying {
     static let recoveryAndSettingsCategoryIdentifier = "com.scribe.macos.injectionFailureAndSettings"
     static let copyTranscriptActionIdentifier = "com.scribe.macos.copyTranscript"
     static let openSettingsActionIdentifier = "com.scribe.macos.openSystemSettings"
+    static let appSettingsCategoryIdentifier = "com.scribe.macos.openScribeSettings"
+    static let openAppSettingsActionIdentifier = "com.scribe.macos.showScribeSettings"
     private static let paneKey = "pane"
 
     private let center: UNUserNotificationCenter
@@ -273,10 +410,16 @@ final class DictationNotificationCenter: DictationNotifying {
     private let recoveryGeneration: @MainActor () -> UInt64
     private var responder: NotificationResponder?
     private var recoveryTexts = NotificationRecoveryTexts()
+    private var copyEpisode = TrayActionNoticeEpisode()
+    private let openScribeSettings: @MainActor () -> Void
 
-    init(center: UNUserNotificationCenter, recoveryGeneration: @escaping @MainActor () -> UInt64) {
+    init(
+        center: UNUserNotificationCenter, recoveryGeneration: @escaping @MainActor () -> UInt64,
+        openScribeSettings: @escaping @MainActor () -> Void = {}
+    ) {
         self.center = center
         self.recoveryGeneration = recoveryGeneration
+        self.openScribeSettings = openScribeSettings
     }
 
     /// Registers the actions, becomes the delegate and asks for permission. `settled` runs on the main actor once
@@ -292,6 +435,8 @@ final class DictationNotificationCenter: DictationNotifying {
             identifier: Self.copyTranscriptActionIdentifier, title: "Copy Transcript", options: [])
         let openSettings = UNNotificationAction(
             identifier: Self.openSettingsActionIdentifier, title: "Open System Settings", options: [])
+        let openAppSettings = UNNotificationAction(
+            identifier: Self.openAppSettingsActionIdentifier, title: "Open Scribe Settings", options: [.foreground])
         center.setNotificationCategories([
             UNNotificationCategory(
                 identifier: Self.recoveryCategoryIdentifier, actions: [copy], intentIdentifiers: [], options: []),
@@ -300,6 +445,9 @@ final class DictationNotificationCenter: DictationNotifying {
                 options: []),
             UNNotificationCategory(
                 identifier: Self.recoveryAndSettingsCategoryIdentifier, actions: [copy, openSettings],
+                intentIdentifiers: [], options: []),
+            UNNotificationCategory(
+                identifier: Self.appSettingsCategoryIdentifier, actions: [openAppSettings],
                 intentIdentifiers: [], options: []),
         ])
 
@@ -322,15 +470,11 @@ final class DictationNotificationCenter: DictationNotifying {
         recoveryTexts.removeAll()
     }
 
-    func notify(_ notice: DictationNotice) {
-        if let generation = notice.recoveryGeneration, generation != recoveryGeneration() {
-            ScribeLog.info(.app, "A notice about text Clear history removed was not shown", .name("kind", notice.kind))
-            return
-        }
+    static func content(for notice: DictationNotice) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.title = notice.title
         content.body = notice.body
-        content.sound = .default
+        if notice.playsSound { content.sound = .default }
         switch (notice.recoveryText != nil, notice.settingsPane != nil) {
         case (true, true):
             content.categoryIdentifier = Self.recoveryAndSettingsCategoryIdentifier
@@ -339,12 +483,20 @@ final class DictationNotificationCenter: DictationNotifying {
         case (false, true):
             content.categoryIdentifier = Self.settingsCategoryIdentifier
         case (false, false):
-            break
+            if notice.opensScribeSettings { content.categoryIdentifier = Self.appSettingsCategoryIdentifier }
         }
         if let pane = notice.settingsPane {
             content.userInfo = [Self.paneKey: pane.rawValue]
         }
+        return content
+    }
 
+    func notify(_ notice: DictationNotice) {
+        if let generation = notice.recoveryGeneration, generation != recoveryGeneration() {
+            ScribeLog.info(.app, "A notice about text Clear history removed was not shown", .name("kind", notice.kind))
+            return
+        }
+        let content = Self.content(for: notice)
         let identifier = UUID().uuidString
         if let text = notice.recoveryText {
             recoveryTexts.remember(text, generation: notice.recoveryGeneration, for: identifier)
@@ -369,8 +521,16 @@ final class DictationNotificationCenter: DictationNotifying {
             }
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
-            pasteboard.setString(text, forType: .string)
+            guard pasteboard.setString(text, forType: .string) else {
+                ScribeLog.warning(.app, "Could not copy a dictation from its notice")
+                if copyEpisode.failed() { notify(.copyFailed) }
+                return
+            }
+            copyEpisode.recovered()
             ScribeLog.info(.app, "Copied a dictation from its notice", .count("characters", text.count))
+            notify(.copiedRecentDictation)
+        case Self.openAppSettingsActionIdentifier:
+            openScribeSettings()
         case Self.openSettingsActionIdentifier:
             guard let raw = answer.paneRawValue, let url = PrivacyPane(rawValue: raw)?.settingsURL else { return }
             NSWorkspace.shared.open(url)
