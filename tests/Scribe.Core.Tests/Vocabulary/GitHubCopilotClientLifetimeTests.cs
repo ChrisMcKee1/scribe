@@ -186,26 +186,39 @@ public sealed class GitHubCopilotClientLifetimeTests
         var log = new CapturingLogger<GitHubCopilotClientLifetime>();
         async Task StopAsync()
         {
-            stopStarted.TrySetResult();
             await stopRelease.Task;
             await client.StopAsync();
         }
         async Task ForceAsync()
         {
-            forceStarted.TrySetResult();
             await forceRelease.Task;
             await client.ForceStopAsync();
         }
         async Task DisposeAsync()
         {
-            disposeStarted.TrySetResult();
             await disposeRelease.Task;
             await client.DisposeAsync();
         }
+        // The awaiting test can resume at the signal, so publish the task reference first.
         var owner = new GitHubCopilotClientLifetime(
-            () => stopping = StopAsync(),
-            () => forcing = ForceAsync(),
-            () => new ValueTask(disposing = DisposeAsync()),
+            () =>
+            {
+                stopping = StopAsync();
+                stopStarted.TrySetResult();
+                return stopping;
+            },
+            () =>
+            {
+                forcing = ForceAsync();
+                forceStarted.TrySetResult();
+                return forcing;
+            },
+            () =>
+            {
+                disposing = DisposeAsync();
+                disposeStarted.TrySetResult();
+                return new ValueTask(disposing);
+            },
             log, clock);
 
         var shutdown = owner.DisposeAsync().AsTask();
