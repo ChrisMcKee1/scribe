@@ -10,9 +10,9 @@ public sealed class TrayMenuTests
         var menu = TrayMenu.Build(State(updateReady: true, hasRecent: true));
 
         Assert.Equal(
-            ["Restart to update Scribe", "", "Settings", "", "Add to dictionary...", "Copy last dictation", "Copy a recent dictation", "", "Microphone", "AI cleanup", "Pause dictation", "", "Quit Scribe"],
+            ["Restart to update Scribe", "", "Settings", "", "Add to dictionary...", "Copy last dictation", "Copy a recent dictation", "", "Microphone", "AI cleanup", "Pause dictation", "Use plain text once", "", "Quit Scribe"],
             menu.Items.Select(i => i.Label));
-        Assert.Equal([1, 3, 7, 11], menu.Items.Select((item, index) => (item, index)).Where(pair => pair.item.Kind == TrayItemKind.Separator).Select(pair => pair.index));
+        Assert.Equal([1, 3, 7, 12], menu.Items.Select((item, index) => (item, index)).Where(pair => pair.item.Kind == TrayItemKind.Separator).Select(pair => pair.index));
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public sealed class TrayMenuTests
         var keys = TrayMenu.Build(State(updateReady: true)).Items.Where(i => i.AccessKey is not null).Select(i => i.AccessKey!.Value).ToArray();
 
         Assert.Equal(keys.Length, keys.Distinct().Count());
-        Assert.Equal(['U', 'S', 'A', 'C', 'R', 'M', 'I', 'P', 'Q'], keys);
+        Assert.Equal(['U', 'S', 'A', 'C', 'R', 'M', 'I', 'P', 'T', 'Q'], keys);
     }
 
     [Fact]

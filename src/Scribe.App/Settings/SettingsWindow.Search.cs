@@ -404,6 +404,9 @@ public partial class SettingsWindow
             case "StoreAudioCheck":
                 HistorySettingsCard.IsExpanded = true;
                 break;
+            case "OllamaDownloadModelBox":
+                OllamaDownloadPanel.IsExpanded = true;
+                break;
             case "OllamaContextSizeCombo":
             case "OllamaWholeVocabularyCheck":
                 OllamaTuningExpander.IsExpanded = true;

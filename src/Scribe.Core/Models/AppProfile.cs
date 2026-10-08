@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Scribe.Core.Models;
 
 /// <summary>
@@ -23,6 +25,18 @@ public sealed class AppProfile
 
     /// <summary>Line-break handling for this app; null keeps the global setting.</summary>
     public NewlineInjectionMode? NewlineHandling { get; set; }
+
+    /// <summary>Literal text format; null inherits, and only applies when app-aware formatting is on.</summary>
+    [JsonConverter(typeof(ProfileTextFormatJsonConverter))]
+    public DictationTextFormat? TextFormat { get; set; }
+
+    /// <summary>Delivery preference; null inherits the global method. Never authorizes rich text or remote paste.</summary>
+    [JsonConverter(typeof(ProfileInjectionMethodJsonConverter))]
+    public InjectionMethod? InjectionMethod { get; set; }
+
+    /// <summary>How a typed line break is sent; null inherits the global choice.</summary>
+    [JsonConverter(typeof(ProfileShiftEnterJsonConverter))]
+    public bool? ShiftEnterLineBreaks { get; set; }
 }
 
 /// <summary>Resolves which profile (if any) applies to a foreground process.</summary>

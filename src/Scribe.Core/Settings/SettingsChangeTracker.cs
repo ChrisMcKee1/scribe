@@ -25,7 +25,10 @@ public sealed record LoadedProfileDraftRow(
     string? Name,
     string? Apps,
     string? WritingStyle = null,
-    NewlineInjectionMode? NewlineHandling = null);
+    NewlineInjectionMode? NewlineHandling = null,
+    DictationTextFormat? TextFormat = null,
+    InjectionMethod? InjectionMethod = null,
+    bool? ShiftEnterLineBreaks = null);
 
 /// <summary>
 /// The saved baseline across a Save that can finish after the user has made further edits (plan 6.3): a Save submits an
@@ -124,6 +127,8 @@ public static class SettingsChangeTracker
             !SameHotkey(baseline.DictationOnlyHotkey, draft.DictationOnlyHotkey) ||
             baseline.AutoStopOnSilence != draft.AutoStopOnSilence ||
             baseline.AddSpaceAfterDictation != draft.AddSpaceAfterDictation ||
+            baseline.AppAwareFormattingEnabled != draft.AppAwareFormattingEnabled ||
+            baseline.DefaultTextFormat != draft.DefaultTextFormat ||
             baseline.ShowOverlay != draft.ShowOverlay ||
             baseline.OverlayPosition != draft.OverlayPosition);
 
@@ -246,7 +251,10 @@ public static class SettingsChangeTracker
                 !Same(before.Name, after.Name) ||
                 !Same(before.Apps, after.Apps) ||
                 !Same(before.WritingStyle, after.WritingStyle) ||
-                before.NewlineHandling != after.NewlineHandling);
+                before.NewlineHandling != after.NewlineHandling ||
+                before.TextFormat != after.TextFormat ||
+                before.InjectionMethod != after.InjectionMethod ||
+                before.ShiftEnterLineBreaks != after.ShiftEnterLineBreaks);
 
     // Loaded and draft rows are matched by key, placeholders left out of the draft. The footer asks on every keystroke,
     // and its draft usually lists the loaded rows in their order, so ChangedInOrder answers that case in one pass, without
@@ -368,6 +376,9 @@ public static class SettingsChangeTracker
             if (!Same(left.Name, right.Name) ||
                 !Same(left.WritingStyle, right.WritingStyle) ||
                 left.NewlineHandling != right.NewlineHandling ||
+                left.TextFormat != right.TextFormat ||
+                left.InjectionMethod != right.InjectionMethod ||
+                left.ShiftEnterLineBreaks != right.ShiftEnterLineBreaks ||
                 !left.ProcessNames.SequenceEqual(right.ProcessNames, StringComparer.OrdinalIgnoreCase))
             {
                 return true;

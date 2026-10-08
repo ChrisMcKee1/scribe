@@ -1,3 +1,5 @@
+using Scribe.Core.TextInjection;
+
 namespace Scribe.Core.Tray;
 
 public enum TrayNoticeKind
@@ -47,6 +49,24 @@ public sealed record TrayNoticeDelivery(TrayNotificationIcon Icon, bool Silent, 
 
 public static class TrayNotices
 {
+    public static TrayNotice AppFormattingConflict() => new(
+        "Literal Markdown source wasn't used", DictationFormattingText.RuntimeNewlineConflict,
+        TrayNoticeKind.Warning, TrayNoticeAction.OpenSettings);
+
+    public static TrayNotice? PlainTextOnce(PlainTextOnceState state) => state.Status switch
+    {
+        PlainTextOnceStatus.Armed => new("Plain text once is armed",
+            "The next recording within 60 seconds uses plain text. AI cleanup, your dictionary and snippets still run. " +
+            "Choose Use plain text once again in the tray menu to cancel.", TrayNoticeKind.Info),
+        PlainTextOnceStatus.Consumed => new("Plain text once was used",
+            "The recording that just started took the plain-text choice. It didn't skip AI cleanup, your dictionary or snippets.", TrayNoticeKind.Info),
+        PlainTextOnceStatus.Expired => new("Plain text once expired",
+            "No recording started within 60 seconds. Nothing is armed; choose Use plain text once to try again.", TrayNoticeKind.Info),
+        PlainTextOnceStatus.Cancelled => new("Plain text once cancelled",
+            "Nothing is armed. Your next recording uses your saved app preferences.", TrayNoticeKind.Info),
+        _ => null,
+    };
+
     public static TrayNotice NothingToCopy() => new("Nothing to copy", "There's no dictation to copy yet.", TrayNoticeKind.Info);
     public static TrayNotice CopiedLastDictation() => new("Copied", "Your last dictation is on the clipboard. Press Ctrl+V to paste it.", TrayNoticeKind.Info);
     public static TrayNotice CopiedRecentDictation() => new("Copied", "That dictation is on the clipboard. Press Ctrl+V to paste it.", TrayNoticeKind.Info);

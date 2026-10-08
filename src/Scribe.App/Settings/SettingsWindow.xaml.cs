@@ -1227,6 +1227,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
     private void PopulateChoices()
     {
+        PopulateFormattingChoices();
         ModeCombo.ItemsSource = new[] { "Press and hold", "Press to start and stop" };
         DictationOnlyModeCombo.ItemsSource = new[] { "Press and hold", "Press to start and stop" };
         TranscriptionModelCombo.DisplayMemberPath = nameof(TranscriptionModelChoice.Label);
@@ -1269,6 +1270,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             StoreAudioCheck.IsChecked = _settings.StoreAudioHistory;
             StoreAudioHintText.Text = StorageRetentionPolicy.StoredAudioHint;
             SpaceAfterDictationCheck.IsChecked = _settings.AddSpaceAfterDictation;
+            LoadFormattingControls(_settings);
             LoadDurationChoices(HistoryRetentionCombo, HistoryRetentionCustomBox, DurationChoiceKind.HistoryRetention, _settings.HistoryRetentionDays);
             HistoryRetentionHintText.Text = StorageRetentionPolicy.TextRetentionHint;
             RefreshHistorySettingsSummary();
@@ -4344,6 +4346,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         FoundryPanel.Visibility = AiProviderLocalRadio?.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         ScribeModelPanel.Visibility = localApp == LocalServerApp.None ? Visibility.Visible : Visibility.Collapsed;
         LocalAppPanel.Visibility = localApp == LocalServerApp.None ? Visibility.Collapsed : Visibility.Visible;
+        UpdateOllamaDownloadUi();
         UpdateLocalModelTuning();
         AzurePanel.Visibility = provider == CleanupProvider.AzureFoundry ? Visibility.Visible : Visibility.Collapsed;
         CustomPanel.Visibility = AiProviderCustomRadio?.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
@@ -4868,6 +4871,8 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         // takes the process down rather than surfacing anywhere useful.
         _closed = true;
         CancelCleanupConnectionTest();
+        CancelOllamaDownload();
+        _ollamaServiceReads.Cancel();
 
         // Closing mid-capture must never leave the global hook in pass-through, or the
         // push-to-talk key would stay dead until the app restarts.
@@ -5303,7 +5308,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
                 ((InjectionChoice?)InjectionCombo.SelectedItem)?.Method ?? InjectionMethod.UnicodeType;
             _settings.NewlineHandling =
                 ((NewlineChoice?)NewlineCombo.SelectedItem)?.Mode ?? NewlineInjectionMode.SmartFlatten;
-            _settings.Profiles = BuildProfiles();
+            // The preflight's profiles and new formatting fields are what was validated and submitted. A later edit
+            // stays in the controls, unsaved, rather than being stored under an older submission's baseline.
+            _settings.Profiles = preflight.Settings.Profiles;
             _settings.DecodeThreads = ((ThreadChoice?)ThreadsCombo.SelectedItem)?.Value ?? _settings.DecodeThreads;
             _settings.TranscriptionModelId =
                 ((TranscriptionModelChoice?)TranscriptionModelCombo.SelectedItem)?.Id ??
@@ -5461,6 +5468,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         HashSet<DependencyObject> carriedElsewhere =
         [
             LaunchCheck, ModeCombo, DictationOnlyModeCombo, DeviceCombo, AiCleanupCheck, AiModelBox, AzureSubscriptionBox,
+            OllamaDownloadModelBox,
         ];
         var draft = new Scribe.Core.Vocabulary.DraftSnapshot();
         foreach (var page in new FrameworkElement[] { SectionDictation, SectionAi, SectionAdvanced, HistorySettingsCard })
@@ -5979,6 +5987,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         public string? LoadedProcesses { get; set; }
         public string? LoadedWritingStyle { get; set; }
         public NewlineInjectionMode? LoadedNewlineHandling { get; set; }
+        public DictationTextFormat? LoadedTextFormat { get; set; }
+        public InjectionMethod? LoadedInjectionMethod { get; set; }
+        public bool? LoadedShiftEnterLineBreaks { get; set; }
         public string RowKey => _leanRowKeys
             ? _rowKey.ForProfile(Origin == DraftRowOrigin.Saved, LoadedName, LoadedProcesses, this)
             : Origin == DraftRowOrigin.Saved ? $"saved:{LoadedName}:{LoadedProcesses}" : $"new:{GetHashCode()}";
@@ -6016,6 +6027,9 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
 
         public string WritingStyle { get; set; } = string.Empty;
         public NewlineInjectionMode? NewlineHandling { get; set; }
+        public DictationTextFormat? TextFormat { get; set; }
+        public InjectionMethod? InjectionMethod { get; set; }
+        public bool? ShiftEnterLineBreaks { get; set; }
         public string PrimaryText => ProfileListText.Describe(Name, Processes).Primary;
         public string SecondaryText => ProfileListText.Describe(Name, Processes).Secondary;
 

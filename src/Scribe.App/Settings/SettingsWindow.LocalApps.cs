@@ -165,13 +165,13 @@ public partial class SettingsWindow
     }
 
     // Asks the selected app which models it has and which it holds, then fills the list and the status line. A newer
-    // request, or a change of app, makes an older answer drop out.
-    private async Task RefreshLocalAppAsync()
+    // request, or a change of app, makes an older answer drop out of the display, not out of the requesting operation.
+    private async Task<LocalServerState?> RefreshLocalAppAsync(bool preserveEmptySelection = false)
     {
         var app = SelectedLocalApp;
-        if (app == LocalServerApp.None || LocalAiServer.AddressOf(app) is not { } address)
+        if (_closed || app == LocalServerApp.None || LocalAiServer.AddressOf(app) is not { } address)
         {
-            return;
+            return null;
         }
 
         var version = ++_localAppReadVersion;
@@ -193,9 +193,9 @@ public partial class SettingsWindow
             }
         }
 
-        if (version != _localAppReadVersion || SelectedLocalApp != app)
+        if (_closed || version != _localAppReadVersion || SelectedLocalApp != app)
         {
-            return;
+            return state;
         }
 
         _localAppState = state;
@@ -205,10 +205,17 @@ public partial class SettingsWindow
             state.FailureDetail is { } detail ? $" ({detail})" : string.Empty);
         if (state.Reach == LocalServerReach.Reached)
         {
-            SetLocalAppModelItems(app, state.Models, SelectedLocalAppModel);
+            SetLocalAppModelItems(app, state.Models, SelectedLocalAppModel,
+                preserveEmptySelection || (app == LocalServerApp.Ollama && _ollamaDownload is not null));
         }
 
         ShowLocalAppStatus();
+        if (app == LocalServerApp.Ollama)
+        {
+            await RefreshOllamaServiceAsync();
+        }
+
+        return state;
     }
 
     private async Task FreeLocalAppMemoryAsync()
@@ -246,9 +253,10 @@ public partial class SettingsWindow
         SetLocalAppModelItems(app, [], chosen);
     }
 
-    private void SetLocalAppModelItems(LocalServerApp app, IReadOnlyList<LocalServerModel> models, string? chosen)
+    private void SetLocalAppModelItems(
+        LocalServerApp app, IReadOnlyList<LocalServerModel> models, string? chosen, bool preserveEmptySelection = false)
     {
-        var (listed, selected) = LocalAppSetup.ModelChoices(models, chosen, RoomyGraphicsCard);
+        var (listed, selected) = LocalAppSetup.ModelChoices(models, chosen, RoomyGraphicsCard, preserveEmptySelection);
         var items = listed.Select(model => new LocalAppModelItem(
                 model.Id,
                 string.Equals(model.DisplayName, model.Id, StringComparison.Ordinal) ? model.Id : $"{model.DisplayName} ({model.Id})"))

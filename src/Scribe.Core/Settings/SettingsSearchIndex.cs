@@ -79,6 +79,8 @@ public static class SettingsSearchIndex
         Entry("dictation.shortcut.raw", SettingsPage.Dictation, "DictationOnlyHotkeyBox", "Shortcut without AI cleanup", ["hotkey", "shortcut", "key", "raw", "dictation only", "hold", "toggle", "press"]),
         Entry("dictation.silence-stop", SettingsPage.Dictation, "AutoStopCheck", "Stop when I stop talking", ["vad", "silence", "automatic stop", "toggle"]),
         Entry("dictation.space", SettingsPage.Dictation, "SpaceAfterDictationCheck", "Add a space after each dictation", ["typing", "trailing space", "spacing"]),
+        Entry("dictation.app-format", SettingsPage.Dictation, "AppAwareFormattingCheck", "Use app-aware formatting", ["format", "markdown", "plain text once", "app profiles", "delivery"]),
+        Entry("dictation.text-format", SettingsPage.Dictation, "DefaultTextFormatCombo", "Default text format for app profiles", ["format", "markdown", "literal", "plain text"]),
         Entry("dictation.indicator", SettingsPage.Dictation, "OverlayCheck", "Show the recording indicator", ["overlay", "pill", "recording", "indicator"]),
         Entry("dictation.startup", SettingsPage.Dictation, "LaunchCheck", "Start with Windows", ["startup", "boot", "launch", "sign in"]),
 
@@ -94,6 +96,8 @@ public static class SettingsSearchIndex
         Entry("ai.local.lmstudio", SettingsPage.AiCleanup, "LocalAppLmStudioRadio", "LM Studio", ["lm studio", "lmstudio", "local model", "free memory"], "On this PC", [RequiresAi, RequiresLocal]),
         Entry("ai.model", SettingsPage.AiCleanup, "AiModelBox", "Model", ["foundry local", "download", "load", "free memory"], "On this PC", [RequiresAi, RequiresLocal, RequiresScribeModel]),
         Entry("ai.local.scribe.vocabulary", SettingsPage.AiCleanup, "FoundryWholeVocabularyCheck", LocalModelTuningText.WholeVocabularyTitle, ["vocabulary", "dictionary", "word packs", "context", "foundry local"], "On this PC", [RequiresAi, RequiresLocal, RequiresScribeModel]),
+        Entry("ai.local.ollama.download", SettingsPage.AiCleanup, "OllamaDownloadModelBox", "Model name", ["ollama", "download", "install", "catalog"], "Ollama download", [RequiresAi, RequiresLocal, RequiresOllama]),
+        Entry("ai.local.ollama.service", SettingsPage.AiCleanup, "OllamaServiceButton", "Start Ollama", ["ollama", "start", "stop", "service", "server"], "Ollama", [RequiresAi, RequiresLocal, RequiresOllama]),
         Entry("ai.local.ollama.context", SettingsPage.AiCleanup, "OllamaContextSizeCombo", LocalModelTuningText.ContextSizeTitle, ["context", "context window", "context length", "num_ctx", "tokens", "memory"], "Ollama", [RequiresAi, RequiresLocal, RequiresOllama]),
         Entry("ai.local.ollama.vocabulary", SettingsPage.AiCleanup, "OllamaWholeVocabularyCheck", LocalModelTuningText.WholeVocabularyTitle, ["vocabulary", "dictionary", "word packs", "context"], "Ollama", [RequiresAi, RequiresLocal, RequiresOllama]),
         Entry("ai.local.lmstudio.context", SettingsPage.AiCleanup, "LmStudioContextSizeCombo", LocalModelTuningText.ContextSizeTitle, ["context", "context window", "context length", "tokens", "memory"], "LM Studio", [RequiresAi, RequiresLocal, RequiresLmStudio]),
@@ -125,7 +129,7 @@ public static class SettingsSearchIndex
         Entry("dictionary.word-packs", SettingsPage.Dictionary, "DictionaryTabs", "Word packs", ["library", "libraries", "vocabulary", "packs", "terms"]),
 
         Entry("snippets.page", SettingsPage.VoiceSnippets, "SnippetList", "Voice snippets", ["snippet", "template", "phrase", "trigger", "expand", "email", "sign-off"]),
-        Entry("profiles.page", SettingsPage.AppProfiles, "ProfileList", "App profiles", ["profile", "per app", "program", "process", "writing style", "line breaks"]),
+        Entry("profiles.page", SettingsPage.AppProfiles, "ProfileList", "App profiles", ["profile", "per app", "program", "process", "writing style", "line breaks", "format", "markdown", "literal", "plain text", "typing", "paste", "clipboard", "shift enter", "delivery"]),
 
         Entry("history.keep", SettingsPage.History, "HistoryRetentionCombo", "Keep dictations", ["retention", "delete", "days"]),
         Entry("history.recordings", SettingsPage.History, "StoreAudioCheck", "Save a recording with each dictation", ["audio", "recording", "history"]),

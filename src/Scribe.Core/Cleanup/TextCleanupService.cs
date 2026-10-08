@@ -116,6 +116,20 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     private const int CloudInitProbeMaxOutputTokens = AzureReasoningHeadroomTokens;
 
     /*
+     * Room to think before answering, for an Ollama model that thinks whatever it is told (DeepSeek-R1 8B ignores both
+     * think: false and reasoning_effort "none"). Only a capped, unusable readiness answer buys it, and only when all of it
+     * fits beside the shortest dictation in what the model reads, before any vocabulary; otherwise setup says the context
+     * is too small rather than reporting a model that would cut most answers short. Sized on the 25 benchmark dictations
+     * with DeepSeek-R1 8B on an RTX 5080 (2026-10-07): with 1,024, 19 of 75 requests ran out at their ceiling; given 4,096,
+     * 22 of 25 whole answers took 271 to 1,525 tokens, two took 2,360 and 3,593, and one more than 4,096. At the 120
+     * tokens a second measured, a dictation's first attempt (CloudFirstAttemptTimeoutSeconds) ends an answer past about
+     * 2,900 tokens anyway, so more room would only turn a cut answer into a stall and a retry; 2,048 also fits beside the
+     * shortest dictation in Ollama's own 4,096-token default. Whatever the room, an answer cut at it is never typed.
+     */
+    internal const int LocalReasoningHeadroomTokens = 2048;
+    private const string LocalReasoningProbeText = "um please send the updated report to the team tomorrow morning";
+
+    /*
      * Room for a cloud reasoning model to think before it answers, on top of whatever the visible
      * reply needs. Measured against the slowest thinker we target rather than guessed: Grok 4.6
      * spends ~532 reasoning tokens on a trivial one-sentence edit, and more as the input grows, so
@@ -153,6 +167,21 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         CleanupProvider.AzureFoundry or CleanupProvider.OpenAiCompatible => AzureCleanupTimeoutSeconds,
         _ => CleanupTimeoutSeconds,
     };
+
+    /// <summary>
+    /// How one dictation segment's call budget is spent: the whole budget, how much of it the first attempt gets, and
+    /// whether an attempt that runs out of its own time is tried once more with the rest (see CleanChunkAsync for why
+    /// each provider is as it is). The readiness check holds a thinking model's rewrite to the same first attempt.
+    /// </summary>
+    internal static (TimeSpan Budget, TimeSpan FirstAttempt, bool RetryOnStall) CallBudget(
+        CleanupProvider provider, TimeSpan? timeoutOverride)
+    {
+        var budget = timeoutOverride ?? TimeSpan.FromSeconds(SingleCallBudgetSeconds(provider));
+        var retryOnStall = (provider is CleanupProvider.AzureFoundry or CleanupProvider.OpenAiCompatible) &&
+            timeoutOverride is null;
+        return (budget, retryOnStall ? TimeSpan.FromSeconds(CloudFirstAttemptTimeoutSeconds) : budget, retryOnStall);
+    }
+
     // Long dictation is split into bounded chunks cleaned sequentially, so a multi-minute capture is
     // still polished instead of skipped or truncated. Each chunk is small enough that the per-chunk
     // token budget never truncates and the per-chunk timeout bounds latency. The chunk ceiling caps
@@ -758,15 +787,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 ? await testFactory(options, ct).ConfigureAwait(false)
                 : BuildTestAgentFactory(options);
 
-            // Ollama with a size: the context its requests would be fitted into is known before anything is sent, so
-            // instructions that leave a dictation no room fail the test without loading the model for it.
-            if (UsesOllamaApi(options) &&
-                !LeavesRoomForDictation(options, style: null, await CandidateContextTokensAsync(options, ct).ConfigureAwait(false)))
-            {
-                return CleanupTestResult.Failed(recipient, ContextTooSmallReason(options));
-            }
-
             AgentProbeFailure? failure;
+            var localReasoning = new StrongBox<LocalReasoningAllowance?>();
             int? testedContext = null;
             if (TestsLmStudioAtSize(options))
             {
@@ -786,20 +808,28 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             }
             else
             {
-                failure = await ProbeAgentAsync(options, factory, ct).ConfigureAwait(false);
+                failure = await ProbeAgentAsync(options, factory, ct, localReasoning: localReasoning).ConfigureAwait(false);
             }
 
             if (failure is null)
             {
                 // A model on this PC answered: its instructions have to leave room for a dictation in what it reads at once,
                 // or every dictation would be typed as heard.
-                if (FitsLocalContext(options) &&
-                    !LeavesRoomForDictation(
-                        options,
-                        style: null,
-                        testedContext is > 0 and var tested ? tested : await CandidateContextTokensAsync(options, ct).ConfigureAwait(false)))
+                if (FitsLocalContext(options))
                 {
-                    return CleanupTestResult.Failed(recipient, ContextTooSmallReason(options));
+                    var context = testedContext is > 0 and var tested
+                        ? tested
+                        : await CandidateContextTokensAsync(options, ct).ConfigureAwait(false);
+                    if (localReasoning.Value is { } allowance)
+                    {
+                        context = Math.Min(context, allowance.ContextTokens);
+                    }
+
+                    var reserve = localReasoning.Value?.Tokens ?? 0;
+                    if (!LeavesRoomForDictation(options, style: null, context, reasoningReserve: reserve))
+                    {
+                        return CleanupTestResult.Failed(recipient, NoRoomReason(options, context, reserve));
+                    }
                 }
 
                 return CleanupTestResult.Connected(recipient);
@@ -1230,6 +1260,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     {
         _agent = null;
         _agentFactory = null;
+        Volatile.Write(ref _localReasoningAllowance, null);
         _styleAgents.Clear();
         ClearAdmittedAgentsLocked();
     }
@@ -2310,6 +2341,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         AIAgent? agent;
         CleanupOptions options;
         List<string>? plannedChunks = null;
+        LocalRequestBudget? localBudget = null;
         var doesNotFit = false;
         lock (_gate)
         {
@@ -2353,6 +2385,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 {
                     plannedChunks = plan.Chunks;
                     vocabularyTokens = plan.VocabularyTokens;
+                    localBudget = plan.Budget;
                 }
                 else
                 {
@@ -2445,7 +2478,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             bool refused;
             try
             {
-                (cleanedChunk, error, refused) = await CleanChunkAsync(agent, options, chunks[i], reloadBudget, totalCts.Token)
+                (cleanedChunk, error, refused) = await CleanChunkAsync(agent, options, chunks[i], reloadBudget, totalCts.Token, localBudget)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -2954,17 +2987,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     // attempt was not handed over because the dictation's library vocabulary is no longer permitted: the raw chunk
     // comes back with no error, and nothing is retried, since a retry would be judged by the same scope.
     private async Task<(string Text, CleanupReason? Error, bool Refused)> CleanChunkAsync(
-        AIAgent agent, CleanupOptions options, string chunk, ReloadBudget reload, CancellationToken cancellationToken)
+        AIAgent agent, CleanupOptions options, string chunk, ReloadBudget reload, CancellationToken cancellationToken,
+        LocalRequestBudget? localBudget)
     {
         // Azure and BYO endpoints share the longer budget: both may be a cloud round-trip to a
         // reasoning model whose hidden thinking precedes the visible rewrite. GitHub Copilot is
         // remote too, and slower again, so it is in this group with a budget of its own.
-        var isCloud = options.Provider is CleanupProvider.AzureFoundry
-            or CleanupProvider.OpenAiCompatible
-            or CleanupProvider.GitHubCopilot;
-        var budget = CleanupTimeoutOverride
-            ?? TimeSpan.FromSeconds(SingleCallBudgetSeconds(options.Provider));
-
+        //
         // A cloud connection that has sat idle can be silently dead: the request goes out and
         // nothing ever comes back, so the entire budget drains and the dictation falls back to raw
         // text, while an attempt moments later succeeds in about a second. Spending the whole
@@ -2983,15 +3012,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
          * measured Copilot round trip is 27, so a first attempt would be abandoned two seconds before
          * the answer arrived, every time. It gets its whole budget in one attempt.
          */
-        var retryOnStall = isCloud
-            && options.Provider != CleanupProvider.GitHubCopilot
-            && CleanupTimeoutOverride is null;
-        var firstAttempt = retryOnStall
-            ? TimeSpan.FromSeconds(CloudFirstAttemptTimeoutSeconds)
-            : budget;
+        var (budget, firstAttempt, retryOnStall) = CallBudget(options.Provider, CleanupTimeoutOverride);
 
         var attempt = await RunChunkAttemptAsync(
-            agent, options, chunk, firstAttempt, cancellationToken).ConfigureAwait(false);
+            agent, options, chunk, firstAttempt, cancellationToken, localBudget).ConfigureAwait(false);
         if (attempt.Refused)
         {
             return (attempt.Text, null, true);
@@ -3009,7 +3033,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             {
                 case ReloadOutcome.Reloaded:
                     attempt = await RunChunkAttemptAsync(
-                        agent, options, chunk, budget, cancellationToken).ConfigureAwait(false);
+                        agent, options, chunk, budget, cancellationToken, localBudget).ConfigureAwait(false);
                     break;
 
                 // Loading a 12B model takes minutes, far longer than one dictation may wait, so this
@@ -3045,7 +3069,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         var remaining = budget - firstAttempt;
         var retry = await RunChunkAttemptAsync(
-            agent, options, chunk, remaining, cancellationToken).ConfigureAwait(false);
+            agent, options, chunk, remaining, cancellationToken, localBudget).ConfigureAwait(false);
         return (retry.Text, retry.Refused ? null : retry.Error, retry.Refused);
     }
 
@@ -3140,7 +3164,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         CleanupOptions options,
         string chunk,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        LocalRequestBudget? localBudget)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(timeout);
@@ -3157,7 +3182,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // The system prompt is baked into the agent at creation, so we only send the delimited
             // transcript and run statelessly (no thread); each dictation is independent, with no
             // history to grow.
-            var runOptions = new ChatClientAgentRunOptions(BuildChatOptions(options, chunk));
+            var chatOptions = BuildChatOptions(options, chunk, localBudget);
+            var runOptions = new ChatClientAgentRunOptions(chatOptions);
             var result = await agent.RunAsync(BuildUserMessage(chunk), options: runOptions, cancellationToken: cts.Token)
                 .ConfigureAwait(false);
             NoteModelAnswered(options);
@@ -3167,6 +3193,22 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             if (result.Usage is { } usage)
             {
                 UsageObserver?.Invoke(usage);
+            }
+
+            /*
+             * An answer the server cut short is never typed, however finished it reads: the guards below judge what came
+             * back, not what is missing, and a reply stopped mid-sentence passes them. A model that thinks before it
+             * answers (a learned reasoning reserve) runs close to its ceiling, so its answer counts only when the server
+             * says it stopped on its own (EndOf). GitHub Copilot is sent no ceiling, so a count says nothing about it.
+             */
+            var ceiling = options.Provider == CleanupProvider.GitHubCopilot ? null : chatOptions.MaxOutputTokens;
+            var thinking = localBudget is { ReasoningReserve: > 0 };
+            var end = EndOf(result, ceiling);
+            if (end == AnswerEnd.Cut || (thinking && end != AnswerEnd.Finished))
+            {
+                LogUnusedAnswer(options.Provider, end, ceiling, result.Usage?.OutputTokenCount);
+                return new ChunkAttempt(
+                    chunk, end == AnswerEnd.Cut ? AnswerCutReason : AnswerUnconfirmedReason, false, false);
             }
 
             if (string.IsNullOrWhiteSpace(result.Text))
@@ -3330,6 +3372,104 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     private readonly record struct ChunkAttempt(
         string Text, CleanupReason? Error, bool Stalled, bool Evicted, bool Refused = false);
+
+    /// <summary>How a model's answer ended, from its completion metadata, never from how its text reads.</summary>
+    internal enum AnswerEnd
+    {
+        /// <summary>The server says it stopped on its own.</summary>
+        Finished,
+
+        /// <summary>
+        /// The server says the answer was cut short (its length limit, a content filter or an unsuccessful Responses
+        /// status), or, saying nothing, counted as many tokens as the ceiling it was sent.
+        /// </summary>
+        Cut,
+
+        /// <summary>Neither: no finish reason that says either way, and no count at the ceiling.</summary>
+        Unconfirmed,
+    }
+
+    /*
+     * OpenAI 2.12.0 defaults an omitted finish_reason to Stop, even with usage. Its ChatCompletion.Patch still reads the
+     * original JSON, and Extensions.AI and Agent Framework retain that object in RawRepresentation, so read the first
+     * choice's finish there, the same choice the SDK takes its text from. No body is copied or kept here. Responses uses
+     * its nullable Status instead: Extensions.AI maps only incomplete_details to FinishReason, not a completed status.
+     * OllamaSharp's non-streaming mapping keeps a missing done_reason null, so its typed finish already says what was sent.
+     * Without a finish, only a count at or past the declared ceiling proves a cut; a smaller count confirms nothing.
+     */
+    internal static AnswerEnd EndOf(AgentResponse response, int? ceiling)
+    {
+        var reported = response.FinishReason;
+        if (response.RawRepresentation is ChatResponse { RawRepresentation: ChatCompletion completion })
+        {
+#pragma warning disable SCME0001
+            reported = completion.Patch.TryGetValue("$.choices[0].finish_reason"u8, out string? supplied) && supplied is not null
+                ? new Microsoft.Extensions.AI.ChatFinishReason(supplied)
+                : null;
+#pragma warning restore SCME0001
+        }
+#pragma warning disable OPENAI001
+        else if (response.RawRepresentation is ChatResponse { RawRepresentation: ResponseResult responses })
+        {
+            if (reported == Microsoft.Extensions.AI.ChatFinishReason.Length ||
+                reported == Microsoft.Extensions.AI.ChatFinishReason.ContentFilter ||
+                responses.Status is ResponseStatus.Incomplete or ResponseStatus.Cancelled or ResponseStatus.Failed)
+            {
+                return AnswerEnd.Cut;
+            }
+
+            reported = responses.Status == ResponseStatus.Completed ? Microsoft.Extensions.AI.ChatFinishReason.Stop : null;
+        }
+#pragma warning restore OPENAI001
+
+        if (reported is { } finish)
+        {
+            if (finish == Microsoft.Extensions.AI.ChatFinishReason.Stop)
+            {
+                return AnswerEnd.Finished;
+            }
+
+            return finish == Microsoft.Extensions.AI.ChatFinishReason.Length ||
+                finish == Microsoft.Extensions.AI.ChatFinishReason.ContentFilter
+                    ? AnswerEnd.Cut
+                    : AnswerEnd.Unconfirmed;
+        }
+
+        return ceiling is { } limit && response.Usage?.OutputTokenCount is { } generated && generated >= limit
+            ? AnswerEnd.Cut
+            : AnswerEnd.Unconfirmed;
+    }
+
+    // The readiness check's evidence that a model spent its ceiling before it could answer: the SDK's length finish, or,
+    // with no finish reason at all, a count at the ceiling. A content filter cuts an answer; it says nothing about room.
+    private static bool RanOutOfRoom(AgentResponse response, int ceiling) =>
+        EndOf(response, ceiling) == AnswerEnd.Cut &&
+        response.FinishReason != Microsoft.Extensions.AI.ChatFinishReason.ContentFilter;
+
+    private static readonly CleanupReason AnswerCutReason = CleanupReason.Same(
+        "AI cleanup's answer was cut off before it finished.");
+
+    private static readonly CleanupReason AnswerUnconfirmedReason = CleanupReason.Same(
+        "The AI model didn't say whether its answer was complete.");
+
+    // Names and numbers only, never the answer.
+    private void LogUnusedAnswer(CleanupProvider provider, AnswerEnd end, int? ceiling, long? generated)
+    {
+        try
+        {
+            _log.LogInformation(
+                "AI cleanup did not use an answer that was {End} ({Provider}; ceiling {Ceiling} tokens, out {OutputTokens}); " +
+                "the segment keeps its text as dictated.",
+                end,
+                provider,
+                CountOrUnset(ceiling),
+                CountOrUnset(generated));
+        }
+        catch (Exception)
+        {
+            // Logging must never turn an unused answer into a failed segment of another kind.
+        }
+    }
 
     // Splits text into chunks no longer than <paramref name="targetChars"/>, breaking on the last
     // sentence-ending punctuation in the back of each window when possible, else the last whitespace,
@@ -4644,6 +4784,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // for any probe that cannot wait for it, rather than loading a model that is going away. Ollama with a size reads
             // the largest context the model takes, which its requests are capped at.
             AgentProbeFailure? probeFailure = null;
+            var localReasoning = new StrongBox<LocalReasoningAllowance?>();
             var lmStudioUnloading = Task.CompletedTask;
             using var lmStudioUse = LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) == LocalServerApp.LmStudio
                 ? BeginModelUse(out lmStudioUnloading)
@@ -4668,7 +4809,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 // A context already known that leaves the instructions no room for a dictation fails setup without loading
                 // the model for a readiness check every dictation would then make pointless.
                 probeFailure = KnownContextLeavesRoom(options)
-                    ? await ProbeAgentAsync(options, ct, withinUse: lmStudioUse is not null).ConfigureAwait(false)
+                    ? await ProbeAgentAsync(options, ct, withinUse: lmStudioUse is not null, localReasoning).ConfigureAwait(false)
                     : new AgentProbeFailure(ContextTooSmallReason(options), null);
             }
 
@@ -4695,7 +4836,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     probeFailure = ReportedFailure(options, probeFailure, chatFailure.Value);
                     lock (_gate)
                     {
-                        if (_operations.IsClosed || !_options.Enabled || _options != options)
+                        if (ct.IsCancellationRequested || _operations.IsClosed || !_options.Enabled || _options != options ||
+                            _initGeneration != generation || _initPhase != InitPhase.Live)
                         {
                             return;
                         }
@@ -4722,14 +4864,27 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // What the readiness check loaded the model with, so the first dictation is fitted into it.
             await LearnLocalContextAsync(options, ct).ConfigureAwait(false);
 
-            var noRoom = false;
+            CleanupReason? noRoom = null;
             lock (_gate)
             {
                 // A newer Configure (different provider/model, or disabled) may have superseded this
                 // run, and disposal may have started: neither may be handed a freshly built agent.
-                if (_operations.IsClosed || !_options.Enabled || _options != options)
+                if (ct.IsCancellationRequested || _operations.IsClosed || !_options.Enabled || _options != options ||
+                    _initGeneration != generation || _initPhase != InitPhase.Live)
                 {
                     return;
+                }
+
+                if (localReasoning.Value is { } allowance)
+                {
+                    if (UsesOllamaApi(options) && allowance.ContextTokens < ContextTokensLocked(options))
+                    {
+                        _ollamaModelMaxTokens = allowance.ContextTokens;
+                        _ollamaModelMaxFor = options;
+                    }
+
+                    Volatile.Write(ref _plainRequestsFor, allowance.PlainRequests ? PlainRequestsKey(options) : null);
+                    Volatile.Write(ref _localReasoningAllowance, allowance);
                 }
 
                 // The context Foundry Local's model reads, learned with the options this run publishes.
@@ -4739,13 +4894,14 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     _localContextFor = options;
                 }
 
-                // Instructions that leave a dictation no room in what the model reads at once would have every dictation
-                // typed as heard: setup says so rather than reporting a model that is ready.
+                // Instructions that leave a dictation no room in what the model reads at once (with the room a thinking
+                // model needs, just published) would have every dictation typed as heard: setup says so rather than
+                // reporting a model that is ready.
                 if (FitsLocalContext(options) && !LeavesRoomForDictationLocked(options, style: null))
                 {
+                    noRoom = NoRoomReason(options, ContextTokensLocked(options), LocalReasoningReserve(options));
                     DropAgents();
                     _pendingFactory = null;
-                    noRoom = true;
                 }
                 else
                 {
@@ -4762,12 +4918,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 }
             }
 
-            if (noRoom)
+            if (noRoom is { } reason)
             {
                 _log.LogWarning(
                     "AI cleanup's instructions leave no room for a dictation in the context of the model on this PC ({Provider}).",
                     options.Provider);
-                SetInitStatus(CleanupStatus.Unavailable, ContextTooSmallReason(options));
+                SetInitStatus(CleanupStatus.Unavailable, reason);
                 return;
             }
 
@@ -5324,18 +5480,26 @@ internal sealed partial class TextCleanupService : ITextCleanupService
      * still reasons the way a real cleanup call will (below), and without the glossary. It is built
      * here rather than handed in, so no caller can pass the serving agent back in.
      */
-    private async Task<AgentProbeFailure?> ProbeAgentAsync(CleanupOptions options, CancellationToken ct, bool withinUse = false)
+    private async Task<AgentProbeFailure?> ProbeAgentAsync(
+        CleanupOptions options, CancellationToken ct, bool withinUse = false,
+        StrongBox<LocalReasoningAllowance?>? localReasoning = null)
     {
         ct.ThrowIfCancellationRequested();
         var factory = _pendingFactory
             ?? throw new InvalidOperationException("The readiness probe has no agent factory to build its agent from.");
-        return await ProbeAgentAsync(options, factory, ct, withinUse).ConfigureAwait(false);
+        return await ProbeAgentAsync(options, factory, ct, withinUse, localReasoning).ConfigureAwait(false);
     }
 
     private async Task<AgentProbeFailure?> ProbeAgentAsync(
-        CleanupOptions options, Func<string, AIAgent> factory, CancellationToken ct, bool withinUse = false)
+        CleanupOptions options, Func<string, AIAgent> factory, CancellationToken ct, bool withinUse = false,
+        StrongBox<LocalReasoningAllowance?>? localReasoning = null)
     {
         ct.ThrowIfCancellationRequested();
+        if (LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) == LocalServerApp.Ollama)
+        {
+            return await ProbeOllamaAsync(options, factory, ct, withinUse, localReasoning).ConfigureAwait(false);
+        }
+
         var agent = factory(BuildProbeSystemPrompt(options));
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(CleanupTimeoutOverride ?? TimeSpan.FromSeconds(ProbeTimeoutSecondsFor(options)));
@@ -5454,6 +5618,167 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return failure;
         }
     }
+
+    /*
+     * The readiness check for Ollama at its own address. The ordinary 16-token "ok" request stays as it always was, with the
+     * whole probe's time, which a model's load counts against. Only evidence that it ran out of room before a usable answer
+     * (RanOutOfRoom: the SDK's length finish, or with no finish reason a count at the ceiling) shows a model that thinks
+     * whatever it is told. Such a model gets LocalReasoningHeadroomTokens on top of every answer's ceiling, but only if all
+     * of it fits beside the shortest dictation in what the model reads; otherwise setup says so before anything larger is
+     * sent. It then has to finish one short rewrite in that room within a dictation's first attempt (CallBudget): an answer
+     * the server cut, or did not say it finished, never qualifies, however complete it reads. The probe owns its decisions
+     * until the initialization publishes them; Test connection and a cancelled initialization never change the serving
+     * model's allowance or its plain-request mode.
+     */
+    private async Task<AgentProbeFailure?> ProbeOllamaAsync(
+        CleanupOptions options, Func<string, AIAgent> factory, CancellationToken ct, bool withinUse,
+        StrongBox<LocalReasoningAllowance?>? localReasoning)
+    {
+        var instructions = BuildProbeSystemPrompt(options);
+        var agent = factory(instructions);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(CleanupTimeoutOverride ?? TimeSpan.FromSeconds(ProbeTimeoutSecondsFor(options)));
+        using var entered = new CleanupAdmission(CleanupRequestKind.Probe, AiVocabularyScope.None, _vocabularySource).Enter();
+        var unloading = Task.CompletedTask;
+        using var use = withinUse ? default(ModelUse?) : BeginModelUse(out unloading);
+        var plain = !UsesOllamaApi(options) && SendsPlainRequests(options);
+        AgentProbeFailure? firstPlainFailure = null;
+
+        try
+        {
+            await unloading.WaitAsync(UnloadWaitBound, cts.Token).ConfigureAwait(false);
+            int context;
+            lock (_gate)
+            {
+                context = ContextTokensLocked(options);
+            }
+
+            if (UsesOllamaApi(options))
+            {
+                context = await CandidateContextTokensAsync(options, cts.Token).ConfigureAwait(false);
+            }
+
+            // The shortest dictation costs more than either request below, so a context that holds it, with the room to
+            // think once that is asked for, holds each request too.
+            if (!LeavesRoomForDictation(options, style: null, context, reasoningReserve: 0))
+            {
+                return new AgentProbeFailure(ContextTooSmallReason(options), null);
+            }
+
+            var text = "ok";
+            var ceiling = InitProbeMaxOutputTokens;
+            var reserve = 0;
+            while (true)
+            {
+                cts.Token.ThrowIfCancellationRequested();
+                var chatOptions = new ChatOptions { MaxOutputTokens = ceiling };
+                if (ReasoningEffortOverride is { } effort)
+                {
+                    chatOptions.Reasoning = new ReasoningOptions { Effort = effort, Output = ReasoningOutput.None };
+                }
+
+                ApplyOnThisPcGeneration(chatOptions, options, plain, context);
+                using var attempt = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+                if (reserve > 0)
+                {
+                    attempt.CancelAfter(CallBudget(options.Provider, CleanupTimeoutOverride).FirstAttempt);
+                }
+
+                AgentResponse result;
+                try
+                {
+                    result = await agent.RunAsync(
+                        BuildUserMessage(text), options: new ChatClientAgentRunOptions(chatOptions), cancellationToken: attempt.Token)
+                        .ConfigureAwait(false);
+                    attempt.Token.ThrowIfCancellationRequested();
+                }
+                catch (Exception ex) when (!attempt.IsCancellationRequested && !plain && !UsesOllamaApi(options) && IsSurfaceRejection(ex))
+                {
+                    firstPlainFailure = new AgentProbeFailure(DescribeFailureReason(ex, options), ex);
+                    plain = true;
+                    continue;
+                }
+
+                var usable = TrySanitize(result.Text, text, out _);
+                if (reserve == 0 && !usable && RanOutOfRoom(result, ceiling))
+                {
+                    // What the model reads now that its own request reached it.
+                    context = await LocalProbeContextAfterAnswerAsync(options, cts.Token).ConfigureAwait(false);
+                    if (!LeavesRoomForDictation(options, style: null, context, LocalReasoningHeadroomTokens))
+                    {
+                        return new AgentProbeFailure(NoRoomReason(options, context, LocalReasoningHeadroomTokens), null);
+                    }
+
+                    reserve = LocalReasoningHeadroomTokens;
+                    text = LocalReasoningProbeText;
+                    ceiling = OutputCeiling(text, options, reserve);
+                    continue;
+                }
+
+                if (reserve > 0)
+                {
+                    // The rewrite is judged as a thinking model's dictation is: finished by the server's own word, then by
+                    // the same guards.
+                    switch (EndOf(result, ceiling))
+                    {
+                        case AnswerEnd.Cut:
+                            return new AgentProbeFailure(RewriteCutReason, null);
+                        case AnswerEnd.Unconfirmed:
+                            return new AgentProbeFailure(RewriteUnconfirmedReason, null);
+                    }
+
+                    if (!usable)
+                    {
+                        return new AgentProbeFailure(RewriteUnusableReason, null);
+                    }
+                }
+                else if (!TrySanitize(result.Text, result.Text ?? string.Empty, out _))
+                {
+                    // "ok" is not a quality test: the legacy acceptance of any nonempty reply to it stands. Missing or
+                    // uncapped usage is not evidence that a model needs room to think.
+                    return new AgentProbeFailure(RewriteUnusableReason, null);
+                }
+
+                cts.Token.ThrowIfCancellationRequested();
+                if (localReasoning is not null)
+                {
+                    localReasoning.Value = new LocalReasoningAllowance(options, reserve, plain, context);
+                }
+
+                if (firstPlainFailure is not null)
+                {
+                    _log.LogInformation(
+                        "The AI server on this PC refused reasoning_effort or max_tokens; AI cleanup sends it plain requests.");
+                }
+
+                NoteModelAnswered(options);
+                NoteLocalModelUse(options);
+                return null;
+            }
+        }
+        catch (Exception) when (ct.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(ct);
+        }
+        catch (Exception ex) when (cts.IsCancellationRequested || ex is OperationCanceledException)
+        {
+            return new AgentProbeFailure(CleanupReason.Same("AI cleanup validation timed out."), ex);
+        }
+        catch (Exception ex)
+        {
+            return firstPlainFailure ?? new AgentProbeFailure(DescribeFailureReason(ex, options), ex);
+        }
+    }
+
+    private static readonly CleanupReason RewriteUnusableReason = CleanupReason.Same(
+        "The AI model on this PC did not return a usable rewrite during validation. Try another model.");
+
+    private static readonly CleanupReason RewriteCutReason = CleanupReason.Same(
+        "The AI model on this PC thinks before it answers, and it ran out of room before it finished a short rewrite " +
+        "during validation. Try another model.");
+
+    private static readonly CleanupReason RewriteUnconfirmedReason = CleanupReason.Same(
+        "The AI model on this PC didn't say whether its rewrite during validation was complete. Try another model.");
 
     // The server, the API it is reached through and the model that refused the local server fields (see ProbeAgentAsync), or
     // null. Keyed by all three, so a change of any tries the fields again: one API of a server refusing them says nothing
@@ -6921,11 +7246,11 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     // Per-call generation options. The system prompt lives on the agent, so this only carries the
     // sampling/limit knobs that vary by provider.
-    private ChatOptions BuildChatOptions(CleanupOptions options, string text)
+    private ChatOptions BuildChatOptions(CleanupOptions options, string text, LocalRequestBudget? localBudget = null)
     {
         var chatOptions = new ChatOptions
         {
-            MaxOutputTokens = OutputCeiling(text, options),
+            MaxOutputTokens = OutputCeiling(text, options, localBudget?.ReasoningReserve),
         };
 
         if (ReasoningEffortOverride is { } effort)
@@ -6941,7 +7266,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             chatOptions.Reasoning = new ReasoningOptions { Effort = azureEffort, Output = ReasoningOutput.None };
         }
 
-        ApplyOnThisPcGeneration(chatOptions, options);
+        ApplyOnThisPcGeneration(chatOptions, options, localBudget?.PlainRequests, localBudget?.ContextTokens);
         return chatOptions;
     }
 
@@ -6959,7 +7284,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
      * turning thinking off, and a model that cannot think accepted it unchanged (gemma3, granite4, phi4-mini, LFM2.5). An
      * explicit effort from the benchmark harness wins.
      */
-    private void ApplyOnThisPcGeneration(ChatOptions chatOptions, CleanupOptions options)
+    private void ApplyOnThisPcGeneration(
+        ChatOptions chatOptions, CleanupOptions options, bool? plainRequests = null, int? contextTokens = null)
     {
         var localServer = LocalAiServer.Serves(options.Provider, options.CustomEndpoint);
         if (options.Provider != CleanupProvider.FoundryLocal && !localServer)
@@ -6997,14 +7323,14 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         if (UsesOllamaApi(options))
         {
-            ApplyOllamaApiOptions(chatOptions, options);
+            ApplyOllamaApiOptions(chatOptions, options, contextTokens);
             return;
         }
 
         // Plain requests leave out the generation fields a strict server refused (reasoning_effort, the max_tokens copy),
         // but never how long Ollama or LM Studio keeps the model: that is what gives its memory back after the idle time,
         // and both apps take it.
-        var plain = SendsPlainRequests(options);
+        var plain = plainRequests ?? SendsPlainRequests(options);
         if (!plain && chatOptions.Reasoning is null)
         {
             chatOptions.Reasoning = new ReasoningOptions

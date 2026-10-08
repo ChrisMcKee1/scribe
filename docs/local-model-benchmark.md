@@ -226,6 +226,106 @@ How each app takes a size:
 - **Foundry Local** fixes each model's size in its files (`genai_config.json`: 32,768 for Qwen2.5 0.5B); its catalog
   reports none. Scribe reads it and fits to it.
 
+## Round four: Gemma 4 12B system instructions and writing style
+
+Measured October 7, 2026, on the RTX 5080 with Ollama 0.40.0 and `gemma4:12b`, at a 32,768-token
+context, temperature 0.1 and thinking off. Each arm ran the frozen 25 dictations three times through
+the production cleanup service with the mentioned terms from the default word packs. The same
+identity-blind judge, Claude Opus 5.5, graded all 106 distinct outputs together in 25 packets, including
+the retained GPT-5.6-Terra reference outputs from September 4. The reference was not called again:
+its times below are the recorded September times. Evidence:
+[`benchmarks/ollama-12b-prompts-2026-10-07.json`](benchmarks/ollama-12b-prompts-2026-10-07.json).
+
+**Local and frontier instructions already share the same writing style.** They differ in the system
+preamble: the local one is directive and gives a worked example; the frontier one describes the
+post-editor contract and allows already-correct text to stay unchanged. The local preamble says
+"always rewrite" and "do not shorten", while the shared style asks for repeated points to be merged.
+An aligned local candidate resolved those tensions, made meaningful filler words explicit and
+reinforced identifier fidelity. A second candidate appended explicit quotation preservation,
+no invented AM/PM, units or currencies, and final corrected values to the shared style.
+
+| Gemma 4 12B instructions and style | Score | 95% interval | Median | 95th percentile |
+|---|---:|---|---:|---:|
+| Shipped local instructions and style | **91.3** | 87.4 to 94.6 | **446 ms** | 939 ms |
+| Shipped frontier instructions and style | 91.1 | 87.1 to 94.6 | 466 ms | 909 ms |
+| Aligned local instructions, shipped style | 90.6 | 86.5 to 94.3 | 478 ms | 906 ms |
+| Local instructions, more precise style | 91.2 | 87.6 to 94.5 | 458 ms | 1,033 ms |
+| Frontier instructions, more precise style | 91.3 | 87.5 to 94.7 | 452 ms | 831 ms |
+| Retained GPT-5.6-Terra reference | 94.9 | 93.1 to 96.5 | 2,088 ms | 3,703 ms |
+
+Every local arm returned cleaned text in all 75 runs. There were no repeated calibration packets in
+this pass, so it supplies no estimate of judge drift; the intervals describe variation over cases,
+not every source of uncertainty. The changes bought no credible overall improvement. More precise
+style clauses stopped invented AM/PM in the self-correction case and sometimes preserved the
+quotation better, but lost elsewhere. The hard cases still drop a date correction, change a quoted
+phrase, or swap a model version, such as Llama 3.3 for Llama 3.1.
+
+**Decision: leave the shipped writing style and both system prompts unchanged.** Gemma 4 12B is
+close to the frontier reference on this suite at much lower latency, not proven equivalent, and
+selecting Detailed instructions does not close the gap. Keep Automatic for this model unless a
+user's own samples establish a benefit from another choice.
+
+## Round five: DeepSeek-R1, Writex and Gemma 4 12B (0.5.5)
+
+Measured October 8, 2026, on the RTX 5080 with Ollama 0.40.0, using the final 0.5.5 completion
+checks. All three models ran the frozen 25 September dictations three times at a 32,768-token
+context, with the shipped Automatic instructions and writing style, mentioned vocabulary from the
+default word packs, and production vocabulary admission. There was no output-token override,
+reasoning override or enlarged deadline: `--clean-timeout 0` keeps the normal 25-second first
+attempt, 20-second stall retry and 90-second operation bound. The ordinary benchmark default is a
+180-second override, so omitting that flag would not test the shipping policy.
+
+Claude Opus 5.5 graded all 162 distinct outputs together in 25 identity-blind packets, with the
+retained GPT-5.6-Terra outputs as an anchor. Failed rewrites were graded as the raw text the user
+would receive, not omitted from the score. The anchor was not called again; its latency is from
+September 4. Every case was graded, but no repeated calibration packets were used, so the intervals
+describe variation over cases, not all judge uncertainty.
+
+The [sanitized evidence](benchmarks/ollama-model-compatibility-2026-10-08.json) records all 300
+timed outputs across both API paths, their outcomes and partial-failure flags, the exact request
+policy, source hashes, grades and frozen synthetic inputs. It contains no private dictation or
+configuration.
+
+| Model | Score | 95% interval | Median | 95th percentile | Raw fallback |
+|---|---:|---|---:|---:|---:|
+| **gemma4:12b** | **91.9** | 88.5 to 94.9 | **431 ms** | 857 ms | **0 of 75** |
+| VicRodger27/Writex:4b | 77.7 | 72.1 to 82.9 | 418 ms | 692 ms | 0 of 75 |
+| deepseek-r1 | 75.3 | 69.7 to 80.8 | 5,600 ms | 18,682 ms | 10 of 75 |
+| Retained GPT-5.6-Terra reference | 95.5 | 93.9 to 97.0 | 2,088 ms, historical | 3,703 ms, historical | 0 of 25 |
+
+**Gemma 4 12B is the measured choice for this 16 GB graphics card.** Writex was about as fast, but
+its fidelity score was 71.0 against Gemma's 90.9: fast fluent rewriting is not the same as keeping
+the speaker's meaning. DeepSeek kept reasoning despite the request to turn it off. Its successful
+synthetic readiness check bought it a bounded 2,048-token reasoning allowance, not a promise that
+every dictation would fit. It completed 65 of 75 rewrites; the other ten exhausted their output
+allowance. Each of those ten outputs was checked against the frozen input, code unit for code unit,
+and kept all of it. No run in this comparison had a partial-failure flag.
+
+This fixes the earlier silent-cut defect rather than making DeepSeek a fast dictation model. A
+reported length/content-filter end is rejected before answer cleanup; on a model that needs the
+reasoning allowance, a missing completion reason is not trusted either. The original OpenAI SDK
+field is checked, because its normalized value defaults a missing finish reason to Stop. A server
+that falsely reports Stop can still produce a bad rewrite, which is why the quality grade matters.
+
+Names and context limits are separate compatibility facts. Writex's catalog publishes `:0.8b`,
+`:2b` and `:4b`, but no `:latest`; use `VicRodger27/Writex:4b`, or paste its `ollama run` command
+into Download another model. The installed Q4_K_M builds report maximum contexts of 131,072 for
+DeepSeek-R1 and 262,144 for Writex and Gemma 4 12B. Those are supported maxima, not measured fast
+allocations. This comparison used 32K, not the maximum.
+
+A separate completion-safety run kept **Ollama's setting**, with no chosen context size, through its
+OpenAI-compatible API. The resident DeepSeek copy reported 4,096 tokens and 5,578,204,118 bytes,
+all on the GPU. Of 75 runs, 57 returned a cleaned answer and 18 kept the exact frozen input; none
+had a partial-failure flag. Median return time, including fallback, was 5,191 ms. That arm was not
+blind-graded and is not part of the quality table. The two API paths therefore both preserve the
+words after a reported cut, but neither makes this thinking model the recommended pick.
+
+**Harness limitation:** a generated leaderboard can still rank a `degraded` model without displaying
+its failure count. Also, `AdmittedRequests: true` proves vocabulary admission, not the absence of
+benchmark-only generation overrides. Do not use either as a release-success claim. This table uses
+the per-run outcomes and partial flags; the evidence explicitly records that no output, reasoning,
+temperature or retry override was supplied.
+
 ## What to use
 
 | If you want | Use | Quality | Typical, GPU | Typical, CPU only | Download | GPU memory |

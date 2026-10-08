@@ -66,10 +66,15 @@ public static class LocalAppSetup
     /// (<see cref="PickModel"/>).
     /// </summary>
     public static (IReadOnlyList<LocalServerModel> Models, string? Selected) ModelChoices(
-        IReadOnlyList<LocalServerModel> listed, string? chosen, bool roomyGraphicsCard = false)
+        IReadOnlyList<LocalServerModel> listed, string? chosen, bool roomyGraphicsCard = false, bool preserveEmptySelection = false)
     {
         ArgumentNullException.ThrowIfNull(listed);
         var models = listed.ToList();
+        if (preserveEmptySelection && string.IsNullOrWhiteSpace(chosen))
+        {
+            return (models, null);
+        }
+
         var selected = string.IsNullOrWhiteSpace(chosen) ? PickModel(listed, roomyGraphicsCard) : chosen.Trim();
         if (selected is null)
         {
@@ -122,7 +127,10 @@ public static class LocalAppSetup
 
         if (state.Models.Count == 0)
         {
-            return new(AiCleanupStatusKind.Info, $"{name} has no models yet. Download one in {name}, then choose Check again.", checkAgain);
+            var download = app == LocalServerApp.Ollama
+                ? "Use Download another model below."
+                : $"Download one in {name}, then choose Check again.";
+            return new(AiCleanupStatusKind.Info, $"{name} has no models yet. {download}", checkAgain);
         }
 
         if (string.IsNullOrWhiteSpace(model))
@@ -148,7 +156,9 @@ public static class LocalAppSetup
         {
             return new(
                 AiCleanupStatusKind.Warning,
-                $"{name} doesn't list {model}. Choose another model, or download it in {name}.",
+                app == LocalServerApp.Ollama
+                    ? $"{name} doesn't list {model}. Choose another model, or use Download another model below."
+                    : $"{name} doesn't list {model}. Choose another model, or download it in {name}.",
                 checkAgain);
         }
 

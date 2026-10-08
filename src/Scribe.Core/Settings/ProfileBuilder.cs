@@ -11,7 +11,8 @@ public static class ProfileBuilder
 {
     /// <summary>One editor row: raw name, the comma-separated process list, style, and newline mode.</summary>
     public readonly record struct Row(
-        string? Name, string? Processes, string? WritingStyle, NewlineInjectionMode? NewlineHandling);
+        string? Name, string? Processes, string? WritingStyle, NewlineInjectionMode? NewlineHandling,
+        DictationTextFormat? TextFormat = null, InjectionMethod? InjectionMethod = null, bool? ShiftEnterLineBreaks = null);
 
     /// <summary>
     /// Builds the profiles to persist, skipping rows that have neither a name nor any process names.
@@ -39,6 +40,9 @@ public static class ProfileBuilder
                 ProcessNames = processes,
                 WritingStyle = string.IsNullOrWhiteSpace(row.WritingStyle) ? null : row.WritingStyle.Trim(),
                 NewlineHandling = row.NewlineHandling,
+                TextFormat = row.TextFormat,
+                InjectionMethod = row.InjectionMethod,
+                ShiftEnterLineBreaks = row.ShiftEnterLineBreaks,
             });
         }
 

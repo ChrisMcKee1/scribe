@@ -138,7 +138,10 @@ public sealed class DraftSnapshot
             Text(profile.Name)
                 .List(profile.ProcessNames)
                 .Text(profile.WritingStyle)
-                .Number(profile.NewlineHandling is { } mode ? (long?)(long)mode : null);
+                .Number(profile.NewlineHandling is { } mode ? (long?)(long)mode : null)
+                .Number(profile.TextFormat is { } format ? (long?)(long)format : null)
+                .Number(profile.InjectionMethod is { } method ? (long?)(long)method : null)
+                .Flag(profile.ShiftEnterLineBreaks);
         }
 
         return this;

@@ -558,6 +558,16 @@ public partial class SettingsWindow
                 ShowInfo(issue.Message, Wpf.Ui.Controls.InfoBarSeverity.Error);
                 FocusControl(issue.ControlName);
                 break;
+            case ValidationCode.MarkdownNewlineConflict:
+                if (issue.RowKey is not null && _profileRows.FirstOrDefault(row => row.RowKey == issue.RowKey) is { } formatProfile)
+                {
+                    ProfileList.SelectedItem = formatProfile;
+                    ProfileList.ScrollIntoView(formatProfile);
+                }
+
+                ShowInfo(issue.Message, Wpf.Ui.Controls.InfoBarSeverity.Error);
+                FocusControl(issue.ControlName);
+                break;
         }
     }
 
@@ -601,7 +611,13 @@ public partial class SettingsWindow
         WritingStyle: row.WritingStyle,
         LoadedWritingStyle: row.LoadedWritingStyle,
         NewlineHandling: row.NewlineHandling,
-        LoadedNewlineHandling: row.LoadedNewlineHandling);
+        LoadedNewlineHandling: row.LoadedNewlineHandling,
+        TextFormat: row.TextFormat,
+        LoadedTextFormat: row.LoadedTextFormat,
+        InjectionMethod: row.InjectionMethod,
+        LoadedInjectionMethod: row.LoadedInjectionMethod,
+        ShiftEnterLineBreaks: row.ShiftEnterLineBreaks,
+        LoadedShiftEnterLineBreaks: row.LoadedShiftEnterLineBreaks);
 
     private Wpf.Ui.Controls.TextBox? FocusedSearchBox() =>
         Keyboard.FocusedElement is Wpf.Ui.Controls.TextBox box &&

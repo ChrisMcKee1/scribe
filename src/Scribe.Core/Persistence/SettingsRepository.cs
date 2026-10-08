@@ -856,6 +856,9 @@ public sealed class SettingsRepository : ISettingsRepository
                 ProcessNames = profile.ProcessNames ?? [],
                 WritingStyle = profile.WritingStyle,
                 NewlineHandling = profile.NewlineHandling,
+                TextFormat = profile.TextFormat,
+                InjectionMethod = profile.InjectionMethod,
+                ShiftEnterLineBreaks = profile.ShiftEnterLineBreaks,
             })
             .ToList();
         settings.AiCleanupModel ??= Cleanup.CleanupModelCatalog.DefaultAlias;

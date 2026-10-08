@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Markup;
@@ -15,6 +16,7 @@ using Scribe.Core.Models;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
+using Scribe.Core.TextInjection;
 using Scribe.Core.Tray;
 using Wpf.Ui.Appearance;
 
@@ -50,6 +52,7 @@ internal sealed class TrayIconHost : IDisposable
     private HotkeyMode _hotkeyMode = HotkeyMode.Hold;
     private TrayCondition _condition;
     private TrayNoticeAction _lastNoticeAction;
+    private PlainTextOnceState _plainTextOnce;
 
     public event Action? QuitRequested;
     public event Action? SettingsRequested;
@@ -67,6 +70,8 @@ internal sealed class TrayIconHost : IDisposable
 #pragma warning restore CS0067
     public event Action<bool>? PauseToggled;
     public event Action<bool>? AiCleanupToggled;
+    public event Action<bool>? PlainTextOnceToggled;
+    public Func<PlainTextOnceState>? PlainTextOnceProvider { get; set; }
     public Func<MicrophoneMenu>? MicrophoneMenuProvider { get; set; }
     public event Action<MicrophoneSelection>? MicrophoneChosen;
     public event Action? SoundSettingsRequested;
@@ -185,12 +190,14 @@ internal sealed class TrayIconHost : IDisposable
         _updateReady = UpdateReadyProvider?.Invoke() ?? _updateReady;
         _updateVersion = UpdateVersionProvider?.Invoke() ?? _updateVersion;
         _condition = ConditionProvider?.Invoke() ?? _condition;
+        _plainTextOnce = PlainTextOnceProvider?.Invoke() ?? _plainTextOnce;
         var state = new TrayMenuState(
             _updateReady,
             CopyLastAvailableProvider?.Invoke() ?? true,
             CurrentAiCleanupItem(),
             _state == DictationState.Paused,
-            recent.Take(5).Select(text => LastTranscriptStore.FormatPreview(text, maxLength: 42)).ToArray());
+            recent.Take(5).Select(text => LastTranscriptStore.FormatPreview(text, maxLength: 42)).ToArray(),
+            _plainTextOnce);
 
         foreach (var item in TrayMenu.Build(state).Items)
         {
@@ -269,6 +276,12 @@ internal sealed class TrayIconHost : IDisposable
             IsChecked = item.Kind == TrayItemKind.Check && item.IsChecked,
         };
         ApplyTrayTemplate(menuItem, item.Kind == TrayItemKind.Submenu);
+        if (item.HelpText is { } help)
+        {
+            menuItem.ToolTip = help;
+            AutomationProperties.SetName(menuItem, item.Label);
+            AutomationProperties.SetHelpText(menuItem, help);
+        }
 
         if (item.Kind == TrayItemKind.Submenu && item.Children is { Count: > 0 })
         {
@@ -394,6 +407,9 @@ internal sealed class TrayIconHost : IDisposable
                 break;
             case TrayCommand.PauseDictation:
                 PauseToggled?.Invoke(item.IsChecked);
+                break;
+            case TrayCommand.PlainTextOnce:
+                PlainTextOnceToggled?.Invoke(item.IsChecked);
                 break;
             case TrayCommand.Quit:
                 QuitRequested?.Invoke();
@@ -644,7 +660,16 @@ internal sealed class TrayIconHost : IDisposable
         if (_menu.IsOpen) RebuildMenu();
     });
 
-    private string ComposeToolTip() => TrayToolTip.Compose(ToTrayState(_state), _shortcutSentence, _hotkeyMode, _condition, _updateVersion);
+    private string ComposeToolTip() => TrayToolTip.Compose(
+        ToTrayState(_state), _shortcutSentence, _hotkeyMode, _condition, _updateVersion, _plainTextOnce.IsArmed);
+
+    public void SetPlainTextOnce(PlainTextOnceState state) => Dispatch(() =>
+    {
+        if (state.Revision < _plainTextOnce.Revision) return;
+        _plainTextOnce = state;
+        _icon.ToolTipText = ComposeToolTip();
+        if (_menu.IsOpen) RebuildMenu();
+    });
 
     private static TrayState ToTrayState(DictationState state) => state switch
     {

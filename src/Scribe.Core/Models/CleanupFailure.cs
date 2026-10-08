@@ -17,4 +17,20 @@ public sealed record CleanupFailure(
     public static CleanupFailure New(
         string reason, string? provider = null, string? model = null, string? sample = null) =>
         new(0, DateTimeOffset.UtcNow, provider, model, reason, sample);
+
+    public static CleanupFailure FromSettings(AppSettings settings, string reason, string? sample = null)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var model = settings.AiCleanupProvider switch
+        {
+            Cleanup.CleanupProvider.FoundryLocal => settings.AiCleanupModel,
+            Cleanup.CleanupProvider.AzureFoundry => settings.AiCleanupAzureDeployment,
+            Cleanup.CleanupProvider.OpenAiCompatible => settings.AiCleanupCustomModel,
+            Cleanup.CleanupProvider.GitHubCopilot => settings.AiCleanupCopilotModel,
+            _ => null,
+        };
+
+        return New(reason, settings.AiCleanupProvider.ToString(),
+            string.IsNullOrWhiteSpace(model) ? null : model.Trim(), sample);
+    }
 }

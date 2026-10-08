@@ -9,6 +9,11 @@ using Scribe.Overlay.Logging;
 // And the fixtures of BoundedChildProcessTests (DATA-IMPL-A-06), headless too:
 //   fixture hold-stdout   prints "ready", then keeps both streams open doing nothing, for at most a minute
 //   fixture flood-stderr  writes 4 MB to standard error, far past a pipe's buffer, then "done" to standard output
+if (args is ["ollama-fixture", var role, var mapping, var readyEvent])
+{
+    return OllamaProcessFixture.Run(role, mapping, readyEvent);
+}
+
 if (args is ["fixture", var fixture])
 {
     return Fixture.Run(fixture);

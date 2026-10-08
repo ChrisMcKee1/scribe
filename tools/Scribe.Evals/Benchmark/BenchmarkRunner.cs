@@ -66,13 +66,14 @@ internal sealed record BenchmarkConfig
 
     /// <summary>The whole vocabulary goes to a model on this PC when it fits (<see cref="CleanupOptions.SendWholeVocabulary"/>).</summary>
     public bool SendWholeVocabulary { get; init; }
+    public bool AdmitRequests { get; init; }
 
     /// <summary>
     /// Requests go through the production admission path (<see cref="TextCleanupService.Admit"/>), which fits each request's
     /// vocabulary into the model's context, rather than a glossary this harness renders: for a context size or the whole
     /// vocabulary, which only that path applies.
     /// </summary>
-    internal bool Admitted => SendWholeVocabulary || LocalContextTokens is not null;
+    internal bool Admitted => AdmitRequests || SendWholeVocabulary || LocalContextTokens is not null;
 
     public LocalEndpoints LocalEndpoints { get; init; } = LocalEndpoints.Default;
 
@@ -101,6 +102,7 @@ internal sealed record BenchmarkConfig
     public int CloudReadyTimeoutSeconds { get; init; } = 120;
     public int LocalReadyTimeoutSeconds { get; init; } = 1800;
     public int CleanTimeoutSeconds { get; init; } = 180;
+    internal TimeSpan? CleanupTimeout => CleanTimeoutSeconds == 0 ? null : TimeSpan.FromSeconds(CleanTimeoutSeconds);
 
     /// <summary>The glossary a model is sent: rendered from <see cref="GlossaryEntries"/> at its budget, or the fixed block.</summary>
     internal string? GlossaryFor(CleanupProvider provider, string? customEndpoint = null)
@@ -297,7 +299,7 @@ internal sealed class BenchmarkRunner
         await using var svc = new TextCleanupService(
             new VerboseConsoleLogger<TextCleanupService>(), perfFlags: Scribe.Core.Diagnostics.PerfFlags.FromEnvironment())
         {
-            CleanupTimeoutOverride = TimeSpan.FromSeconds(_cfg.CleanTimeoutSeconds),
+            CleanupTimeoutOverride = _cfg.CleanupTimeout,
             ReasoningEffortOverride = _cfg.ReasoningEffort,
             MaxOutputTokensOverride = _cfg.MaxOutputTokens,
             TemperatureOverride = _cfg.Temperature,
@@ -433,6 +435,8 @@ internal sealed class BenchmarkRunner
                 ? string.Join("; ", new[] { model.Note, "direct Responses API" }.Where(note => !string.IsNullOrWhiteSpace(note)))
                 : model.Note,
             Status = "error",
+            CleanTimeoutSeconds = _cfg.CleanTimeoutSeconds,
+            AdmittedRequests = admitted,
             LoadedAtUtc = DateTime.UtcNow.ToString("u"),
             PromptStyle = CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider, options.CustomEndpoint).ToString(),
             GlossaryTerms = _cfg.GlossaryEntries is { Count: > 0 } glossaryEntries && (glossary is not null || admitted)
@@ -544,6 +548,7 @@ internal sealed class BenchmarkRunner
                 var usages = new List<BenchTokenUsage?>(_cfg.Runs);
                 var outputs = new List<string>(_cfg.Runs);
                 var outcomes = new List<string>(_cfg.Runs);
+                var partialFailures = new List<bool>(_cfg.Runs);
                 var output = c.Transcript;
                 UseVocabularyFor(c.Transcript);
                 for (var i = 0; i < _cfg.Runs; i++)
@@ -552,6 +557,7 @@ internal sealed class BenchmarkRunner
                     await PaceAsync().ConfigureAwait(false);
                     BenchTokenUsage? usage = null;
                     var outcome = "Direct";
+                    var partialFailure = false;
                     var sw = Stopwatch.StartNew();
                     if (directClient is null)
                     {
@@ -559,6 +565,7 @@ internal sealed class BenchmarkRunner
                         var cleaned = await Clean(c.Transcript).ConfigureAwait(false);
                         output = cleaned.Text;
                         outcome = cleaned.Outcome.ToString();
+                        partialFailure = BenchResult.PartiallyFailed(cleaned);
                     }
                     else
                     {
@@ -569,6 +576,7 @@ internal sealed class BenchmarkRunner
                     usages.Add(usage);
                     outputs.Add(output);
                     outcomes.Add(outcome);
+                    partialFailures.Add(partialFailure);
                 }
 
                 allTimes.AddRange(times);
@@ -591,7 +599,7 @@ internal sealed class BenchmarkRunner
                 caseResults.Add(new BenchCaseResult(
                     c.CaseId, Median(sortedCase), times.ToArray(), verdict?.Overall,
                     verdict?.Dims, verdict?.Flags ?? [], verdict?.Rationale, caseChanged, output, usages.ToArray(),
-                    outputs.ToArray(), outcomes.ToArray()));
+                    outputs.ToArray(), outcomes.ToArray(), partialFailures.ToArray()));
 
                 var reasoning = usages
                     .Where(usage => usage?.ReasoningTokens is not null)
@@ -599,11 +607,13 @@ internal sealed class BenchmarkRunner
                     .OrderBy(tokens => tokens)
                     .ToList();
                 var failed = outcomes.Count(o => string.Equals(o, nameof(CleanupOutcome.Failed), StringComparison.Ordinal));
+                var partial = partialFailures.Count(failedPart => failedPart);
 
                 Console.WriteLine(
                     $"        {c.CaseId,-22} {Median(sortedCase),6:F0} ms  " +
                     $"q={verdict?.Overall.ToString() ?? "-"}  changed={caseChanged}" +
                     (failed == 0 ? "" : $"  failed={failed}/{outcomes.Count}") +
+                    (partial == 0 ? "" : $"  partial={partial}/{outcomes.Count}") +
                     (reasoning.Count == 0 ? "" : $"  reasoning={Median(reasoning):F0} tok"));
             }
 
@@ -634,11 +644,12 @@ internal sealed class BenchmarkRunner
                 .ToArray();
             var worst = caseResults.Where(r => r.Quality is not null).OrderBy(r => r.Quality).FirstOrDefault()
                 ?? caseResults[0];
+            var outcomeSummary = BenchResult.SummarizeOutcomes(caseResults, anyChanged);
 
             return baseline with
             {
-                Status = anyChanged ? "ok" : "degraded",
-                Error = anyChanged ? null : "output identical to raw on every case (no-op / internal fallback)",
+                Status = outcomeSummary.Status,
+                Error = outcomeSummary.Error,
                 MedianMs = Median(sorted),
                 MinMs = sorted[0],
                 MaxMs = sorted[^1],

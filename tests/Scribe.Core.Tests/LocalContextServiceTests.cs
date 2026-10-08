@@ -53,10 +53,15 @@ public sealed class LocalContextServiceTests
             Assert.False(body.GetProperty("stream").GetBoolean());
             Assert.False(body.GetProperty("think").GetBoolean());
             Assert.Equal("10m", body.GetProperty("keep_alive").GetString());
+            Assert.False(body.TryGetProperty("num_gpu", out _));
+            Assert.False(body.TryGetProperty("main_gpu", out _));
             var options = body.GetProperty("options");
             Assert.Equal(32768, options.GetProperty("num_ctx").GetInt32());
             Assert.Equal(0.1, options.GetProperty("temperature").GetDouble(), 3);
             Assert.True(options.GetProperty("num_predict").GetInt32() > 0);
+            // Hardware placement belongs to Ollama, not Scribe's generation settings.
+            Assert.False(options.TryGetProperty("num_gpu", out _));
+            Assert.False(options.TryGetProperty("main_gpu", out _));
         });
         Assert.StartsWith(CleanupPrompt.DefaultLocalPrompt, ChatSystemMessage(sent[^1].Body), StringComparison.Ordinal);
         Assert.Equal(32768, harness.Service.LocalContextTokens);
@@ -95,19 +100,25 @@ public sealed class LocalContextServiceTests
                 requests.Add((request.RequestUri!.AbsolutePath, body));
             }
 
-            return ScriptedHttpHandler.ChatCompletion("Ok.");
+            return ScriptedHttpHandler.ChatCompletion("Please send the report today.");
         });
         await using var harness = new CleanupHarness(http: http);
         harness.Service.Configure(CleanupHarness.Custom(LocalAiServer.OllamaAddress, OllamaModel));
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
 
+        var result = await harness.Service.CleanAsync("please send the report today").WaitAsync(Bound);
+
+        Assert.Equal(CleanupOutcome.Cleaned, result.Outcome);
+        Assert.Equal("Please send the report today.", result.Text);
         var sent = Snapshot(requests);
-        Assert.NotEmpty(sent);
+        Assert.True(sent.Count >= 2, $"Expected the readiness check and the dictation, saw {sent.Count}.");
         Assert.All(sent, request =>
         {
             Assert.EndsWith("/chat/completions", request.Path, StringComparison.Ordinal);
             Assert.False(request.Body.TryGetProperty("options", out _));
             Assert.False(request.Body.TryGetProperty("num_ctx", out _));
+            Assert.False(request.Body.TryGetProperty("num_gpu", out _));
+            Assert.False(request.Body.TryGetProperty("main_gpu", out _));
         });
     }
 

@@ -20,6 +20,9 @@ public sealed class SettingsSearchIndexTests
         ["ProfileProcessesBox"] = "A row editor; the page's entry covers it.",
         ["ProfileStyleBox"] = "A row editor; the page's entry covers it.",
         ["ProfileNewlineCombo"] = "A row editor; the page's entry covers it.",
+        ["ProfileTextFormatCombo"] = "A row editor; the App profiles entry covers text format and Markdown.",
+        ["ProfileInjectionCombo"] = "A row editor; the App profiles entry covers typing and paste.",
+        ["ProfileShiftEnterCombo"] = "A row editor; the App profiles entry covers typed line breaks and Shift+Enter.",
         ["HistoryRetentionCustomBox"] = "Shown only for Custom in its duration list; the list's entry covers it.",
         ["HistorySearchBox"] = "History's own search box filters shown dictations, not a setting.",
         ["HistoryDetailsText"] = "History details is read-only selected dictation text, not a setting.",
@@ -59,6 +62,11 @@ public sealed class SettingsSearchIndexTests
     [InlineData("model", "Model", SettingsPage.AiCleanup)]
     [InlineData("startup", "Start with Windows", SettingsPage.Dictation)]
     [InlineData("boot", "Start with Windows", SettingsPage.Dictation)]
+    [InlineData("download ollama", "Model name", SettingsPage.AiCleanup)]
+    [InlineData("ollama service", "Start Ollama", SettingsPage.AiCleanup)]
+    [InlineData("markdown", "Default text format for app profiles", SettingsPage.Dictation)]
+    [InlineData("plain text once", "Use app-aware formatting", SettingsPage.Dictation)]
+    [InlineData("profile clipboard", "App profiles", SettingsPage.AppProfiles)]
     public void Synonyms_find_the_expected_setting(string query, string label, SettingsPage page)
     {
         var results = SettingsSearchIndex.Search(query);
@@ -111,6 +119,7 @@ public sealed class SettingsSearchIndexTests
     [Theory]
     [InlineData("AiModelBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderLocalRadio", "Radio:LocalAppScribeRadio")]
     [InlineData("LocalAppOllamaRadio", "CheckBox:AiCleanupCheck", "Radio:AiProviderLocalRadio")]
+    [InlineData("OllamaDownloadModelBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderLocalRadio", "Radio:LocalAppOllamaRadio")]
     [InlineData("AzureModelBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderFoundryRadio", "Radio:AzureCliRadio", "Action:AzureSignInStatusRow")]
     [InlineData("AzureEndpointBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderFoundryRadio", "View:AzureManualToggleButton")]
     [InlineData("AzureDeploymentBox", "CheckBox:AiCleanupCheck", "Radio:AiProviderFoundryRadio", "View:AzureManualToggleButton")]

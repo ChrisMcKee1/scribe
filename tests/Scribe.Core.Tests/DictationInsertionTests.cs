@@ -366,16 +366,16 @@ public class DictationInsertionTests : InsertionFlagTest
         Assert.Contains("settings.AddSpaceAfterDictation,", call, StringComparison.Ordinal);
         Assert.Contains("_lastTranscript,", call, StringComparison.Ordinal);
         Assert.Contains("typed => _injector.Inject(", call, StringComparison.Ordinal);
-        Assert.Contains("typed, settings.InjectionMethod, session.TargetWindow, settings.ShiftEnterLineBreaks", call, StringComparison.Ordinal);
+        Assert.Contains("typed, session.Formatting.InjectionMethod, session.TargetWindow, session.Formatting.ShiftEnterLineBreaks", call, StringComparison.Ordinal);
 
         // The target's process, which paces typing into a Remote Desktop or virtual machine client (TypingPace).
-        Assert.Contains("settings.ShiftEnterLineBreaks, targetApp)", call, StringComparison.Ordinal);
+        Assert.Contains("session.Formatting.ShiftEnterLineBreaks, targetApp)", call, StringComparison.Ordinal);
 
         // After AI cleanup (its guards and the dash normalizer run inside CleanAsync), the dictionary and snippets, and the
         // line breaks handled for the target, which trims; the report keeps the text as dictated.
         var cleanup = controller.IndexOf(".CleanAsync(recognized, cancellationToken, cleanupWritingStyle)", StringComparison.Ordinal);
         var postProcess = controller.IndexOf("_postProcessor.ProcessDetailed(recognized, result.Text)", StringComparison.Ordinal);
-        var flatten = controller.IndexOf("InjectionTextFormatter.Apply(text, newlineMode, targetApp)", StringComparison.Ordinal);
+        var flatten = controller.IndexOf("session.Formatting.Represent(text)", StringComparison.Ordinal);
         var report = controller.IndexOf("report.FinalText = text;", StringComparison.Ordinal);
         Assert.InRange(cleanup, 1, postProcess);
         Assert.InRange(postProcess, cleanup, flatten);

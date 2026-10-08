@@ -138,6 +138,9 @@ public static class ProfilePresets
         Name = preset.Profile.Name,
         WritingStyle = preset.Profile.WritingStyle,
         NewlineHandling = preset.Profile.NewlineHandling,
+        TextFormat = preset.Profile.TextFormat,
+        InjectionMethod = preset.Profile.InjectionMethod,
+        ShiftEnterLineBreaks = preset.Profile.ShiftEnterLineBreaks,
         ProcessNames = [.. preset.Profile.ProcessNames],
     };
 }

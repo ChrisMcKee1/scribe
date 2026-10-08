@@ -233,8 +233,14 @@ public sealed class LibrarySelectionInUseTests : IDisposable
         Assert.Contains("Glossary: null,", controller, StringComparison.Ordinal);
         var factory = controller.IndexOf("return new CaptureContext(", StringComparison.Ordinal);
         Assert.True(factory > 0, "The capture context is not created where the recording is admitted.");
-        Assert.Contains("_vocabulary.Current);", controller[factory..controller.IndexOf("},", factory, StringComparison.Ordinal)], StringComparison.Ordinal);
-        Assert.Contains("capture.Vocabulary);", controller, StringComparison.Ordinal);
+        var admission = controller.IndexOf("DictationStartPolicy.BeginRecording(", StringComparison.Ordinal);
+        Assert.InRange(admission, 0, factory);
+        var admittedFactory = controller[admission..controller.IndexOf("},", factory, StringComparison.Ordinal)];
+        var vocabularyRead = admittedFactory.IndexOf("var vocabulary = _vocabulary.Current;", StringComparison.Ordinal);
+        var captureCreation = admittedFactory.IndexOf("return new CaptureContext(", StringComparison.Ordinal);
+        Assert.InRange(vocabularyRead, 0, captureCreation - 1);
+        Assert.Matches(@"return new CaptureContext\([\s\S]*,\s*vocabulary,\s*formatting\);", admittedFactory);
+        Assert.Matches(@"capture\.Vocabulary,\s*capture\.Formatting\);", controller);
         var cleanup = controller.IndexOf("cleanup = await _cleanup.Admit(session.Vocabulary.Cleanup)", StringComparison.Ordinal);
         Assert.True(cleanup > 0, "The cleanup is not admitted with the dictation's vocabulary.");
         Assert.StartsWith(

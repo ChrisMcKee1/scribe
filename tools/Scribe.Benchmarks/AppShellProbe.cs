@@ -226,7 +226,10 @@ internal static class AppShellProbe
             runUpdateRestartGuard: null,
             showRestartFailedNotice: null,
             diagnostics: services.GetRequiredService<SessionDiagnostics>(),
-            historyDeletionNotifier: services.GetRequiredService<HistoryDeletionNotifier>());
+            historyDeletionNotifier: services.GetRequiredService<HistoryDeletionNotifier>())
+        {
+            OllamaService = services.GetRequiredService<OllamaServiceController>(),
+        };
     }
 
     private static void Seed(int historyRows, int failureRows, IServiceProvider services)

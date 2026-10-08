@@ -1,3 +1,5 @@
+using Scribe.Core.Cleanup;
+
 namespace Scribe.Evals.Benchmark;
 
 /// <summary>Per-dimension judge scores (0 to 100). Null when the model produced no gradable output.</summary>
@@ -22,6 +24,8 @@ internal sealed record BenchTokenUsage(
 /// <param name="Outputs">Every timed run's text, in order, so a sampling model is graded on all of them.</param>
 /// <param name="Outcomes">Every timed run's <c>CleanupOutcome</c>: <c>Failed</c> means the guards rejected the answer or the
 /// call failed and the raw transcript came back, which is what a user would have received.</param>
+/// <param name="PartialFailures">One flag per timed run: some segments failed or an overflow tail stayed raw even though
+/// the outcome was Cleaned or Unchanged. Null means an older result did not record this, not that every run completed.</param>
 internal sealed record BenchCaseResult(
     string CaseId,
     double MedianMs,
@@ -34,7 +38,8 @@ internal sealed record BenchCaseResult(
     string? Output,
     BenchTokenUsage?[]? Usage = null,
     string[]? Outputs = null,
-    string[]? Outcomes = null);
+    string[]? Outcomes = null,
+    bool[]? PartialFailures = null);
 
 /// <summary>
 /// A single model's benchmark outcome. Serialized to <c>results.json</c> after every model so a long
@@ -53,6 +58,12 @@ internal sealed record BenchResult
     /// <summary>ok | degraded | error | not-ready | skipped.</summary>
     public required string Status { get; init; }
     public string? Error { get; init; }
+
+    /// <summary>The cleanup timeout override in seconds; zero keeps production timeouts, null is unrecorded.</summary>
+    public int? CleanTimeoutSeconds { get; init; }
+
+    /// <summary>Whether vocabulary used production admission; null is unrecorded.</summary>
+    public bool? AdmittedRequests { get; init; }
 
     public double MedianMs { get; init; }
     public double MinMs { get; init; }
@@ -95,6 +106,33 @@ internal sealed record BenchResult
 
     /// <summary>The first timed request's latency: what a dictation pays right after the model became ready.</summary>
     public double? WarmupMs { get; init; }
+
+    internal static bool PartiallyFailed(CleanupResult result) =>
+        result.Outcome is CleanupOutcome.Cleaned or CleanupOutcome.Unchanged && result.FailureReason is not null;
+
+    internal static (string Status, string? Error) SummarizeOutcomes(
+        IReadOnlyList<BenchCaseResult> cases, bool anyChanged)
+    {
+        var outcomes = cases.SelectMany(result => result.Outcomes ?? []).ToArray();
+        var failed = outcomes.Count(outcome => outcome == nameof(CleanupOutcome.Failed));
+        var skipped = outcomes.Count(outcome => outcome == nameof(CleanupOutcome.Skipped));
+        var partial = cases.Sum(result => (result.Outcomes ?? []).Where((outcome, index) =>
+            outcome is nameof(CleanupOutcome.Cleaned) or nameof(CleanupOutcome.Unchanged) &&
+            result.PartialFailures is { } flags && index < flags.Length && flags[index]).Count());
+        if (partial != 0)
+        {
+            return ("degraded", $"cleanup failed in {failed}, skipped in {skipped}, and partially completed in {partial} of {outcomes.Length} timed runs");
+        }
+
+        if (failed != 0 || skipped != 0)
+        {
+            return ("degraded", $"cleanup failed in {failed} and skipped in {skipped} of {outcomes.Length} timed runs");
+        }
+
+        return anyChanged
+            ? ("ok", null)
+            : ("degraded", "output identical to raw on every case (no-op / internal fallback)");
+    }
 
     /// <summary>Letter grade from a 0 to 100 score using a conventional US scale.</summary>
     public static string GradeFor(int score) => score switch

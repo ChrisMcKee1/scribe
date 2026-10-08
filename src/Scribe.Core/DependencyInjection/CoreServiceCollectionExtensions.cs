@@ -85,6 +85,7 @@ public static class CoreServiceCollectionExtensions
             StorageMaintenanceOptions.Default,
             sp.GetRequiredService<DictionaryLibraryService>().Janitor));
         services.AddSingleton<LastTranscriptStore>();
+        services.AddSingleton<PlainTextOnce>();
 
         services.AddSingleton<ITextPostProcessor, TextPostProcessor>();
 
@@ -120,6 +121,7 @@ public static class CoreServiceCollectionExtensions
         // user's Azure sign-in). Registered unconditionally; it stays inert until enabled in
         // settings, and degrades to raw text whenever it is not ready.
         services.AddSingleton<ILocalServerClient, LocalServerClient>();
+        services.AddSingleton<OllamaServiceController>();
         services.AddSingleton<ITextCleanupService, TextCleanupService>();
         services.AddSingleton<IAzureFoundryDiscovery, AzureFoundryDiscovery>();
 

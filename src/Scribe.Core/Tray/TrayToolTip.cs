@@ -23,7 +23,9 @@ public static class TrayToolTip
 {
     public const int MaxLength = 127;
 
-    public static string Compose(TrayState state, string? shortcutName, HotkeyMode mode, TrayCondition condition = TrayCondition.None, string? version = null)
+    public static string Compose(
+        TrayState state, string? shortcutName, HotkeyMode mode, TrayCondition condition = TrayCondition.None,
+        string? version = null, bool plainTextOnceArmed = false)
     {
         var shortcut = string.IsNullOrWhiteSpace(shortcutName) ? "your shortcut" : shortcutName.Trim();
         var first = state switch
@@ -35,6 +37,11 @@ public static class TrayToolTip
             TrayState.Paused => "Scribe: paused. Your shortcuts work as usual in other apps until you resume.",
             _ => "Scribe: ready.",
         };
+        if (plainTextOnceArmed)
+        {
+            first = "Scribe: plain text once armed (60-second limit)." + Environment.NewLine + first;
+        }
+
         var line = ConditionLine(condition, version);
         var combined = line is null ? first : first + Environment.NewLine + line;
         return combined.Length <= MaxLength ? combined : Shorten(first, MaxLength);

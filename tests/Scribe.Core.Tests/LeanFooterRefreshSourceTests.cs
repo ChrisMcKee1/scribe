@@ -11,7 +11,7 @@ public sealed class LeanFooterRefreshSourceTests
     private static readonly string[] IgnoredControls =
     [
         "SettingsSearchBox", "DictionarySearchBox", "LibrarySearchBox", "HistorySearchBox", "PlaygroundInput",
-        "NavList", "HistoryGrid", "DictionaryTabs", "UsagePeriodBox",
+        "NavList", "HistoryGrid", "DictionaryTabs", "UsagePeriodBox", "OllamaDownloadModelBox",
     ];
 
     private static string Footer => Read("src", "Scribe.App", "Settings", "SettingsWindow.Footer.cs");

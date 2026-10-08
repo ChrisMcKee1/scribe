@@ -379,6 +379,20 @@ public sealed class AppSettings
     public bool AddSpaceAfterDictation { get; set; } = true;
 
     /// <summary>
+    /// Opt in to app profiles' text-format and delivery preferences. Off ignores all of those new overrides, without
+    /// changing the existing writing-style or newline rules. No AI cleanup is enabled by this setting.
+    /// </summary>
+    [JsonConverter(typeof(AppAwareFormattingJsonConverter))]
+    public bool AppAwareFormattingEnabled { get; set; }
+
+    /// <summary>
+    /// The format a matching app profile inherits. Unmatched apps always use Plain. MarkdownSource preserves characters
+    /// already produced by the pipeline, never generates syntax or requests another AI rewrite.
+    /// </summary>
+    [JsonConverter(typeof(DictationTextFormatJsonConverter))]
+    public DictationTextFormat DefaultTextFormat { get; set; } = DictationTextFormat.Plain;
+
+    /// <summary>
     /// Settings, Add to dictionary and the tray menu use Scribe blue unless the user chooses the Windows accent.
     /// </summary>
     /// <remarks>
@@ -463,6 +477,9 @@ public sealed class AppSettings
             ProcessNames = new List<string>(p.ProcessNames),
             WritingStyle = p.WritingStyle,
             NewlineHandling = p.NewlineHandling,
+            TextFormat = p.TextFormat,
+            InjectionMethod = p.InjectionMethod,
+            ShiftEnterLineBreaks = p.ShiftEnterLineBreaks,
         }).ToList();
         // Same reason as Profiles: the id list is mutable, so give the clone its own copy.
         clone.EnabledDictionaryLibraryIds = new List<string>(EnabledDictionaryLibraryIds);

@@ -66,6 +66,8 @@ public partial class App : Application
     private IHost? _host;
     private TrayIconHost? _tray;
     private DictationController? _controller;
+    private PlainTextOnce? _plainTextOnce;
+    private long _shownPlainTextOnceRevision;
     private Scribe.Core.Lifecycle.PresentationRelay<DictationStateChange>? _dictationState;
     private IOverlayController? _overlay;
 
@@ -376,6 +378,8 @@ public partial class App : Application
             callback => Dispatcher.BeginInvoke(callback));
         services.GetRequiredService<HistoryDeletionNotifier>().Deleted += OnHistoryDeleted;
 
+        var plainTextOnce = services.GetRequiredService<PlainTextOnce>();
+        _plainTextOnce = plainTextOnce;
         _controller = new DictationController(
             services.GetRequiredService<IHotkeyService>(),
             services.GetRequiredService<IAudioCaptureService>(),
@@ -390,7 +394,8 @@ public partial class App : Application
             services.GetRequiredService<LastTranscriptStore>(),
             services.GetRequiredService<ISettingsRepository>(),
             services.GetRequiredService<ILogger<DictationController>>(),
-            services.GetRequiredService<PerfFlags>());
+            services.GetRequiredService<PerfFlags>(),
+            _plainTextOnce);
         StartupStages?.Mark("controller");
 
         // Before anything that takes input exists (the tray, and at Start the hotkey): the persisted settings load, and the
@@ -435,6 +440,18 @@ public partial class App : Application
         _tray.AddToDictionaryRequested += ShowQuickAdd;
         _tray.PauseToggled += paused => _controller?.SetPaused(paused);
         _tray.AiCleanupToggled += ToggleAiCleanup;
+        _tray.PlainTextOnceProvider = () => plainTextOnce.Current;
+        _tray.PlainTextOnceToggled += armed =>
+        {
+            if (_controller?.IsClosing != false) return;
+            if (armed) plainTextOnce.Arm();
+            else plainTextOnce.Cancel();
+        };
+        plainTextOnce.Changed += OnPlainTextOnceChanged;
+        _controller.FormattingConflict += () => Dispatcher.BeginInvoke(() =>
+        {
+            if (_controller?.IsClosing == false) ShowTrayNotice(TrayNotices.AppFormattingConflict());
+        });
         _tray.AiCleanupItemProvider = DescribeTrayAiCleanup;
         _tray.UpdateReadyProvider = () => _updates?.PendingVersion is not null;
         _tray.UpdateVersionProvider = () => _updates?.PendingVersion;
@@ -1930,6 +1947,7 @@ public partial class App : Application
                 openStages: openStages)
             {
                 DiagnosticsExport = services.GetRequiredService<DiagnosticsExport>(),
+                OllamaService = services.GetRequiredService<OllamaServiceController>(),
             };
             openStages?.Mark("ctor");
             _settingsWindow.Closed += (_, _) =>

@@ -20,12 +20,31 @@ public sealed class TryDictationDraftCoverageTests
     public void The_draft_assigns_every_value_the_save_stores_with_the_save_s_own_expression()
     {
         var root = RepositoryRoot();
-        var window = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
+        var window = string.Join("\n", Directory.EnumerateFiles(Path.Combine(root, "src", "Scribe.App", "Settings"), "SettingsWindow*.cs")
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(File.ReadAllText));
         var tryDictation = File.ReadAllText(Path.Combine(root, "src", "Scribe.App", "Settings", "SettingsWindow.TryDictation.cs"));
+        Assert.Contains("using Scribe.Core.Transcription;", tryDictation, StringComparison.Ordinal);
         var save = Body(window, "private async Task<bool> TrySaveAsync()");
         var draft = Body(tryDictation, "private AppSettings TryDictationDraft()");
+        var captured = Body(window, "private AppSettings CaptureDraftSettings()");
 
         var stored = Assignments(save, "_settings");
+        var copy = save.LastIndexOf("CopySettings(preflight.Settings, _settings);", StringComparison.Ordinal);
+        var store = save.IndexOf("await _wordPackSaveProtocol.SaveAsync(", StringComparison.Ordinal);
+        Assert.True(copy >= 0 && copy < store, "Save must store the captured preflight, not later control values.");
+        Assert.DoesNotMatch(@"_settings\.(?!LaunchOnLogin\b)\w+\s*=(?![=>])", save[copy..store]);
+        Assert.Contains("var settings = CaptureDraftSettings();",
+            Body(window, "private async Task<SavePreflightInput?> PrepareSavePreflightAsync()"), StringComparison.Ordinal);
+        var copier = Body(window, "private static void CopySettings(");
+        Assert.Contains("var copy = source.Clone();", copier, StringComparison.Ordinal);
+        Assert.Contains("property.CanRead && property.CanWrite && property.Name != nameof(AppSettings.LaunchOnLogin)", copier, StringComparison.Ordinal);
+        Assert.Contains("property.SetValue(target, property.GetValue(copy));", copier, StringComparison.Ordinal);
+        foreach (var (property, expression) in Assignments(captured, "draft"))
+        {
+            stored[property] = expression;
+        }
+
         var drafted = Assignments(draft, "draft");
         Assert.True(stored.Count >= 40, $"Only {stored.Count} Save assignments were found.");
 
@@ -37,7 +56,7 @@ public sealed class TryDictationDraftCoverageTests
             }
 
             Assert.True(drafted.TryGetValue(property, out var draftExpression), $"Try dictation's draft does not set {property}, which Save stores.");
-            var expected = Normalize(Expand(expression, save, "_settings"), "_settings");
+            var expected = Normalize(Expand(expression, captured, "draft"), "draft");
             var actual = Normalize(Expand(draftExpression!, draft, "draft"), "draft");
             Assert.True(
                 string.Equals(expected, actual, StringComparison.Ordinal),
@@ -92,6 +111,7 @@ public sealed class TryDictationDraftCoverageTests
     private static string Normalize(string expression, string target)
     {
         var squashed = Regex.Replace(expression, @"\s+", string.Empty);
+        squashed = squashed.Replace("Scribe.Core.Transcription.TranscriptionModelCatalog.", "TranscriptionModelCatalog.", StringComparison.Ordinal);
         squashed = Regex.Replace(squashed, $@"(?<![\w.]){Regex.Escape(target)}\.", "SETTINGS.");
         return squashed.Replace("(", string.Empty, StringComparison.Ordinal).Replace(")", string.Empty, StringComparison.Ordinal);
     }

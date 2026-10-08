@@ -18,16 +18,20 @@ public sealed class ProfileSubmissionSourceTests
         var profiles = File.ReadAllText(Path.Combine(settings, "SettingsWindow.Profiles.cs"));
 
         var save = Body(window, "private async Task<bool> TrySaveAsync()");
-        var captured = save.IndexOf("var profileSubmission = CaptureProfileSubmission();", StringComparison.Ordinal);
+        var captured = save.IndexOf("var profileSubmission = preflight.ProfileSubmission;", StringComparison.Ordinal);
         var awaited = save.IndexOf("await _wordPackSaveProtocol.SaveAsync(", StringComparison.Ordinal);
         Assert.True(captured > 0 && awaited > captured, "The profile submission must be read before the word pack Save awaits.");
         Assert.Contains("profileSubmission: profileSubmission", save, StringComparison.Ordinal);
+        Assert.Contains("_settings.Profiles = preflight.Settings.Profiles;", save, StringComparison.Ordinal);
+        Assert.DoesNotContain("_settings.Profiles = BuildProfiles();", save, StringComparison.Ordinal);
+        Assert.Contains("var profileSubmission = CaptureProfileSubmission(profileRows);",
+            Body(window, "private async Task<SavePreflightInput?> PrepareSavePreflightAsync()"), StringComparison.Ordinal);
 
         var request = Body(window, "private WordPackSaveProtocolRequest BuildWordPackSaveRequest(");
         Assert.Contains("MarkProfileRowsSaved(profileSubmission);", request, StringComparison.Ordinal);
 
         var mark = Body(profiles, "private void MarkProfileRowsSaved(");
-        foreach (var field in new[] { "Name", "Processes", "WritingStyle", "NewlineHandling" })
+        foreach (var field in new[] { "Name", "Processes", "WritingStyle", "NewlineHandling", "TextFormat", "InjectionMethod", "ShiftEnterLineBreaks" })
         {
             Assert.Contains($"row.Loaded{field} = submitted.{field};", mark, StringComparison.Ordinal);
             Assert.DoesNotContain($"row.Loaded{field} = row.{field};", mark, StringComparison.Ordinal);

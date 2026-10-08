@@ -289,6 +289,7 @@ public sealed class VocabularyApplicationSourceTests
             // Start with Windows applies from its own switch when flipped; a Save stores the Windows observation it read
             // before the wait, never the switch.
             ["LaunchCheck"] = string.Empty,
+            ["OllamaDownloadModelBox"] = string.Empty,
             ["ModeCombo"] = "_pendingBinding with { Mode = SelectedMode }",
             ["DictationOnlyModeCombo"] = "_pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode }",
             ["DeviceCombo"] = "_externalMicrophone.ForSave(ShownMicrophone)",

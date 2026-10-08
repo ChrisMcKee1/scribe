@@ -23,7 +23,7 @@ public sealed class TrayCoreRedesignT0Tests
             RecentDictationPreviews: ["One", "Two"]));
 
         Assert.Equal(
-            ["Restart to update Scribe", "", "Settings", "", "Add to dictionary...", "Copy last dictation", "Copy a recent dictation", "", "Microphone", "Set up AI cleanup...", "Pause dictation", "", "Quit Scribe"],
+            ["Restart to update Scribe", "", "Settings", "", "Add to dictionary...", "Copy last dictation", "Copy a recent dictation", "", "Microphone", "Set up AI cleanup...", "Pause dictation", "Use plain text once", "", "Quit Scribe"],
             menu.Items.Select(i => i.Label));
         Assert.True(menu.Items.Single(i => i.Label == "Settings").IsDefault);
         Assert.False(menu.Items.Single(i => i.Label == "Copy last dictation").Enabled);

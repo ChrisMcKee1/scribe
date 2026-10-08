@@ -70,6 +70,22 @@ public sealed class LocalAppSetupTests
     }
 
     [Fact]
+    public void A_download_refresh_does_not_select_a_model_before_the_user_agrees_to_switch()
+    {
+        LocalServerModel[] models = [Model("gemma4:12b"), Model("gemma4:e4b")];
+
+        var (listed, selected) = LocalAppSetup.ModelChoices(models, null, preserveEmptySelection: true);
+        Assert.Equal(models, listed);
+        Assert.Null(selected);
+        Assert.Equal(
+            "gemma4:e4b",
+            LocalAppSetup.ModelChoices(models, "gemma4:e4b", preserveEmptySelection: true).Selected);
+        Assert.Equal(
+            "gemma4:12b",
+            LocalAppSetup.ModelChoices(models, "gemma4:12b", preserveEmptySelection: true).Selected);
+    }
+
+    [Fact]
     public void A_model_outside_the_benchmark_is_still_picked_and_an_empty_list_picks_nothing()
     {
         Assert.Equal("mystery:7b", LocalAppSetup.PickModel([Model("mystery:7b"), Model("other:1b")]));
@@ -91,7 +107,7 @@ public sealed class LocalAppSetupTests
         Assert.Equal(AiCleanupActionId.CheckAgain, failed.Primary!.Id);
 
         var empty = LocalAppSetup.Describe(LocalServerApp.Ollama, new LocalServerState(LocalServerReach.Reached, [], []), null, 10);
-        Assert.Equal("Ollama has no models yet. Download one in Ollama, then choose Check again.", empty.Text);
+        Assert.Equal("Ollama has no models yet. Use Download another model below.", empty.Text);
 
         var needsKey = LocalAppSetup.Describe(LocalServerApp.LmStudio, LocalServerState.NeedsKey, "google/gemma-4-e2b", 10);
         Assert.Equal(AiCleanupStatusKind.Warning, needsKey.Kind);

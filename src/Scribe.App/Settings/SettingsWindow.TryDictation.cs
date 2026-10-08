@@ -11,6 +11,7 @@ using Scribe.Core.Hotkeys;
 using Scribe.Core.Models;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Settings;
+using Scribe.Core.TextInjection;
 using Scribe.Core.Transcription;
 
 namespace Scribe.App.Settings;
@@ -161,6 +162,8 @@ public partial class SettingsWindow
         draft.ShiftEnterLineBreaks = ShiftEnterCheck.IsChecked == true;
         draft.AccentSource = AccentSourceCheck.IsChecked == true ? AccentSource.Windows : AccentSource.Scribe;
         draft.AddSpaceAfterDictation = SpaceAfterDictationCheck.IsChecked == true;
+        draft.AppAwareFormattingEnabled = AppAwareFormattingCheck.IsChecked == true;
+        draft.DefaultTextFormat = SelectedDefaultTextFormat;
         draft.MaxDictationMinutes = SelectedDurationValue(MaxDictationCombo, MaxDictationCustomBox, draft.MaxDictationMinutes);
         draft.ReleaseModelsAfterIdleMinutes = SelectedDurationValue(IdleReleaseCombo, IdleReleaseCustomBox, draft.ReleaseModelsAfterIdleMinutes);
         draft.HistoryRetentionDays = SelectedDurationValue(HistoryRetentionCombo, HistoryRetentionCustomBox, draft.HistoryRetentionDays);
@@ -299,6 +302,13 @@ UpdateTryDictationPage();
         TryDictationHeardSection.Visibility = view.ShowHeard ? Visibility.Visible : Visibility.Collapsed;
         TryDictationHeardText.Text = view.ShowHeard ? report.RawText ?? string.Empty : string.Empty;
         TryDictationTypedSection.Visibility = view.ShowTyped ? Visibility.Visible : Visibility.Collapsed;
+        TryDictationFormattingText.Text = report.Formatting is { } formatting
+            ? DictationFormattingText.Describe(formatting) +
+                (report.Injection is { Succeeded: true } delivered
+                    ? " " + InjectionMethodLabel.Describe(delivered.Method, report.SpaceAddedAfterText) + "." : string.Empty) +
+                (formatting.Decision == DictationFormatDecision.MarkdownNewlineConflict
+                    ? " " + DictationFormattingText.RuntimeNewlineConflict : string.Empty)
+            : string.Empty;
         if (view.ShowTyped)
         {
             RenderTryDictationTypedText(displayedResult);

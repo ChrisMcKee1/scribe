@@ -1136,7 +1136,27 @@ internal sealed partial class TextCleanupService
 
     // A dictation's requests to a model whose context Scribe fits: the chunks it is cleaned in, and the tokens of vocabulary
     // each request may carry (every request carries the same vocabulary, so the chunk that costs the most decides).
-    private readonly record struct LocalRequestPlan(List<string> Chunks, int VocabularyTokens);
+    private readonly record struct LocalRequestPlan(List<string> Chunks, int VocabularyTokens, LocalRequestBudget Budget);
+
+    // Kept with the plan: a later configuration or probe must not change the ceiling, the context or the plain-request mode a
+    // fitted request sends, on any of its chunks or retries. A reasoning reserve also makes its answers count only when the
+    // server says they finished (RunChunkAttemptAsync).
+    private readonly record struct LocalRequestBudget(int ReasoningReserve, bool PlainRequests, int ContextTokens);
+
+    // What a readiness check learned (ProbeOllamaAsync), published only by the initialization that ran it, for its options:
+    // the room the model needs to think (LocalReasoningHeadroomTokens, or 0), its plain-request mode and the context it read.
+    private sealed record LocalReasoningAllowance(CleanupOptions Options, int Tokens, bool PlainRequests, int ContextTokens);
+
+    private LocalReasoningAllowance? _localReasoningAllowance;
+
+    private int LocalReasoningReserve(CleanupOptions options)
+    {
+        var allowance = Volatile.Read(ref _localReasoningAllowance);
+        return allowance is not null && allowance.Options.MatchesIgnoringPrompt(options) &&
+            allowance.PlainRequests == SendsPlainRequests(options)
+                ? allowance.Tokens
+                : 0;
+    }
 
     /*
      * Must be called under _gate. Plans a dictation's requests to a model on this PC so each fits the context with the
@@ -1149,6 +1169,7 @@ internal sealed partial class TextCleanupService
     private LocalRequestPlan? PlanLocalRequestLocked(CleanupOptions options, string? style, string text)
     {
         var context = ContextTokensLocked(options);
+        var budget = new LocalRequestBudget(LocalReasoningReserve(options), SendsPlainRequests(options), context);
         var instructions = PromptParts.Of(options, style ?? options.WritingStyle, glossary: null).Build();
         var whole = text.Trim();
         var frontier = CleanupPrompt.ResolvePromptStyle(options.PromptStyle, options.Provider, options.CustomEndpoint) ==
@@ -1160,13 +1181,13 @@ internal sealed partial class TextCleanupService
             long worst = 0;
             foreach (var chunk in chunks)
             {
-                worst = Math.Max(worst, ContextBudget.RequestTextCost(chunk, OutputCeiling(chunk, options)));
+                worst = Math.Max(worst, ContextBudget.RequestTextCost(chunk, OutputCeiling(chunk, options, budget.ReasoningReserve)));
             }
 
             var room = ContextBudget.VocabularyTokensFor(context, instructions, worst);
             if (room >= 0)
             {
-                return new LocalRequestPlan(chunks, room);
+                return new LocalRequestPlan(chunks, room, budget);
             }
 
             // A target past the text's length splits nothing, so halving starts from the shorter of the two.
@@ -1181,8 +1202,8 @@ internal sealed partial class TextCleanupService
     }
 
     // The most a request carrying this text lets the model answer with: the ceiling it declares.
-    private int OutputCeiling(string text, CleanupOptions options) =>
-        MaxOutputTokensOverride ?? EstimateMaxTokens(text, options.Provider);
+    private int OutputCeiling(string text, CleanupOptions options, int? reasoningReserve = null) =>
+        MaxOutputTokensOverride ?? (EstimateMaxTokens(text, options.Provider) + (reasoningReserve ?? LocalReasoningReserve(options)));
 
     /*
      * Before a one-off request (CompleteCoreAsync) to Ollama or LM Studio at its own address: LM Studio with a size loads the
@@ -1253,10 +1274,10 @@ internal sealed partial class TextCleanupService
      * dictation would be typed as heard, so setting up AI cleanup and Test connection say so instead of reporting a model
      * that is ready, and a recording sends no readying request.
      */
-    private bool LeavesRoomForDictation(CleanupOptions options, string? style, int contextTokens)
+    private bool LeavesRoomForDictation(CleanupOptions options, string? style, int contextTokens, int? reasoningReserve = null)
     {
         var instructions = PromptParts.Of(options, style ?? options.WritingStyle, glossary: null).Build();
-        var shortest = ContextBudget.RequestTextCost(ShortestDictation, OutputCeiling(ShortestDictation, options));
+        var shortest = ContextBudget.RequestTextCost(ShortestDictation, OutputCeiling(ShortestDictation, options, reasoningReserve));
         return ContextBudget.VocabularyTokensFor(contextTokens, instructions, shortest) >= 0;
     }
 
@@ -1290,6 +1311,17 @@ internal sealed partial class TextCleanupService
     // AI cleanup cannot run on this model: its instructions leave no room for a dictation in what it reads at once.
     private static CleanupReason ContextTooSmallReason(CleanupOptions options) => CleanupReason.Same(
         "The instructions and writing style don't fit in what the AI model on this PC reads at once. " + ContextAdvice(options));
+
+    // The model thinks before it answers (LocalReasoningHeadroomTokens), and that room is what does not fit.
+    private static CleanupReason ThinkingRoomTooSmallReason(CleanupOptions options) => CleanupReason.Same(
+        "This AI model thinks before it answers, and the room it needs to think, the instructions and a dictation don't " +
+        "fit in what it reads at once. " + ContextAdvice(options));
+
+    // Why a dictation has no room in contextTokens: the room to think, when the instructions and a dictation fit without it.
+    private CleanupReason NoRoomReason(CleanupOptions options, int contextTokens, int reasoningReserve) =>
+        reasoningReserve > 0 && LeavesRoomForDictation(options, style: null, contextTokens, reasoningReserve: 0)
+            ? ThinkingRoomTooSmallReason(options)
+            : ContextTooSmallReason(options);
 
     // Test connection: LM Studio at its own address with a size chosen, which TestLmStudioAtSizeAsync tests at that size.
     private static bool TestsLmStudioAtSize(CleanupOptions candidate) =>
@@ -1454,6 +1486,35 @@ internal sealed partial class TextCleanupService
         }
     }
 
+    // After the capped probe, what Ollama holds is its own request's copy. The reading belongs to this probe, never a
+    // Test connection candidate changing the serving configuration's context. A native request may have been capped.
+    private async Task<int> LocalProbeContextAfterAnswerAsync(CleanupOptions options, CancellationToken ct)
+    {
+        var context = await CandidateContextTokensAsync(options, ct).ConfigureAwait(false);
+        if (!UsesOllamaApi(options))
+        {
+            return context;
+        }
+
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        bounded.CancelAfter(LocalContextReadBound);
+        try
+        {
+            var state = await LocalServers.ReadAsync(options.CustomEndpoint!, options.CustomApiKey, bounded.Token)
+                .ConfigureAwait(false);
+            if (state.LoadedFor(options.CustomModel!) is { ContextTokens: > 0 } held)
+            {
+                context = Math.Min(context, held.ContextTokens);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // The requested size, capped by the model's own maximum, still stands.
+        }
+
+        return context;
+    }
+
     /*
      * Must be called under _gate. The glossary one request carries.
      *
@@ -1588,13 +1649,13 @@ internal sealed partial class TextCleanupService
      * model (keep_alive). OllamaSharp sends MaxOutputTokens as num_predict and ReasoningEffort.None as think: false, which
      * every model takes (measured on Ollama 0.35.0 with Gemma 4, Qwen3 and Granite 4, the last of which cannot think at all).
      */
-    private void ApplyOllamaApiOptions(ChatOptions chatOptions, CleanupOptions options)
+    private void ApplyOllamaApiOptions(ChatOptions chatOptions, CleanupOptions options, int? contextTokens = null)
     {
         chatOptions.Reasoning ??= new ReasoningOptions { Effort = ReasoningEffort.None, Output = ReasoningOutput.None };
         var extra = chatOptions.AdditionalProperties ??= [];
         lock (_gate)
         {
-            extra["num_ctx"] = ContextTokensLocked(options);
+            extra["num_ctx"] = contextTokens ?? ContextTokensLocked(options);
         }
 
         if (LocalServerKeepAliveMinutes(options) is { Minutes: var minutes })

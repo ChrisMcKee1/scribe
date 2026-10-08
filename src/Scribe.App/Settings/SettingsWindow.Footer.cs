@@ -40,7 +40,7 @@ public partial class SettingsWindow
             _footerIgnoredSources =
             [
                 SettingsSearchBox, DictionarySearchBox, LibrarySearchBox, HistorySearchBox, PlaygroundInput,
-                NavList, HistoryGrid, DictionaryTabs, UsagePeriodBox,
+                NavList, HistoryGrid, DictionaryTabs, UsagePeriodBox, OllamaDownloadModelBox,
             ];
             AddHandler(TextBoxBase.TextChangedEvent, new TextChangedEventHandler((_, e) => ScheduleFooterRefreshFor(e)));
             AddHandler(PasswordBox.PasswordChangedEvent, new RoutedEventHandler((_, _) => ScheduleFooterRefresh()));
@@ -210,6 +210,8 @@ public partial class SettingsWindow
         draft.ShiftEnterLineBreaks = ShiftEnterCheck.IsChecked == true;
         draft.AccentSource = AccentSourceCheck.IsChecked == true ? AccentSource.Windows : AccentSource.Scribe;
         draft.AddSpaceAfterDictation = SpaceAfterDictationCheck.IsChecked == true;
+        draft.AppAwareFormattingEnabled = AppAwareFormattingCheck.IsChecked == true;
+        draft.DefaultTextFormat = SelectedDefaultTextFormat;
         draft.MaxDictationMinutes = SelectedDurationValue(MaxDictationCombo, MaxDictationCustomBox, draft.MaxDictationMinutes);
         draft.ReleaseModelsAfterIdleMinutes = SelectedDurationValue(IdleReleaseCombo, IdleReleaseCustomBox, draft.ReleaseModelsAfterIdleMinutes);
         draft.HistoryRetentionDays = SelectedDurationValue(HistoryRetentionCombo, HistoryRetentionCustomBox, draft.HistoryRetentionDays);
@@ -295,5 +297,8 @@ public partial class SettingsWindow
             row.LoadedName,
             row.LoadedProcesses,
             row.LoadedWritingStyle,
-            row.LoadedNewlineHandling))];
+            row.LoadedNewlineHandling,
+            row.LoadedTextFormat,
+            row.LoadedInjectionMethod,
+            row.LoadedShiftEnterLineBreaks))];
 }

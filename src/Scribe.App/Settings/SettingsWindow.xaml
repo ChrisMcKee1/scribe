@@ -996,6 +996,25 @@
                                     </StackPanel>
                                 </ui:Card>
 
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <StackPanel>
+                                        <CheckBox x:Name="AppAwareFormattingCheck" Style="{StaticResource SettingCheckBox}"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=AppAwareFormattingTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=AppAwareFormattingHint}">
+                                            <TextBlock x:Name="AppAwareFormattingTitle" Text="Use app-aware formatting" Style="{StaticResource CardTitle}"/>
+                                        </CheckBox>
+                                        <TextBlock x:Name="AppAwareFormattingHint" Margin="28,2,0,0" Style="{StaticResource CardDescription}"
+                                                   Text="Off by default. Lets app profiles choose a text format and typing method. When off, those new choices are ignored; existing writing styles and line-break rules still apply. This never turns AI cleanup on."/>
+                                        <TextBlock x:Name="DefaultTextFormatTitle" Text="Default text format for app profiles" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                        <ComboBox x:Name="DefaultTextFormatCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                  AutomationProperties.LabeledBy="{Binding ElementName=DefaultTextFormatTitle}"
+                                                  AutomationProperties.HelpText="{Binding Text, ElementName=FormattingSourceHint}"/>
+                                        <TextBlock x:Name="FormattingSourceHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                   Text="Apps without a matching profile use plain text. Use plain text once in the tray menu arms the next recording for 60 seconds; it doesn't skip AI cleanup, your dictionary or snippets."/>
+                                    </StackPanel>
+                                </ui:Card>
+
                                 <TextBlock Text="Recording indicator" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
@@ -1459,6 +1478,52 @@
                                                           IsEditable="False" DisplayMemberPath="Label"
                                                           SelectionChanged="LocalAppModelBox_SelectionChanged"/>
                                                 <settings:SettingsStatusRow x:Name="LocalAppStatusRow" PrimaryActionInvoked="LocalAppStatusRow_ActionInvoked" SecondaryActionInvoked="LocalAppStatusRow_ActionInvoked"/>
+
+                                                <StackPanel x:Name="OllamaServicePanel" Visibility="Collapsed" Margin="0,8,0,0">
+                                                    <ui:Button x:Name="OllamaServiceButton" Content="Start Ollama" HorizontalAlignment="Left"
+                                                               Click="OllamaServiceButton_Click"/>
+                                                    <TextBlock x:Name="OllamaServiceStatusText" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                               AutomationProperties.LiveSetting="Polite"
+                                                               Text="Scribe can start Ollama here and stop only the instance it starts."/>
+                                                </StackPanel>
+
+                                                <ui:CardExpander x:Name="OllamaDownloadPanel" Margin="0,12,0,0" IsExpanded="False"
+                                                                 Visibility="Collapsed" AutomationProperties.Name="Download another model">
+                                                    <ui:CardExpander.Header>
+                                                        <StackPanel>
+                                                            <TextBlock Text="Download another model" Style="{StaticResource CardTitle}"/>
+                                                            <TextBlock Text="Find a model in Ollama's catalog and download it here."
+                                                                       Style="{StaticResource CardDescription}" Margin="0,2,0,0"/>
+                                                        </StackPanel>
+                                                    </ui:CardExpander.Header>
+                                                    <StackPanel Margin="0,4,0,0">
+                                                        <TextBlock x:Name="OllamaDownloadModelTitle" Text="Model name" Style="{StaticResource CardTitle}"/>
+                                                        <ui:TextBox x:Name="OllamaDownloadModelBox" Margin="0,8,0,0"
+                                                                    HorizontalAlignment="Stretch" PlaceholderText="gemma4:12b"
+                                                                    AutomationProperties.LabeledBy="{Binding ElementName=OllamaDownloadModelTitle}"
+                                                                    AutomationProperties.HelpText="{Binding Text, ElementName=OllamaDownloadHintText}"
+                                                                    KeyDown="OllamaDownloadModelBox_KeyDown"/>
+                                                        <TextBlock x:Name="OllamaDownloadHintText" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                                   Text="{x:Static coresettings:OllamaModelDownload.DownloadHint}"/>
+                                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,8,0,0">
+                                                            <Hyperlink NavigateUri="{x:Static coresettings:OllamaModelDownload.CatalogUri}"
+                                                                       RequestNavigate="Hyperlink_RequestNavigate">Browse Ollama's model catalog</Hyperlink>
+                                                        </TextBlock>
+                                                        <WrapPanel Margin="0,12,0,0">
+                                                            <ui:Button x:Name="OllamaDownloadButton" Content="Download" Icon="ArrowDownload24"
+                                                                       Click="OllamaDownloadButton_Click" Margin="0,0,8,8"
+                                                                       AutomationProperties.Name="Download the named Ollama model"/>
+                                                            <ui:Button x:Name="OllamaDownloadCancelButton" Content="Cancel download"
+                                                                       Click="OllamaDownloadCancelButton_Click" Margin="0,0,0,8"
+                                                                       Visibility="Collapsed"/>
+                                                        </WrapPanel>
+                                                        <ProgressBar x:Name="OllamaDownloadProgressBar" Minimum="0" Maximum="100"
+                                                                     Visibility="Collapsed" Margin="0,4,0,0"
+                                                                     AutomationProperties.Name="Current model file download progress"/>
+                                                        <TextBlock x:Name="OllamaDownloadStatusText" Style="{StaticResource CardDescription}" Margin="0,8,0,0"
+                                                                   Visibility="Collapsed" AutomationProperties.LiveSetting="Polite"/>
+                                                    </StackPanel>
+                                                </ui:CardExpander>
 
                                                 <!-- Ollama's tuning (LocalModelTuning): the context size it asks for, the vocabulary. -->
                                                 <ui:CardExpander x:Name="OllamaTuningExpander" Margin="0,12,0,0" IsExpanded="False"
@@ -2325,6 +2390,23 @@
                                                 <ComboBox x:Name="ProfileNewlineCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                           AutomationProperties.LabeledBy="{Binding ElementName=ProfileNewlineTitle}"
                                                           SelectionChanged="ProfileNewlineCombo_SelectionChanged"/>
+                                                <TextBlock Style="{StaticResource CardDescription}" Margin="0,16,0,0"
+                                                           Text="The choices below apply only with app-aware formatting on in Dictation. A program match is a preference, not proof that its message box accepts line breaks. Check delivery yourself, especially in Teams, Copilot or Scout. Remote sessions are always typed into, never pasted into."/>
+                                                <TextBlock x:Name="ProfileTextFormatTitle" Text="Text format for these apps" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                                <ComboBox x:Name="ProfileTextFormatCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                          AutomationProperties.LabeledBy="{Binding ElementName=ProfileTextFormatTitle}"
+                                                          AutomationProperties.HelpText="Literal Markdown source keeps existing markers, not generated formatting. It needs line breaks."
+                                                          SelectionChanged="ProfileFormatting_SelectionChanged"/>
+                                                <TextBlock x:Name="ProfileInjectionTitle" Text="Typing method for these apps" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                                <ComboBox x:Name="ProfileInjectionCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                          AutomationProperties.LabeledBy="{Binding ElementName=ProfileInjectionTitle}"
+                                                          AutomationProperties.HelpText="Paste uses plain text only. If no paste can have happened, Scribe types the same text instead."
+                                                          SelectionChanged="ProfileFormatting_SelectionChanged"/>
+                                                <TextBlock x:Name="ProfileShiftEnterTitle" Text="Typed line breaks for these apps" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                                <ComboBox x:Name="ProfileShiftEnterCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                          AutomationProperties.LabeledBy="{Binding ElementName=ProfileShiftEnterTitle}"
+                                                          AutomationProperties.HelpText="Applies to typing, not a paste. Neither choice guarantees that a chat message won't send early."
+                                                          SelectionChanged="ProfileFormatting_SelectionChanged"/>
                                             </StackPanel>
                                             </StackPanel>
                                         </ScrollViewer>
@@ -2430,6 +2512,8 @@
                                                 <StackPanel x:Name="TryDictationTypedSection">
                                                     <TextBlock Text="What Scribe typed" Style="{StaticResource TryDictationResultLabel}"/>
                                                     <TextBlock x:Name="TryDictationTypedText" Style="{StaticResource TryDictationResultText}"/>
+                                                    <TextBlock x:Name="TryDictationFormattingText" Style="{StaticResource CardDescription}"
+                                                               Margin="0,6,0,0" TextWrapping="Wrap"/>
                                                 </StackPanel>
 
                                                 <StackPanel x:Name="TryDictationChangesSection">

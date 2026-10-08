@@ -72,7 +72,7 @@ public sealed class SaveDraftCoverageTests
         // Grok's G2 guard. Every _settings assignment in TrySaveAsync, and every other value it hands SaveBundle, is carried
         // by the draft: an editor its walk reads, or the save's own expression read by the draft, or an explicit exclusion.
         var (window, save, draft, skipped, xaml) = Sources();
-        var assignments = Assignments(save);
+        var assignments = Assignments(save, window);
         Assert.NotEmpty(assignments);
         var definitions = new Dictionary<string, string?>(StringComparer.Ordinal);
 
@@ -160,13 +160,13 @@ public sealed class SaveDraftCoverageTests
     {
         // Astra's table: a new AppSettings property fails here until it is either stored by the Save (and so carried by the
         // draft, above) or listed as bookkeeping the Save never assigns.
-        var (_, save, _, _, _) = Sources();
+        var (window, save, _, _, _) = Sources();
         var writable = typeof(AppSettings)
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(property => property.SetMethod is { IsPublic: true })
             .Select(property => property.Name)
             .ToHashSet(StringComparer.Ordinal);
-        var stored = Assignments(save).Keys.Concat(["InputDeviceId", "InputDeviceName"]).ToHashSet(StringComparer.Ordinal);
+        var stored = Assignments(save, window).Keys.Concat(["InputDeviceId", "InputDeviceName"]).ToHashSet(StringComparer.Ordinal);
 
         Assert.Empty(stored.Intersect(NotStoredBySave.Keys));
         Assert.Equal(writable.Order(StringComparer.Ordinal), stored.Concat(NotStoredBySave.Keys).Order(StringComparer.Ordinal));
@@ -368,8 +368,9 @@ public sealed class SaveDraftCoverageTests
             ancestor.Name.LocalName.Contains("Popup", StringComparison.Ordinal));
     }
 
-    // Each property TrySaveAsync assigns on _settings, with the expression it assigns.
-    private static Dictionary<string, string> Assignments(string save)
+    // Save's final copy makes the immutable preflight authoritative, including fields only that copy writes. Read those
+    // values from CaptureDraftSettings, the snapshot's builder, rather than mistake an earlier live assignment for storage.
+    private static Dictionary<string, string> Assignments(string save, string window)
     {
         var assignments = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (Match match in Regex.Matches(save, @"(?<![\w.])_settings\.(?<property>\w+)\s*=(?![=>])\s*(?<value>[^;]+);"))
@@ -377,6 +378,27 @@ public sealed class SaveDraftCoverageTests
             var property = match.Groups["property"].Value;
             Assert.False(assignments.ContainsKey(property), $"TrySaveAsync assigns {property} twice.");
             assignments.Add(property, match.Groups["value"].Value);
+        }
+
+        var copy = save.LastIndexOf("CopySettings(preflight.Settings, _settings);", StringComparison.Ordinal);
+        var store = save.IndexOf("await _wordPackSaveProtocol.SaveAsync(", StringComparison.Ordinal);
+        Assert.True(copy >= 0 && copy < store, "The preflight must be copied before storage.");
+        Assert.DoesNotMatch(@"_settings\.(?!LaunchOnLogin\b)\w+\s*=(?![=>])", save[copy..store]);
+        var copier = Body(window, "private static void CopySettings(");
+        Assert.Contains("var copy = source.Clone();", copier, StringComparison.Ordinal);
+        Assert.Contains("property.CanRead && property.CanWrite && property.Name != nameof(AppSettings.LaunchOnLogin)", copier, StringComparison.Ordinal);
+        Assert.Contains("property.SetValue(target, property.GetValue(copy));", copier, StringComparison.Ordinal);
+        Assert.Contains("var settings = CaptureDraftSettings();",
+            Body(window, "private async Task<SavePreflightInput?> PrepareSavePreflightAsync()"), StringComparison.Ordinal);
+        var captured = Body(window, "private AppSettings CaptureDraftSettings()");
+        foreach (Match match in Regex.Matches(captured, @"(?<![\w.])draft\.(?<property>\w+)\s*=(?![=>])\s*(?<value>[^;]+);"))
+        {
+            var property = match.Groups["property"].Value;
+            if (!assignments.TryGetValue(property, out var assigned) ||
+                assigned.Contains($"preflight.Settings.{property}", StringComparison.Ordinal))
+            {
+                assignments[property] = match.Groups["value"].Value;
+            }
         }
 
         return assignments;

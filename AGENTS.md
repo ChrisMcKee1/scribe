@@ -479,7 +479,9 @@ dotnet run -c Release --project tools/Scribe.Evals -- --benchmark --no-cloud --r
 dotnet run -c Release --project tools/Scribe.Evals -- --blind-judge --judge-results <dir>/results.json --judge-anchors docs/benchmarks/gpt6-astra-2026-09-04.json:gpt-5.6-terra@1 --out <judge dir>
 # After changing TextCleanupService.TrySanitize: apply it to recorded answers (writes <dir>-resanitized, lists every change)
 dotnet run -c Release --project tools/Scribe.Evals -- --resanitize <dir>/results.json
-
+# A shipping-policy local check must name 0: the harness otherwise overrides the cleanup deadline with 180 seconds.
+# --admitted uses production vocabulary admission without changing context or whole-vocabulary choices.
+dotnet run -c Release --project tools\Scribe.Evals -- --benchmark --no-cloud --runs 3 --no-judge --no-wav --local-models "ollama:deepseek-r1,ollama:VicRodger27/Writex:4b,ollama:gemma4:12b" --cases-from docs\benchmarks\gpt6-astra-2026-09-04.json --glossary-libraries default --vocabulary mentioned --admitted --context-size 32768 --clean-timeout 0 --out <dir>
 # Auxiliary prompt evals (UsageInsight + AiDictionarySuggester, deterministic checks)
 dotnet run --project tools/Scribe.Evals -- --suite auxiliary
 
@@ -1667,6 +1669,48 @@ change the sums and needs a decision (and probably a flag) of its own.
   before. `HotkeyModifierTests` and `HotkeyDesktopSwitchTests` pin the rules, and the
   `HotkeyServiceTests.Start_` desktop-switch tests (desktop filter, so CI) the wiring and the check.
 
+## App-aware formatting (Windows, restricted literal-source MVP)
+
+- **Opt-in plumbing, not semantic formatting.** `AppSettings.AppAwareFormattingEnabled` starts off, and
+  `DefaultTextFormat` starts Plain. Off ignores all new format and delivery overrides and preserves the old profile
+  writing-style and newline behavior. On uses `AppProfileMatcher`'s first match; `AppProfile.TextFormat` null inherits
+  the default, and nullable `InjectionMethod` and `ShiftEnterLineBreaks` inherit their legacy globals. Unmatched apps
+  stay Plain. This never enables AI cleanup or changes a prompt.
+- **A preference is not editor certification.** No website, title, control or field snooping, no password or IME
+  safety claim, and no same-window field/tab detection. Teams, Copilot and Scout composers still need manual delivery
+  checks. Use `InjectionTextFormatter` for terminal decisions, not another process list. Save validation blocks known
+  Markdown-source/one-line conflicts, including stock AlwaysFlatten presets. At runtime a new inherited conflict
+  refuses all new preferences before selecting Plain with the legacy delivery and an explicit
+  `MarkdownNewlineConflict` notice/code. It never silently changes a preset.
+- **P, R and T.** `DictationFormatPlan` is immutable and captured inside the admitted recording factory, alongside the
+  existing settings, target and vocabulary. P is the actual postprocessed text; both Plain and MarkdownSource renderers
+  are identity operations. `Represent` applies only the existing target newline handling to obtain R. FinalText,
+  Recorded and the recovery copy are R; history and Dictated receive R only on insertion success. T is
+  `DictationInsertion.TextToType(R, AddSpaceAfterDictation)`, and only the injector receives it. Paste refusal types the
+  same T, without recomputing R. Remote typing-only and the HWND focus guards are unchanged.
+- **Do not reconstruct meaning.** Keep literal code, URLs, punctuation, Unicode, ASCII markers and supplied line
+  boundaries, not inferred lists, renumbering, links or generated fences. Cleanup's existing fence stripping, dash
+  normalization, inaccuracies and chunk-space joins still happen before P. No rich HTML/RTF payload, CSS mode, second
+  LLM rewrite, voice-format commands or literal AI/dictionary/snippet bypass is shipped.
+- **Saved fields and downgrade behavior.** Only ordinary Save/SaveBundle JSON, no schema change or library byte patch.
+  The new properties have property-specific tolerant converters: unknown explicit formats become Plain, malformed
+  delivery overrides inherit, and only a JSON true opts in. Old readers ignore missing/new fields; an old re-save can
+  discard these choices. A reader that recognizes an enum property but not a future string name can still reject it,
+  so never add new tokens to the legacy enums. Carry each new field through clones, normalization, presets, builders,
+  rows, loaded/submitted snapshots, dirty tracking, DraftSnapshot, the preflight copy and vocabulary acknowledgement.
+- **Plain once is a transient Core owner.** DI registers one `PlainTextOnce`, with a 60-second injectable TimeProvider
+  deadline. Only the admitted capture factory consumes it; refused presses do nothing. Consumption notification is
+  published after the lifecycle gate is released. The tray's native check action arms/cancels, shows an armed tooltip
+  and clearing reasons, and checks revisions against Current before showing a delayed notice. Expiry, cancellation and
+  shutdown clear it. Nothing is persisted or added to hotkey callbacks. Plain once still keeps existing source markers
+  and runs the usual recognition, cleanup, dictionary and snippet path.
+- **Validation.** `AppAwareFormattingTests` freezes df474f2a's matcher/newline oracle and compares output code units and
+  delivery preferences with the master off. `LiteralFormattingDeliveryTests` compares actual production injection over
+  scripted boundaries, with long/multichunk source, paste refusal, remote typing and focus/cancellation. The one-shot
+  tests use a manual clock and the real lifecycle admission; UI/source/search/draft tests cover propagation without a
+  live app. A Settings runtime/text-size probe, real editor delivery and Arm64 remain separate manual gates.
+  macOS has not ported this MVP; its profile, insertion and tray rows in `macos/PORTING-PLAN.md` note that gap.
+
 ## Text insertion: the space after a dictation (read before touching DictationInsertion)
 
 - **Only the target gets the space, and one place adds it.** With `AppSettings.AddSpaceAfterDictation` on (the default,
@@ -2850,7 +2894,7 @@ store, GitHub signing secrets, or a publisher trust bundle.
   different version, so a machine that already has the right vpk can pack offline. Never go back to an
   unpinned `dotnet tool install -g vpk`, which on a clean runner takes whatever is newest.
 - Each release's notes live in `docs/release-notes-<version>.md` (this release:
-  `docs/release-notes-0.5.4.md`). Neither workflow reads the file; copy it into the GitHub release body.
+  `docs/release-notes-0.5.5.md`). Neither workflow reads the file; copy it into the GitHub release body.
 - The release workflow downloads the latest prior stable full nupkg before packing so a clean
   hosted runner can produce the delta package. `pack.ps1` requires the delta whenever a prior
   full package is present.
@@ -3280,6 +3324,77 @@ because the startup reclaim runs with the first configuration, and marshals to t
 the tray notice from `FoundryStorageReclaimNotice`. The log gets numbers and the reason code only.
 
 ## AI cleanup on a server on this PC (read before touching OpenAI-compatible requests)
+
+**Ollama downloads are explicit and separate from cleanup.** The Windows AI page's Download another model
+uses `OllamaModelDownloader` and the already referenced OllamaSharp SDK's streamed `/api/pull`, through the
+same no-proxy, no-redirect loopback handler as `LocalServerClient`. It sends only a validated model name,
+never a dictation, writing style or vocabulary, and never downloads on browsing. The public catalog is a
+browser link, not scraped by Scribe. Bare names and `publisher/model:tag` names preserve their case.
+A pasted `ollama run` or `ollama pull` command is parsed only as its one model argument, never executed;
+extra arguments, web addresses and cloud tags are refused. Untagged names request `latest`, which a
+publisher may not publish. The exact typed SDK stream error `pull model manifest: file does not exist`
+has a fixed model-and-tag notice; other SDK errors keep the generic safe notice rather than guessing
+a cause from arbitrary server text. Cancellation leaves parts in Ollama to resume. A stream without
+`success` is a failure. After a successful download, the list refreshes without choosing a new model; only
+the user's confirmation stores the choice through `ISettingsRepository.Update` and
+`OllamaModelDownload.ApplyChoice`, copies those fields into the window's baseline and editing document,
+and applies the settings as stored through `StoredSettingsReapply`. Never save the whole editing document
+from this flow. Closing or changing the selected app cancels the download; late progress is ignored.
+Saving the choice is distinct from background model readiness; the download notice points to the
+AI cleanup status. `CleanupFailure.FromSettings` chooses the model for the selected place when recording
+a failure, so an Ollama failure names its custom model rather than the unused Foundry Local alias.
+Cloud model tags are refused, and Ollama owns the files. The macOS download UI is not implemented yet.
+
+**Ollama's forced reasoning gets room only after a capped, unusable probe** (0.5.5).
+`ProbeOllamaAsync` keeps the 16-token "ok" check for fast models. Exhausted output usage without a finish
+reason, or an explicit length finish, together with no usable final answer, buys one fixed synthetic rewrite with up to
+`LocalReasoningHeadroomTokens` (2,048) extra tokens, fitted to the model's context. A reported Stop at
+the ceiling is a completed answer, not evidence of exhaustion; a content filter is not evidence that
+more room would help. The enlarged check must explicitly report Stop, then pass the dictation sanitizer
+before the initializer publishes its `LocalReasoningAllowance`; Test connection keeps the candidate's
+allowance separate, and a canceled or superseded initializer publishes nothing.
+`LocalRequestBudget` freezes the reserve, plain-request mode and native context with every dictation's
+plan, and `OutputCeiling` is the same allowance the context planner and the wire use, across every chunk
+and retry. A release or reconfiguration cannot change that plan halfway through. The enlarged probe uses
+the same model-use lease, permission admission and overall validation timeout as the first, never
+recursively enters another use, and carries no glossary or real dictation. Its attempt also has the normal
+dictation's 25-second first-attempt bound; the ordinary probe keeps its 90-second validation timeout.
+The reserve is a finite allowance, not evidence that every input can be rewritten under the time or
+context bounds. No alias heuristics, persisted hint, automatic context increase, thinking trace as output,
+relaxed rewrite guard or blanket larger budget for every model. Other local apps and remote services keep
+their existing probe behavior.
+
+**A reported cut answer is never a cleaned dictation** (0.5.5). `RunChunkAttemptAsync` calls `EndOf`
+before the sanitizer: an SDK Length or ContentFilter, or a missing finish reason with output usage at
+the declared ceiling, keeps the raw chunk and reports a failure, without retrying. A learned thinking
+model also requires an explicit Stop. This check applies to dictations on every surface that
+reports those fields; Copilot is sent no ceiling, so a count alone says nothing about it. An explicit
+Stop at the ceiling is accepted, with or without usage. SDK defaults are not evidence from the server:
+the OpenAI SDK reads a missing finish reason as Stop, so `EndOf` reads the original first choice's field
+through the retained `AgentResponse`, `ChatResponse` and `ChatCompletion.Patch`. It copies or keeps no
+response body of its own. Responses uses its nullable completion status and incomplete details, and
+native Ollama preserves its nullable `done_reason`. OllamaSharp reads a missing count as zero, so usage
+below the ceiling cannot by itself confirm completion. `CleanupCompletionEvidenceTests` pins the
+original SDK metadata, and `LocalReasoningBudgetTests` the actual wire, raw fallback, exact ceilings,
+candidate isolation and the production deadline. Re-run them on an SDK upgrade: `JsonPatch` is a public
+experimental API, used under a local `SCME0001` suppression.
+One-off usage summaries and dictionary suggestions still use their existing answer checks.
+
+The AI page can also start `ollama serve`, with `OLLAMA_HOST=127.0.0.1:11434` (Ollama's default
+loopback bind) and `OLLAMA_NO_CLOUD=1` set
+on the child only (`OllamaServiceController`, one host-owned singleton). Stop kills only the process
+the controller created and its children, never an existing Ollama app. An outside instance's Stop
+button is disabled with why. Start and Stop belong to the host once requested; closing Settings
+cancels only its reads and its wait for an action's answer, never the action. Host disposal cancels
+startup and stops the owned server with a bounded wait. `OllamaOwnedProcess` puts the child in its own
+non-inherited `KILL_ON_JOB_CLOSE` job at creation (`PROC_THREAD_ATTRIBUTE_JOB_LIST`), so an immediate
+update restart, a crash or a force-kill also ends it and its descendants without managed teardown.
+If that protection cannot be set up, nothing starts. Keep process and job ownership through a
+failed stop so it can be retried; forgetting a self-exited server also closes its job and ends any
+descendants it left. Download completion checks the reading its refresh returned, not the display
+state another Check again can clear, and every refresh preserves an empty choice while a download
+awaits confirmation. The downloader's response-body adapter binds the pull token into
+reads too: the pinned SDK omits it while awaiting a progress line, which the stalled-body test pins.
 
 `LocalAiServer.IsOnThisPc` counts an http or https address at `localhost`, `127.0.0.0/8`, `[::1]` or a
 `*.localhost` name as a model on this PC, which is how most people run Ollama and LM Studio. Each rule below was

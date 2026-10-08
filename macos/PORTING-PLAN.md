@@ -149,6 +149,17 @@ real Mac.
   `localhost` names at once (the 0.5.4 fix). Settings, AI cleanup, On this PC offers Let Scribe manage it, Ollama
   and LM Studio with a model list read from the app, Check again and Free memory; another AI service is remembered
   beside an app.
+  Windows also offers an explicit Ollama model-name download, a catalog link, progress and cancellation, then a
+  confirmation that saves only the model choice. That download UI is not mirrored on macOS yet.
+  Its Start/Stop Ollama button owns only the server process Scribe launched and its descendants, and stops them
+  when Scribe exits, including an update restart or forced exit; a pre-existing server is left alone.
+  Closing Settings cancels observation, not a requested Start or Stop. This process-control UI is not mirrored either.
+  Windows 0.5.5 also accepts the catalog's copied run/pull command and explains a missing model tag.
+  Its conditional extra answer allowance for Ollama models that keep reasoning, with a synthetic rewrite
+  check before readiness, is not mirrored here. The Windows failure list now names the model chosen
+  for the actual cleanup service. Windows also keeps a dictation chunk as heard when the AI service
+  reports a cut or filtered answer, before sanitizing it; that answer-end check is not mirrored here.
+  These Windows fixes do not establish macOS parity.
 - **Requests to a model on this PC** (0.5.2): short instructions, temperature 0.1, reasoning off, the output ceiling
   also as `max_tokens` with the one plain retry for a strict server, `keep_alive` and `ttl`, and the sanitizer that
   removes what small models wrap around an answer.
@@ -476,6 +487,7 @@ microphone, real apps, real Foundry Local or Ollama inference, rendering) is nam
 | Word packs | Present | The eleven built-in word packs and custom CSV imports live under Settings > Dictionary > Word packs. The editor stages changes with undo, redo, save and discard, supports search, sort, import, export, custom pack creation, rename and delete, AI vocabulary permission per pack, recently deleted restore and permanent delete, built-in update review, overlap warnings and switch-off copy planning. macOS intentionally uses SQLite-backed transactions and atomic file writes instead of Windows' word-pack journal. |
 | Voice snippets | Present | |
 | Per-app profiles (writing style, newline mode) | Present | Matched on the app captured when the recording started. |
+| Windows app-aware formatting MVP (opt-in literal source and per-profile delivery) | Missing | Windows now has an off-by-default master, Plain or literal Markdown-source preference, nullable per-profile typing/Shift+Enter overrides, admission-time snapshots and newline-conflict validation/fallback. This is not semantic or rich-text formatting, and has not been ported here. Existing macOS writing-style/newline profiles are unchanged. |
 | Global writing style and advanced AI prompts | Present | The AI cleanup page stages the global writing style and short/detailed prompt editors with restore-default actions through Save/Discard. Per-app writing styles are also editable. Candidate Test connection uses the staged instructions without saving them. |
 | Microsoft Foundry API-key authentication | Present | The AI cleanup page offers Azure CLI, service principal and a separate Microsoft Foundry API key. Stored credentials use Keychain; candidate checks may use an unsaved key. Another AI service keeps its own key. Live authentication and tenant/role policy still require the configured service. |
 | Speech model and processor-thread controls | Partial | Advanced offers a persisted Foundry speech model selection and an explicit download action. Older settings retain Parakeet v2 and browsing never downloads. The installed runtime has no processor-thread option, so the app exposes no ineffective slider. Alternate multilingual speech models are available but not yet validated on real foreign-language fixtures. |
@@ -483,6 +495,7 @@ microphone, real apps, real Foundry Local or Ollama inference, rendering) is nam
 | Dictation recovery | Present | The last five transcripts in Recent Dictations, seeded from history at launch, and a notification with Copy Transcript when text did not go in. |
 | Tray quick add to dictionary | Present | The chip picker has separate Save and Save and close actions, and refreshes its suggestions after a save. |
 | Tray toggles (AI cleanup, pause) | Present | |
+| Windows Use plain text once (visible armed state, 60-second expiry) | Missing | Windows' transient Core owner is consumed only by an accepted recording, not by a refused shortcut, and clears on cancellation, expiry and shutdown. It does not skip AI cleanup, dictionary or snippets. The macOS tray has no matching action yet. |
 | Overlay pill | Present | Nine anchors, recording, processing and notice states, in-process, staged position and visibility controls, and a temporary nonactivating on-screen preview that gives way to dictation. Live focus and full-screen behavior need a real Mac. |
 | Recording indicator visibility | Present | Default-on persisted preference, staged through Save/Discard, gates presentation without affecting recording or recovery notifications. |
 | Out-of-process overlay | Not applicable | Windows needs it to escape a WPF transparency bug that macOS does not have. |

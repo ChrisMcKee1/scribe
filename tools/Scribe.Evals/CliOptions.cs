@@ -58,6 +58,7 @@ internal sealed class CliOptions
     public CleanupVocabularyMode BenchVocabularyMode { get; private set; } = CleanupVocabularyMode.All;
     public int? BenchContextTokens { get; private set; }
     public bool BenchWholeVocabulary { get; private set; }
+    public bool BenchAdmitted { get; private set; }
     public int BenchPaceMs { get; private set; }
     public string? BenchCasesFrom { get; private set; }
     public string OllamaEndpoint { get; private set; } = BenchEndpoints.DefaultOllama;
@@ -101,6 +102,11 @@ internal sealed class CliOptions
     /// <summary>Builds the benchmark configuration from the parsed flags.</summary>
     public Benchmark.BenchmarkConfig ToBenchmarkConfig()
     {
+        if (BenchDirectResponses && CleanTimeout == 0)
+        {
+            throw new ArgumentException("Production cleanup timeouts require the service path, not --direct-responses.");
+        }
+
         var outDir = BenchOut ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ScribeData", "bench");
 
@@ -136,6 +142,7 @@ internal sealed class CliOptions
             VocabularyMode = BenchVocabularyMode,
             LocalContextTokens = BenchContextTokens,
             SendWholeVocabulary = BenchWholeVocabulary,
+            AdmitRequests = BenchAdmitted,
             PaceMs = BenchPaceMs,
             LocalEndpoints = new BenchEndpoints(OllamaEndpoint, LmStudioEndpoint),
             KeepServerModelsLoaded = KeepServerModelsLoaded,
@@ -357,6 +364,9 @@ internal sealed class CliOptions
                 case "--whole-vocabulary":
                     o.BenchWholeVocabulary = true;
                     break;
+                case "--admitted":
+                    o.BenchAdmitted = true;
+                    break;
                 case "--glossary-budget":
                     var budget = Next().Trim().ToLowerInvariant();
                     o.BenchGlossaryMaxTerms = budget switch
@@ -481,10 +491,12 @@ internal sealed class CliOptions
                     }
                     break;
                 case "--clean-timeout":
-                    if (int.TryParse(Next(), out var clt) && clt > 0)
+                    if (!int.TryParse(Next(), out var clt) || clt < 0)
                     {
-                        o.CleanTimeout = clt;
+                        throw new ArgumentException("--clean-timeout takes a positive number of seconds, or 0 for production timeouts.");
                     }
+
+                    o.CleanTimeout = clt;
                     break;
             }
         }
@@ -638,6 +650,8 @@ internal sealed class CliOptions
               --whole-vocabulary                Send the whole vocabulary to a model on this PC when it fits
                                                 (Send your whole vocabulary when it fits), through the
                                                 production admission path with --vocabulary mentioned.
+              --admitted                        Use production vocabulary admission without choosing a context
+                                                size or turning whole vocabulary on.
               --glossary-budget <auto|cloud|local|n>
                                                 Glossary term budget. auto (default) applies the app's own
                                                 budget for each model's provider and prompt style.
@@ -663,6 +677,7 @@ internal sealed class CliOptions
               --force                           Re-run models already present in results.json.
               --local-load-timeout <seconds>    Max wait for a local model to download+load (default: 1800).
               --clean-timeout <seconds>         Per-call cleanup timeout override (default: 180).
+                                                0 keeps production deadlines and the retry time split.
 
               Local roster entries (--local-models) take a runtime prefix: a bare name or foundry:<alias>
               is Foundry Local, ollama:<model> and lmstudio:<model> go through the OpenAI-compatible

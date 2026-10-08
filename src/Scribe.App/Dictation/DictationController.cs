@@ -49,6 +49,7 @@ internal sealed class DictationController : IDisposable
     private readonly VocabularyPublisher _vocabulary;
     private readonly ICleanupFailureLog _failureLog;
     private readonly LastTranscriptStore _lastTranscript;
+    private readonly PlainTextOnce _plainTextOnce;
     private readonly ISettingsRepository _settingsRepository;
     private readonly ILogger<DictationController> _log;
 
@@ -104,7 +105,8 @@ internal sealed class DictationController : IDisposable
         LastTranscriptStore lastTranscript,
         ISettingsRepository settingsRepository,
         ILogger<DictationController> log,
-        PerfFlags? perfFlags = null)
+        PerfFlags? perfFlags = null,
+        PlainTextOnce? plainTextOnce = null)
     {
         _hotkeys = hotkeys;
         _audio = audio;
@@ -117,6 +119,7 @@ internal sealed class DictationController : IDisposable
         _vocabulary = vocabulary;
         _failureLog = failureLog;
         _lastTranscript = lastTranscript;
+        _plainTextOnce = plainTextOnce ?? new PlainTextOnce();
         _settingsRepository = settingsRepository;
         _log = log;
         _perfFlags = perfFlags ?? PerfFlags.None;
@@ -170,6 +173,7 @@ internal sealed class DictationController : IDisposable
     /// recovery path instead of leaving the preserved text undiscoverable.
     /// </summary>
     public event Action? InjectionFailed;
+    public event Action? FormattingConflict;
 
     /// <summary>
     /// Raised after a settings save changes the AI cleanup configuration and the new provider is
@@ -685,26 +689,36 @@ internal sealed class DictationController : IDisposable
         // recording began. A press turned away because the previous dictation is still processing releases its own latch
         // (see DictationStartPolicy), so a toggle's next tap starts a dictation instead of ending one that never began.
         var current = CurrentSettings;
+        PlainTextOnceState? plainTextOnceChange = null;
         var activation = DictationStartPolicy.BeginRecording(
             _lifecycle,
             () =>
             {
                 var targetWindow = GetForegroundWindow();
                 var binding = CaptureTriggerBinding.For(current, e.Trigger);
+                var captureSettings = DictationCaptureSettingsResolver.Resolve(current, e.Trigger);
+                var targetApp = ProcessNameForWindow(targetWindow);
+                var startedTimestamp = Stopwatch.GetTimestamp();
+                var vocabulary = _vocabulary.Current;
+                // Only the admitted factory runs this. A paused, busy or refused press cannot take the one-shot choice.
+                var formatting = DictationFormatPlan.CaptureAdmitted(
+                    captureSettings, targetApp, _plainTextOnce, out plainTextOnceChange);
 
                 // The vocabulary generation is taken here, at the recording's admission, with its settings: a lock-free
                 // read of the newest complete generation, so a Save while this dictation runs changes nothing it uses.
                 return new CaptureContext(
-                    DictationCaptureSettingsResolver.Resolve(current, e.Trigger),
+                    captureSettings,
                     targetWindow,
-                    ProcessNameForWindow(targetWindow),
-                    Stopwatch.GetTimestamp(),
+                    targetApp,
+                    startedTimestamp,
                     e.Activation,
                     binding?.Mode ?? HotkeyMode.Hold,
                     binding,
-                    _vocabulary.Current);
+                    vocabulary,
+                    formatting);
             },
             () => _hotkeys.CancelToggle(e.Activation));
+        _plainTextOnce.NotifyConsumption(plainTextOnceChange);
 
         if (activation.Capture is not { } capture)
         {
@@ -1041,7 +1055,8 @@ internal sealed class DictationController : IDisposable
             reason,
             capture.ShortcutMode,
             capture.Shortcut,
-            capture.Vocabulary);
+            capture.Vocabulary,
+            capture.Formatting);
 
         // Everything from here to the hand-off is guarded: the admission is ended only by the processing task, so a
         // throw before that task starts would leave the controller Processing for good.
@@ -1251,7 +1266,7 @@ internal sealed class DictationController : IDisposable
 
             var targetApp = session.TargetApp;
             var profile = AppProfileMatcher.Match(settings.Profiles, targetApp);
-            var newlineMode = profile?.NewlineHandling ?? settings.NewlineHandling;
+            var newlineMode = session.Formatting.NewlineHandling;
             var cleanupWritingStyle = CleanupWritingStyleFor(settings, targetApp);
             if (profile is not null)
             {
@@ -1436,7 +1451,7 @@ internal sealed class DictationController : IDisposable
             // Terminals treat an injected newline as Enter, so AI-cleanup paragraph breaks would
             // submit several partial messages; flatten per the configured mode (the profile's
             // override wins when set) before injecting.
-            var flattened = InjectionTextFormatter.Apply(text, newlineMode, targetApp);
+            var flattened = session.Formatting.Represent(text);
             if (!ReferenceEquals(flattened, text))
             {
                 _log.LogInformation(
@@ -1445,6 +1460,21 @@ internal sealed class DictationController : IDisposable
                 text = flattened;
             }
             report.FinalText = text;
+            report.Formatting = session.Formatting;
+            if (session.Formatting.Decision == DictationFormatDecision.MarkdownNewlineConflict)
+            {
+                TryLog(log => log.LogWarning(
+                    "#{Id} app formatting refused: {Code}; legacy plain text and delivery used.",
+                    session.Id, DictationFormatDecision.MarkdownNewlineConflict));
+                try
+                {
+                    if (!IsClosing) FormattingConflict?.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    TryLog(log => log.LogWarning("Could not show the app formatting notice ({Failure}).", FailureShape.Describe(ex)));
+                }
+            }
 
             // Only the target is given the space after the dictation (AddSpaceAfterDictation), and only here, after the
             // line breaks were handled, which trims the text for a single-line target. DictationInsertion keeps the text
@@ -1457,7 +1487,7 @@ internal sealed class DictationController : IDisposable
                 settings.AddSpaceAfterDictation,
                 _lastTranscript,
                 typed => _injector.Inject(
-                    typed, settings.InjectionMethod, session.TargetWindow, settings.ShiftEnterLineBreaks, targetApp),
+                    typed, session.Formatting.InjectionMethod, session.TargetWindow, session.Formatting.ShiftEnterLineBreaks, targetApp),
                 cancellationToken);
             injectionTimer.Stop();
             var injection = insertion.Injection;
@@ -1662,10 +1692,7 @@ internal sealed class DictationController : IDisposable
     {
         try
         {
-            var model = settings.AiCleanupProvider == CleanupProvider.AzureFoundry
-                ? settings.AiCleanupAzureDeployment
-                : settings.AiCleanupModel;
-            _failureLog.Add(CleanupFailure.New(reason, settings.AiCleanupProvider.ToString(), model, rawText));
+            _failureLog.Add(CleanupFailure.FromSettings(settings, reason, rawText));
         }
         catch (Exception ex)
         {
@@ -1835,7 +1862,11 @@ internal sealed class DictationController : IDisposable
     /// step of its exit, so nothing raised while the UI thread works through the later teardown steps is queued for an
     /// app that is closing. Idempotent; <see cref="Dispose"/> calls it too.
     /// </summary>
-    public void BeginShutdown() => _lifecycle.BeginShutdown();
+    public void BeginShutdown()
+    {
+        _lifecycle.BeginShutdown();
+        _plainTextOnce.Dispose();
+    }
 
     /// <summary>
     /// Stops the dictation loop for good. Nothing new starts once this begins; a dictation still
@@ -1845,6 +1876,7 @@ internal sealed class DictationController : IDisposable
     /// </summary>
     public void Dispose()
     {
+        BeginShutdown();
         // The order (close admission, close the timers, cancel, stop the inputs below, wait for processing, then complete
         // history, then release the token source) is the lifecycle's, where it is tested.
         var stopInputs = new List<TeardownStep>
@@ -1938,7 +1970,8 @@ internal sealed class DictationController : IDisposable
         DictationStopReason StopReason,
         HotkeyMode ShortcutMode,
         HotkeyBinding? Shortcut,
-        VocabularyGeneration Vocabulary);
+        VocabularyGeneration Vocabulary,
+        DictationFormatPlan Formatting);
 
     // The writing style a dictation is cleaned with: the app profile's or the global one, plus the one-line rule when the
     // target would treat a line break as Enter. Worked out the same way when the recording starts, to ready the model with
@@ -1965,7 +1998,8 @@ internal sealed class DictationController : IDisposable
         long HotkeyActivation,
         HotkeyMode ShortcutMode,
         HotkeyBinding? Shortcut,
-        VocabularyGeneration Vocabulary);
+        VocabularyGeneration Vocabulary,
+        DictationFormatPlan Formatting);
 
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();
@@ -2024,6 +2058,7 @@ internal sealed class DictationPipelineReport(
 
     // The text as dictated, which is also what history keeps: without the space the target may have been given after it.
     public string? FinalText { get; set; }
+    public DictationFormatPlan? Formatting { get; set; }
     public InjectionResult? Injection { get; set; }
 
     // Whether the target was given a space after FinalText (AddSpaceAfterDictation).

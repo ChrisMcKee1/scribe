@@ -79,6 +79,20 @@ replacement text, snippet templates, per-application profiles, writing-style
 instructions, shortcut choices, provider configuration, and other preferences.
 Imported dictionaries and word packs are also stored locally.
 
+Windows' optional app-aware formatting is off by default. Its format and typing preferences are
+ordinary saved settings, matched by the same application process name the existing profiles use.
+It does not inspect website addresses, window titles, field contents, password fields or IME state,
+and it does not add application names or other target details to AI cleanup requests. Turning it on
+does not turn AI cleanup on or make another AI rewrite. Literal Markdown source is still plain text
+delivery, not HTML or RTF; it keeps source already produced by the pipeline, without repairing any
+changes an earlier cleanup made.
+
+Use plain text once is an in-memory Windows preference, visibly armed for at most 60 seconds and
+taken only by the next accepted recording. Refused shortcuts do not take it. Cancellation, expiry
+and shutdown clear it. It is not saved and does not bypass recognition, AI cleanup, the dictionary
+or snippets. Final text is kept for recovery before insertion; history keeps it only after successful
+insertion. Only the target receives the optional space after a dictation.
+
 ### Cleanup failure samples
 
 When optional AI cleanup fails, Scribe may retain a shortened sample of the
@@ -242,6 +256,11 @@ provider or model, Scribe first sends a short test request containing the word
 "ok" and the cleanup instructions, with none of your vocabulary. If a Microsoft
 Foundry deployment does not accept that request's format, Scribe sends the same
 test once more in the other format it supports.
+For Ollama at its default local address, a test that uses its whole answer
+allowance without returning usable text is followed by one larger test of a
+fixed, synthetic rewrite. It contains no dictation or vocabulary. Both tests
+carry the cleanup instructions and the writing style being checked. Scribe
+keeps the extra answer allowance in memory only for that configuration.
 
 When AI cleanup uses a server on this PC, such as Ollama or LM Studio at a
 `localhost` address, starting a dictation also sends that server the cleanup
@@ -391,6 +410,20 @@ information such as your IP address, request time, and requested file. Depending
 on the installation and feature used, these services may include Microsoft,
 GitHub, or a model publisher's hosting service. No microphone audio or
 transcript content is included in these requests.
+
+On Windows, choosing Download under Ollama's model list sends only the entered model name to Ollama
+on this PC, which downloads it from its model registry. The registry may receive the requested model
+name and ordinary network information, but no dictation, writing style or vocabulary. Opening Settings
+does not start a download. The catalog link opens Ollama's website in your browser. Canceling leaves
+downloaded parts in Ollama so they can be resumed, and Scribe does not delete the models Ollama stores.
+After a successful download, switching to that model is a separate confirmation; only that choice
+is saved, not other unsaved Settings edits.
+Start Ollama launches its installed command-line program as a server on this PC, with its cloud
+features disabled in that child process only. Scribe changes no parent-process environment or Windows
+startup preference. Closing Settings does not cancel a requested Start or Stop. Stop Ollama and
+Scribe shutdown stop only the process Scribe started and its children; Windows also ends them if
+Scribe exits immediately for an update, crashes or is force-killed. An Ollama instance already
+running outside Scribe is left alone.
 
 ## Storage and security
 

@@ -20,6 +20,7 @@ public partial class SettingsWindow
 
     private void LoadProfiles()
     {
+        PopulateProfileFormattingChoices();
         ProfileNewlineCombo.DisplayMemberPath = nameof(ProfileNewlineChoice.Label);
         ProfileNewlineCombo.ItemsSource = new[]
         {
@@ -37,11 +38,17 @@ public partial class SettingsWindow
                 Processes = string.Join(", ", ProgramNames.Normalize(profile.ProcessNames)),
                 WritingStyle = profile.WritingStyle ?? string.Empty,
                 NewlineHandling = profile.NewlineHandling,
+                TextFormat = profile.TextFormat,
+                InjectionMethod = profile.InjectionMethod,
+                ShiftEnterLineBreaks = profile.ShiftEnterLineBreaks,
                 Origin = DraftRowOrigin.Saved,
                 LoadedName = profile.Name,
                 LoadedProcesses = string.Join(", ", ProgramNames.Normalize(profile.ProcessNames)),
                 LoadedWritingStyle = profile.WritingStyle ?? string.Empty,
                 LoadedNewlineHandling = profile.NewlineHandling,
+                LoadedTextFormat = profile.TextFormat,
+                LoadedInjectionMethod = profile.InjectionMethod,
+                LoadedShiftEnterLineBreaks = profile.ShiftEnterLineBreaks,
             });
         }
 
@@ -78,6 +85,7 @@ public partial class SettingsWindow
             var choices = (ProfileNewlineChoice[])ProfileNewlineCombo.ItemsSource;
             ProfileNewlineCombo.SelectedItem =
                 choices.FirstOrDefault(c => c.Mode == row.NewlineHandling) ?? choices[0];
+            ShowProfileFormatting(row);
         }
         finally
         {
@@ -166,6 +174,9 @@ public partial class SettingsWindow
             Processes = string.Join(", ", ProgramNames.Normalize(profile.ProcessNames)),
             WritingStyle = profile.WritingStyle ?? string.Empty,
             NewlineHandling = profile.NewlineHandling,
+            TextFormat = profile.TextFormat,
+            InjectionMethod = profile.InjectionMethod,
+            ShiftEnterLineBreaks = profile.ShiftEnterLineBreaks,
             Origin = DraftRowOrigin.New,
             Touched = true,
         };
@@ -433,19 +444,22 @@ public partial class SettingsWindow
     private List<AppProfile> BuildProfiles() =>
         ProfileBuilder.Build(
             _profileRows.Select(r => new ProfileBuilder.Row(
-                r.Name, r.Processes, r.WritingStyle, r.NewlineHandling)).ToList());
+                r.Name, r.Processes, r.WritingStyle, r.NewlineHandling,
+                r.TextFormat, r.InjectionMethod, r.ShiftEnterLineBreaks)).ToList());
 
     // What a Save stored for each profile row, read in the same moment as the rows BuildProfiles turned into the stored
     // profiles. A word pack Save awaits its preparation between reading the rows and committing, so an edit made meanwhile
     // isn't in what was stored and must stay unsaved (review of 7b722fe), as the snippets' submission does.
     private sealed record ProfileSubmission(
-        ProfileRow Row, string? Name, string? Processes, string? WritingStyle, NewlineInjectionMode? NewlineHandling);
+        ProfileRow Row, string? Name, string? Processes, string? WritingStyle, NewlineInjectionMode? NewlineHandling,
+        DictationTextFormat? TextFormat, InjectionMethod? InjectionMethod, bool? ShiftEnterLineBreaks);
 
     private IReadOnlyList<ProfileSubmission> CaptureProfileSubmission() =>
         CaptureProfileSubmission(_profileRows.ToList());
 
     private static IReadOnlyList<ProfileSubmission> CaptureProfileSubmission(IReadOnlyList<ProfileRow> rows) =>
-        [.. rows.Select(row => new ProfileSubmission(row, row.Name, row.Processes, row.WritingStyle, row.NewlineHandling))];
+        [.. rows.Select(row => new ProfileSubmission(row, row.Name, row.Processes, row.WritingStyle, row.NewlineHandling,
+            row.TextFormat, row.InjectionMethod, row.ShiftEnterLineBreaks))];
 
     // Each submitted row still in the list takes what was submitted as its saved baseline, in memory. A row edited since it
     // was submitted keeps its edit, now unsaved against that baseline, and stays touched.
@@ -464,10 +478,16 @@ public partial class SettingsWindow
             row.LoadedProcesses = submitted.Processes;
             row.LoadedWritingStyle = submitted.WritingStyle;
             row.LoadedNewlineHandling = submitted.NewlineHandling;
+            row.LoadedTextFormat = submitted.TextFormat;
+            row.LoadedInjectionMethod = submitted.InjectionMethod;
+            row.LoadedShiftEnterLineBreaks = submitted.ShiftEnterLineBreaks;
             if (string.Equals(row.Name, submitted.Name, StringComparison.Ordinal) &&
                 string.Equals(row.Processes, submitted.Processes, StringComparison.Ordinal) &&
                 string.Equals(row.WritingStyle, submitted.WritingStyle, StringComparison.Ordinal) &&
-                row.NewlineHandling == submitted.NewlineHandling)
+                row.NewlineHandling == submitted.NewlineHandling &&
+                row.TextFormat == submitted.TextFormat &&
+                row.InjectionMethod == submitted.InjectionMethod &&
+                row.ShiftEnterLineBreaks == submitted.ShiftEnterLineBreaks)
             {
                 row.Touched = false;
             }
@@ -475,7 +495,8 @@ public partial class SettingsWindow
 
         // The whole submission is what is stored now, a profile deleted while the Save waited included.
         _loadedProfileRows = [.. submission.Select(submitted => new LoadedProfileDraftRow(
-            submitted.Row.RowKey, submitted.Name, submitted.Processes, submitted.WritingStyle, submitted.NewlineHandling))];
+            submitted.Row.RowKey, submitted.Name, submitted.Processes, submitted.WritingStyle, submitted.NewlineHandling,
+            submitted.TextFormat, submitted.InjectionMethod, submitted.ShiftEnterLineBreaks))];
     }
 
     private IReadOnlyList<ProfileDraftRow> ProfileDraftRows() =>
@@ -490,7 +511,13 @@ public partial class SettingsWindow
             WritingStyle: row.WritingStyle,
             LoadedWritingStyle: row.LoadedWritingStyle,
             NewlineHandling: row.NewlineHandling,
-            LoadedNewlineHandling: row.LoadedNewlineHandling)).ToList();
+            LoadedNewlineHandling: row.LoadedNewlineHandling,
+            TextFormat: row.TextFormat,
+            LoadedTextFormat: row.LoadedTextFormat,
+            InjectionMethod: row.InjectionMethod,
+            LoadedInjectionMethod: row.LoadedInjectionMethod,
+            ShiftEnterLineBreaks: row.ShiftEnterLineBreaks,
+            LoadedShiftEnterLineBreaks: row.LoadedShiftEnterLineBreaks)).ToList();
 
     private void ClearProfileValidation()
     {

@@ -1,5 +1,6 @@
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
+using Scribe.Core.TextInjection;
 
 namespace Scribe.Core.Settings;
 
@@ -27,6 +28,7 @@ public enum ValidationCode
     ClientIdEmpty,
     ClientSecretEmpty,
     DurationOutOfRange,
+    MarkdownNewlineConflict,
 }
 
 public enum ValidationSeverity
@@ -78,7 +80,13 @@ public sealed record ProfileDraftRow(
     string? WritingStyle = null,
     string? LoadedWritingStyle = null,
     NewlineInjectionMode? NewlineHandling = null,
-    NewlineInjectionMode? LoadedNewlineHandling = null);
+    NewlineInjectionMode? LoadedNewlineHandling = null,
+    DictationTextFormat? TextFormat = null,
+    DictationTextFormat? LoadedTextFormat = null,
+    InjectionMethod? InjectionMethod = null,
+    InjectionMethod? LoadedInjectionMethod = null,
+    bool? ShiftEnterLineBreaks = null,
+    bool? LoadedShiftEnterLineBreaks = null);
 
 public sealed record DurationDraftField(
     SettingsPage Page,
@@ -125,6 +133,7 @@ public static class SettingsDraftValidator
         ValidateDictionary(draft.DictionaryRows ?? []);
         ValidateSnippets(draft.SnippetRows ?? []);
         ValidateProfiles(draft.ProfileRows ?? []);
+        ValidateAppFormatting(draft.Settings);
         ValidateShortcuts(draft.Settings);
         ValidateProvider(draft.Settings);
         ValidateDurations(draft.DurationFields ?? []);
@@ -276,6 +285,29 @@ public static class SettingsDraftValidator
             }
         }
 
+        void ValidateAppFormatting(AppSettings settings)
+        {
+            if (!settings.AppAwareFormattingEnabled)
+            {
+                return;
+            }
+
+            var rows = (draft.ProfileRows ?? []).Where(row => !IsPlaceholder(row)).ToList();
+            for (var i = 0; i < settings.Profiles.Count; i++)
+            {
+                var profile = settings.Profiles[i];
+                var format = profile.TextFormat ?? settings.DefaultTextFormat;
+                var newline = profile.NewlineHandling ?? settings.NewlineHandling;
+                if (DictationFormatPlan.ConflictsWithNewlines(format, newline, null) ||
+                    ProgramNames.Normalize(profile.ProcessNames).Any(process =>
+                        DictationFormatPlan.ConflictsWithNewlines(format, newline, process)))
+                {
+                    Add(ValidationCode.MarkdownNewlineConflict, SettingsPage.AppProfiles, "ProfileTextFormatCombo",
+                        i < rows.Count ? rows[i].RowKey : null, DictationFormattingText.NewlineConflict);
+                }
+            }
+        }
+
         void ValidateProvider(AppSettings settings)
         {
             if (!settings.EnableAiCleanup)
@@ -387,7 +419,10 @@ public static class SettingsDraftValidator
         IsBlank(row.Name) &&
         IsBlank(row.Apps) &&
         IsBlank(row.WritingStyle) &&
-        row.NewlineHandling is null;
+        row.NewlineHandling is null &&
+        row.TextFormat is null &&
+        row.InjectionMethod is null &&
+        row.ShiftEnterLineBreaks is null;
 
     private static bool IsBlank(string? value) => string.IsNullOrWhiteSpace(value);
 
@@ -422,7 +457,10 @@ public static class SettingsDraftValidator
         IsSame(Trim(row.Name), Trim(row.LoadedName)) &&
         IsSame(Trim(row.Apps), Trim(row.LoadedApps)) &&
         IsSame(Trim(row.WritingStyle), Trim(row.LoadedWritingStyle)) &&
-        row.NewlineHandling == row.LoadedNewlineHandling;
+        row.NewlineHandling == row.LoadedNewlineHandling &&
+        row.TextFormat == row.LoadedTextFormat &&
+        row.InjectionMethod == row.LoadedInjectionMethod &&
+        row.ShiftEnterLineBreaks == row.LoadedShiftEnterLineBreaks;
 
     private static bool IsSame(string left, string right) =>
         string.Equals(left, right, StringComparison.Ordinal);

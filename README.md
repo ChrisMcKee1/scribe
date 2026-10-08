@@ -140,6 +140,36 @@ And a few more things:
 - **Your Windows settings.** Settings and the recording indicator follow your Windows text size, and the
   recording indicator follows your contrast theme and animation setting.
 
+### App-aware formatting on Windows (opt-in)
+
+In **Settings > Dictation**, **Use app-aware formatting** starts off, with **Plain text** as its
+default. Turning it on lets the first matching **App profile** inherit that format or choose Plain
+text or **Literal Markdown source**, plus its own typing method and typed Enter or Shift+Enter.
+Apps without a matching profile use plain text. Save applies these choices; Close, then Discard changes,
+drops unsaved edits.
+Turning it off ignores all of these new choices, not the existing writing styles or line-break rules.
+It never turns AI cleanup on.
+
+Literal Markdown source keeps characters already supplied by recognition, cleanup, your dictionary
+or a snippet. It does not convert prose, recover missing bullets, number a list, invent links or add
+code fences. Plain text also keeps existing markers. Cleanup can still change code or URLs, strip
+fences or join chunks with spaces before this step; this setting does not undo that. There is no
+HTML or RTF paste mode.
+
+Literal Markdown source needs preserved line breaks. Save rejects known one-line conflicts; an
+inherited conflict at dictation time uses the previous plain-text behavior and typing method, with
+a notice. Choose Plain text, or Keep line breaks and check delivery in the target app yourself.
+A program match cannot tell a document from a message box, a command window or a different field in
+the same window. Teams, Copilot and Scout message boxes are not certified for multiline delivery.
+Remote Desktop and virtual machine clients are still always typed into, never pasted into.
+**Try dictation** shows the selected format and requested delivery beside the result.
+
+The tray's **Use plain text once** shows an armed check and tooltip, takes only the next recording
+Scribe accepts, and expires after 60 seconds. Choose it again to cancel. It does not bypass AI cleanup,
+your dictionary or snippets, and is never saved. Choices are captured when recording starts, so a
+later Save affects the next recording. Older builds ignore the new settings; saving there can lose
+these choices.
+
 ## AI cleanup, if you want it
 
 AI cleanup is off until you turn it on. It fixes punctuation and capitalization, drops fillers such as
@@ -175,6 +205,49 @@ the text is typed. You choose where it runs:
 
 Settings doesn't recommend a model. The [local model benchmark](docs/local-model-benchmark.md) compares 39
 open models across Foundry Local, Ollama and LM Studio, and the cloud models, on quality and time.
+
+With Ollama, keep its Windows app running in the background. Seeing a model in Settings isn't proof that
+it has loaded or can answer. Ollama chooses where its model runs; Scribe doesn't force CPU mode or set
+how many model layers use the GPU. After a model loads, `ollama ps` shows whether it runs on the GPU,
+the CPU, or both. This is separate from speech recognition, which runs on the CPU.
+
+On Windows, **Download another model** below Ollama's model list links to its catalog and takes a model
+name, such as `deepseek-r1`, `gemma4:12b` or `VicRodger27/Writex:4b`. You can also paste the catalog's
+`ollama run` or `ollama pull` command; Scribe uses only its model name, never executes the pasted command,
+and refuses extra options or instructions. Keep the publisher and tag when the catalog shows them:
+an untagged name asks Ollama for `latest`, which some publishers do not offer.
+Choose **Download** to have Ollama download it, with progress and a cancel
+button. This uses the internet and can take several GB of disk space, but sends no dictation, writing
+style or vocabulary. Nothing downloads just by opening Settings. Ollama keeps canceled parts to resume
+later. Once the download finishes, Scribe refreshes the list and asks whether to use the model:
+**Use model** saves that choice immediately and checks it in the background when AI cleanup is on,
+without saving other edits in the window. The AI cleanup status says when it is ready; saving a choice
+alone is not proof that the model can answer. No app restart is needed to apply a normal model switch.
+**Keep current model** leaves the choice unchanged. Ollama cloud models cannot be downloaded here.
+Ollama owns the downloaded files; Scribe does not remove them when AI cleanup is turned off.
+Some Ollama models, including the measured DeepSeek-R1 build, still think when asked not to. If the
+short readiness check exhausts its answer allowance without usable text, Scribe checks one fixed
+synthetic rewrite with more room and keeps up to 2,048 extra answer tokens for that configuration.
+The allowance is fitted into the model's context before vocabulary; Scribe never silently increases
+your context-size setting. The larger check has the same first-attempt deadline as a dictation.
+An unusable rewrite or insufficient context leaves AI cleanup unavailable and dictation still works
+without it. Models that answer the ordinary check keep their existing limits. The allowance is bounded,
+not a promise that every thinking model can finish every rewrite: a slow or complex answer can still
+fall back to what you said.
+When an AI service reports that it cut off or filtered an answer, Scribe keeps that part of your
+dictation as heard and reports the failure, rather than typing a partial rewrite. A model using the
+extra reasoning allowance must also explicitly report a completed answer.
+
+**Start Ollama** starts a local-only server using the installed Ollama app's command-line program.
+It becomes **Stop Ollama** for that instance. Closing Settings doesn't stop it or cancel a requested
+Start or Stop. It stops when Scribe closes, including update restarts and forced exits. An Ollama
+instance already running outside Scribe is shown, but Scribe never stops it. Stopping warns that AI cleanup,
+downloads and other apps using that instance will lose access until it starts again.
+
+If Ollama can list models but AI cleanup can't start, check `%LOCALAPPDATA%\Ollama\server.log`. A native
+GPU or driver crash can leave model listing working while model loading fails. Restarting Ollama may
+not reset the driver: save your work and restart Windows before retrying. If it still fails, follow
+[Ollama's GPU troubleshooting guidance](https://docs.ollama.com/troubleshooting).
 
 Test connection checks Microsoft Foundry or another AI service before you save. If the model isn't ready
 or doesn't answer, Scribe types what it heard, and you can turn AI cleanup on or off from the tray at any
