@@ -454,6 +454,18 @@ in certification (see [Updating the listing](#updating-the-listing-automatically
 gh workflow run store.yml -f tag=v<version> -f draft_only=true
 ```
 
+To read the existing submission state without building, uploading or committing anything:
+
+```
+gh workflow run store.yml -f status_only=true
+```
+
+Use that check if publishing reports `CommitStarted` and then fails while polling status. An
+upload or commit may already have succeeded; do not publish again just because the watcher failed.
+The status-only job uses fresh authentication and the same CLI version, and never edits the
+submission. A pending commit or certification can still need time before the Store reports its
+next state.
+
 Constraints worth knowing before you rely on this:
 
 - **Never mix the two paths for one release.** The rule cuts both ways, and the second half is the
