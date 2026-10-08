@@ -130,21 +130,21 @@ public sealed class OverlayPipeProtocolTests
             "public string ReplayLine => Demand == OverlayDemand.Transient ? OverlayPipeProtocol.Hide : Line;",
             client,
             StringComparison.Ordinal);
-        Assert.Contains("writer.WriteLine(_desired.ReplayLine);", client, StringComparison.Ordinal);
+        Assert.Contains("WriteWithTimeout(_desired.ReplayLine);", client, StringComparison.Ordinal);
         Assert.Contains("Enqueue(desired.ReplayLine, desired, ensureAlive: false);", client, StringComparison.Ordinal);
-        Assert.DoesNotContain("writer.WriteLine(_desired.Line);", client, StringComparison.Ordinal);
+        Assert.DoesNotContain("WriteWithTimeout(_desired.Line);", client, StringComparison.Ordinal);
         Assert.DoesNotContain("Enqueue(_desired.Line", client, StringComparison.Ordinal);
 
         // The outcome is transient and needs the helper; it keeps the helper from when its write returns, never from when
         // it was taken (a write can take up to its timeout and still succeed).
         Assert.Matches(new Regex(@"new DesiredState\(OverlayPipeProtocol\.OutcomeLine\(outcome\), OverlayDemand\.Transient\)"), client);
-        Assert.Matches(new Regex(@"Enqueue\(desired\.Line, desired, ensureAlive: true, showsFor: outcome\.OnScreen\)"), client);
+        Assert.Matches(new Regex(@"Enqueue\(desired\.Line, desired, ensureAlive: true, showsFor: outcome\.OnScreen, delivered: delivered\)"), client);
         Assert.Contains(
             "_lifetime.OnStateCommand(\n            nowMs, item.Stamp, item.EnsureAlive, item.CancelsRetry, _desired.Demand, helper, IsSuperseded(item));",
             client.ReplaceLineEndings("\n"),
             StringComparison.Ordinal);
         Assert.Matches(
-            new Regex(@"WriteWithTimeout\([^;]+\);\s*if \(item\.ShowsForMs > 0\)\s*\{\s*_lifetime\.OnShown\(Environment\.TickCount64, item\.ShowsForMs\);"),
+            new Regex(@"WriteWithTimeout\(item\.AppliedAnchor \? AppliedAnchorLine : item\.Text\);[\s\S]*?if \(item\.ShowsForMs > 0\)\s*\{\s*_lifetime\.OnShown\(Environment\.TickCount64, item\.ShowsForMs\);"),
             client);
         Assert.Single(Regex.Matches(client, Regex.Escape("_lifetime.OnShown(")));
     }
@@ -166,10 +166,10 @@ public sealed class OverlayPipeProtocolTests
                  {
                      ("public void ShowRecording()", "var desired = DesiredState.Recording();"),
                      ("public void ShowProcessing(bool aiPolishing, bool startingLocalModel = false)", "var desired = DesiredState.Processing(aiPolishing, startingLocalModel);"),
-                     ("public void ShowOutcome(PillOutcome outcome)", "var desired = new DesiredState(OverlayPipeProtocol.OutcomeLine(outcome), OverlayDemand.Transient);"),
+                     ("public void ShowOutcome(PillOutcome outcome, Action<bool>? delivered)", "var desired = new DesiredState(OverlayPipeProtocol.OutcomeLine(outcome), OverlayDemand.Transient);"),
                      ("public void HideOverlay()", "var desired = DesiredState.Hidden();"),
                      // A warning goes out for the live recording's state, and goes with it once a newer state replaces it.
-                     ("public void ShowRecordingWarning(string? reason)", "var desired = _desired is { IsRecording: true } recording ? recording : DesiredState.Recording();"),
+                     ("public void ShowRecordingWarning(string? reason, Action<bool>? delivered)", "var desired = _desired is { IsRecording: true } recording ? recording : DesiredState.Recording();"),
                  })
         {
             var body = Body(client, method);
@@ -182,7 +182,7 @@ public sealed class OverlayPipeProtocolTests
 
         // The queue carries each command's state; without it no command is ever judged stale.
         Assert.Matches(
-            new Regex(@"private void Enqueue\(string text, DesiredState\? state,[^)]*\) =>\s*EnqueueStamped\(new Command\([^;]*State: state\)\);"),
+            new Regex(@"private void Enqueue\(\s*string text, DesiredState\? state,[^)]*\) =>\s*EnqueueStamped\(new Command\([^;]*State: state,\s*Delivery: [^;]*\)\);"),
             client);
 
         // Judged before the decision (a stale command launches nothing) and again right before the write, after any launch.
@@ -238,7 +238,7 @@ public sealed class OverlayPipeProtocolTests
         var render = shell[shell.IndexOf("private void RenderDictationState(DictationStateChange change)", StringComparison.Ordinal)..];
         render = render[..render.IndexOf("\n    }\n", StringComparison.Ordinal)];
         Assert.Matches(
-            new Regex(@"default:\s*if \(change\.Outcome is \{ \} outcome\)\s*\{\s*_overlay\?\.ShowOutcome\(outcome\);\s*\}\s*else\s*\{\s*_overlay\?\.HideOverlay\(\);\s*\}"),
+            new Regex(@"default:\s*if \(change\.Outcome is \{ \} outcome\)\s*\{[\s\S]*?_overlay\?\.ShowOutcome\(outcome, delivered =>[\s\S]*?\}\s*else\s*\{\s*_overlay\?\.HideOverlay\(\);\s*\}"),
             render);
 
         // The failure flash, which fired before the text was typed and for errors alike, is gone; the pill hears about a

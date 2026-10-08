@@ -34,8 +34,44 @@ public sealed class ChoiceControlsTests
 
         Assert.Equal(1, set.Minimum);
         Assert.Equal(120, set.Maximum);
+        Assert.Equal(
+            new int?[] { 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, null },
+            set.Choices.Select(choice => choice.Value));
         Assert.Contains(set.Choices, choice => choice.Value == 0 && choice.Label == "Never");
         Assert.Contains(set.Choices, choice => choice.Value == 10 && choice.Label == "After 10 minutes (default)" && choice.IsSelected);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(5)]
+    [InlineData(10)]
+    [InlineData(15)]
+    [InlineData(20)]
+    [InlineData(25)]
+    [InlineData(30)]
+    [InlineData(35)]
+    [InlineData(40)]
+    [InlineData(45)]
+    [InlineData(50)]
+    [InlineData(55)]
+    [InlineData(60)]
+    public void Every_idle_release_preset_keeps_the_stored_selection(int minutes)
+    {
+        var set = DurationChoices.Build(DurationChoiceKind.IdleRelease, minutes);
+        var selected = Assert.Single(set.Choices, choice => choice.IsSelected);
+        Assert.Equal(minutes, selected.Value);
+        Assert.False(selected.IsCustom);
+    }
+
+    [Theory]
+    [InlineData(3)]
+    [InlineData(75)]
+    [InlineData(120)]
+    public void An_existing_custom_idle_time_is_not_changed_to_a_new_preset(int minutes)
+    {
+        var set = DurationChoices.Build(DurationChoiceKind.IdleRelease, minutes);
+        Assert.True(Assert.Single(set.Choices, choice => choice.IsSelected).IsCustom);
+        Assert.Null(DurationChoices.ValidateCustom(DurationChoiceKind.IdleRelease, SettingsPage.Advanced, "IdleReleaseCustomBox", minutes));
     }
 
     [Fact]

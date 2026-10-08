@@ -66,6 +66,7 @@ public partial class SettingsWindow
         }
 
         var app = SelectedLocalApp;
+        AiIdleReleaseHintText.Text = LocalModelTuningText.IdleReleaseHint(app);
         OllamaTuningExpander.Visibility = app == LocalServerApp.Ollama ? Visibility.Visible : Visibility.Collapsed;
         LmStudioTuningExpander.Visibility = app == LocalServerApp.LmStudio ? Visibility.Visible : Visibility.Collapsed;
 

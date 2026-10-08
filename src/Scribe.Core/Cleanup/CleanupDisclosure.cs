@@ -18,6 +18,10 @@ public static class CleanupDisclosure
     /// <summary>The Add to dictionary line shown while AI cleanup is on.</summary>
     public const string AddToDictionaryVocabularyLine = "AI cleanup also receives your words and word pack words as vocabulary.";
 
+    public const string AiClientRequestMetadata =
+        "Requests made through Scribe's OpenAI client also send its language and version, the operating system, " +
+        "processor architecture, and runtime name and version as request headers. These go to the same AI service.";
+
     /// <summary>
     /// The "What leaves this PC" card on the AI cleanup page: what every cleanup request carries, and
     /// where it goes.
@@ -32,7 +36,7 @@ public static class CleanupDisclosure
         $"characters, or {Count(CleanupPrompt.MaxGlossaryTermsLocal)} words or phrases with the short instructions. " +
         "A word from your dictionary or a word pack is not " +
         "vocabulary, and is not sent, when what Scribe writes for it spans more than one line or runs past " +
-        $"{Count(CleanupPrompt.MaxGlossaryTermChars)} characters, such as a signature.";
+        $"{Count(CleanupPrompt.MaxGlossaryTermChars)} characters, such as a signature. " + AiClientRequestMetadata;
 
     /// <summary>
     /// The request that readies a model on a server on this PC as a dictation starts (<see cref="AdmittedCleanup.Prewarm"/>):
@@ -43,8 +47,9 @@ public static class CleanupDisclosure
         "When AI cleanup runs on a server on this PC, such as Ollama or LM Studio, starting a dictation also sends that " +
         "server the cleanup instructions with no dictated text, unless it answered in the last " +
         $"{LocalAiServer.PrewarmAfterIdleSeconds} seconds and still holds the model at the size AI cleanup uses, so a model it " +
-        "unloaded, or holds at another size, is loaded again by the time you stop talking. It carries none of your vocabulary, unless \"" +
-        Settings.LocalModelTuningText.WholeVocabularyTitle + "\" is on for that app, when it carries as much of it as fits.";
+        "unloaded, or holds at another size, can be loaded while you speak. It carries none of your vocabulary, unless \"" +
+        Settings.LocalModelTuningText.WholeVocabularyTitle + "\" is on for that app, when it carries as much of it as fits. " +
+        "If the model was freed after that request, Scribe can send another readying request before cleanup.";
 
     /// <summary>
     /// What a model on this PC may receive beyond what the card above lists for a remote service: the whole vocabulary,
@@ -65,7 +70,8 @@ public static class CleanupDisclosure
         "starts, which models it has, which it holds in memory and how much each reads at once, asks it to free a model's " +
         "memory when AI cleanup stops using it, and, with a context size chosen for LM Studio, to load the model at that " +
         "size with a request holding the word \"ok\"; these requests stay on this PC and carry nothing you said, only an " +
-        "API key you saved for that address, if any.";
+        "API key you saved for that address, if any. With Never selected for idle memory, Scribe asks Ollama to keep its " +
+        "model loaded indefinitely with each new request. LM Studio keeps its own policy with Never.";
 
     /// <summary>The same card's second paragraph: the connection check, the readying request, and what is never sent.</summary>
     public static string WhatCleanupNeverSends { get; } =

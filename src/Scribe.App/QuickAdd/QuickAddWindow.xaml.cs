@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -64,7 +65,8 @@ public partial class QuickAddWindow : FluentWindow
         Action? OpenAdvancedSettings = null,
         Action<string>? ShowInSettings = null,
         Action<string>? AddItInSettings = null,
-        Action<string>? FixInstead = null);
+        Action<string>? FixInstead = null,
+        Func<string, bool>? CopyToClipboard = null);
 
     public readonly record struct QuickAddResult(
         DictionaryEntry Entry,
@@ -224,11 +226,6 @@ public partial class QuickAddWindow : FluentWindow
             SavedDetailText.Visibility = Visibility.Collapsed;
         }
 
-        if (CopyFixedButton is not null)
-        {
-            CopyFixedButton.Visibility = Visibility.Collapsed;
-        }
-
         _chips.Clear();
         for (var i = 0; i < _tokens.Count; i++)
         {
@@ -299,7 +296,7 @@ public partial class QuickAddWindow : FluentWindow
         _chips.Clear();
         _fixedTranscript = null;
         SavedDetailText.Visibility = Visibility.Collapsed;
-        CopyFixedButton.Visibility = Visibility.Collapsed;
+        UpdateCopyAction();
         if (keepCorrection)
         {
             ShowResult(new QuickDictionaryAdd.Plan(
@@ -717,11 +714,6 @@ public partial class QuickAddWindow : FluentWindow
             SavedDetailText.Visibility = Visibility.Collapsed;
         }
 
-        if (CopyFixedButton is not null)
-        {
-            CopyFixedButton.Visibility = Visibility.Collapsed;
-        }
-
         UpdateStatus(forceAnnouncement: false);
     }
 
@@ -794,6 +786,7 @@ public partial class QuickAddWindow : FluentWindow
         SaveCloseButton.IsEnabled = plan.CanSave;
         SaveButton.Content = plan.IsRemoval ? "Remove from dictation_s" : "_Save";
         SaveCloseButton.Content = plan.IsRemoval ? "Remove _and close" : "Save _and close";
+        UpdateCopyAction();
         UpdateHint();
 
         var timing = forceAnnouncement
@@ -841,6 +834,21 @@ public partial class QuickAddWindow : FluentWindow
     }
 
     private QuickDictionaryAdd.Plan BuildPlan() => QuickDictionaryAdd.Build(CurrentRequest(), _vocabulary);
+
+    private void UpdateCopyAction()
+    {
+        if (CopyFixedButton is null)
+        {
+            return;
+        }
+
+        var plan = QuickDictionaryAdd.BuildCopy(CurrentRequest(), BuildPlan(), _dirtySinceSave);
+        CopyFixedButton.IsEnabled = plan.CanCopy;
+        CopyFixedButton.Content = plan.ButtonText;
+        CopyFixedButton.ToolTip = plan.HelpText;
+        AutomationProperties.SetName(CopyFixedButton, plan.Name);
+        AutomationProperties.SetHelpText(CopyFixedButton, plan.HelpText);
+    }
 
     private QuickDictionaryAdd.QuickAddRequest CurrentRequest() => new(
         HeardBox?.Text,
@@ -959,14 +967,14 @@ public partial class QuickAddWindow : FluentWindow
 
     private void SaveCloseButton_Click(object sender, RoutedEventArgs e) => Save(closeAfterSaving: true);
 
-    private void Save(bool closeAfterSaving)
+    private bool Save(bool closeAfterSaving)
     {
         _vocabulary = ReadVocabulary();
         var plan = BuildPlan();
         if (!plan.CanSave || plan.Entry is null)
         {
             UpdateStatus(forceAnnouncement: true);
-            return;
+            return false;
         }
 
         DictionaryEntry saved;
@@ -978,7 +986,7 @@ public partial class QuickAddWindow : FluentWindow
         {
             _logger?.LogError("Quick add failed to save the dictionary entry: {Failure}", FailureShape.DescribeWithStack(ex));
             ShowResult(QuickDictionaryAdd.SaveFailed());
-            return;
+            return false;
         }
 
         var savedRequest = CurrentRequest();
@@ -990,7 +998,7 @@ public partial class QuickAddWindow : FluentWindow
         {
             _allowClose = true;
             Close();
-            return;
+            return true;
         }
 
         foreach (var source in _sources)
@@ -1004,16 +1012,17 @@ public partial class QuickAddWindow : FluentWindow
         _vocabulary = ReadVocabulary();
         var transcriptScrollOffset = TranscriptScroll.VerticalOffset;
         var bodyScrollOffset = BodyScroll.VerticalOffset;
-        LoadTranscript(corrected);
+        // A Saved subscriber can remove the source. Never restore its text after that deletion.
+        var sourceStillCurrent = string.Equals(_transcript, sourceTranscript, StringComparison.Ordinal);
+        LoadTranscript(sourceStillCurrent ? corrected : _transcript);
         RunWithoutFieldChanged(() =>
         {
             ShouldBeBox.Clear();
             RemoveBox.IsChecked = false;
         });
-        _fixedTranscript = fixedTranscript;
+        _fixedTranscript = sourceStillCurrent ? fixedTranscript : null;
         _dirtySinceSave = false;
-        SavedDetailText.Visibility = fixedTranscript is null ? Visibility.Collapsed : Visibility.Visible;
-        CopyFixedButton.Visibility = fixedTranscript is null ? Visibility.Collapsed : Visibility.Visible;
+        SavedDetailText.Visibility = _fixedTranscript is null ? Visibility.Collapsed : Visibility.Visible;
         TranscriptScroll.ScrollToVerticalOffset(transcriptScrollOffset);
         ShowResult(QuickDictionaryAdd.Saved(savedRequest));
         FocusWordsAtInitialWord();
@@ -1022,6 +1031,7 @@ public partial class QuickAddWindow : FluentWindow
             BodyScroll.ScrollToVerticalOffset(bodyScrollOffset);
             TranscriptScroll.ScrollToVerticalOffset(transcriptScrollOffset);
         }, System.Windows.Threading.DispatcherPriority.Loaded);
+        return true;
     }
 
     private void ShowResult(QuickDictionaryAdd.Plan result)
@@ -1036,6 +1046,7 @@ public partial class QuickAddWindow : FluentWindow
         StatusIcon.SetResourceReference(ForegroundProperty, BrushFor(result.Severity));
         StatusActionButton.Visibility = result.Action == QuickDictionaryAdd.PlanAction.CopyFixedDictation && _fixedTranscript is not null ? Visibility.Visible : Visibility.Collapsed;
         StatusActionButton.Content = ActionText(result);
+        UpdateCopyAction();
         Announce(StatusText, result.Message);
     }
 
@@ -1043,14 +1054,23 @@ public partial class QuickAddWindow : FluentWindow
 
     private void CopyFixedTranscript()
     {
-        if (_fixedTranscript is null)
+        var source = RecentPicker.SelectedItem;
+        var plan = QuickDictionaryAdd.BuildCopy(CurrentRequest(), BuildPlan(), _dirtySinceSave);
+        if (!plan.CanCopy || plan.SaveFirst && !Save(closeAfterSaving: false))
         {
             return;
         }
 
-        ShowResult(ScribeClipboard.SetText(_fixedTranscript)
+        if (!ReferenceEquals(source, RecentPicker.SelectedItem) || string.IsNullOrWhiteSpace(_transcript))
+        {
+            return;
+        }
+
+        var copy = _options.CopyToClipboard ?? ScribeClipboard.SetText;
+        ShowResult(copy(_transcript)
             ? QuickDictionaryAdd.CopySucceeded()
             : QuickDictionaryAdd.CopyFailed());
+        Dispatcher.BeginInvoke(() => StatusRow.BringIntoView(), System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     private void OpenAdvancedButton_Click(object sender, RoutedEventArgs e) => _options.OpenAdvancedSettings?.Invoke();
@@ -1203,5 +1223,3 @@ public partial class QuickAddWindow : FluentWindow
         public override string ToString() => Text;
     }
 }
-
-

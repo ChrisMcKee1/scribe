@@ -1660,7 +1660,7 @@ internal sealed partial class TextCleanupService
 
         if (LocalServerKeepAliveMinutes(options) is { Minutes: var minutes })
         {
-            extra["keep_alive"] = $"{minutes}m";
+            extra["keep_alive"] = OllamaKeepAliveDuration(minutes);
         }
     }
 }

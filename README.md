@@ -128,7 +128,8 @@ And a few more things:
 
 - **The tray.** Right-click the Scribe icon to open Settings, add a word from a recent dictation to your
   dictionary, copy any of your last five dictations, switch microphones, turn AI cleanup on or off, or
-  pause dictation.
+  pause dictation. Add to dictionary also has **Save and copy** in its footer: it saves your correction,
+  copies the corrected dictation and keeps the window open. After saving, **Copy dictation** copies it again.
 - **Mouse buttons.** Use the middle, Back or Forward button as a shortcut, or any other button through the
   key your mouse's software sends for it, such as F13. A button bound on its own stops doing its usual job
   in other apps unless you hold Ctrl, Shift, Alt or Win.
@@ -190,21 +191,42 @@ the text is typed. You choose where it runs:
   - Each app's own settings, folded away under it, choose its **Context size** (how much the model reads at
     once) and whether to **Send your whole vocabulary when it fits** rather than just the words a dictation
     mentions. Every request is kept to what the model's context holds, your dictation first.
-  - The first dictation after the model was freed waits for it to load, and the recording indicator says
-    **Starting local model** while it does.
+  - On Windows, **Free memory when Scribe isn't used** is on AI cleanup under **On this PC**, and on
+    **Advanced**. It is one shared choice for speech and AI models: **5 to 60 minutes in 5-minute steps**,
+    or **Never**, with existing custom times still supported. Save applies the choice. With Never,
+    each new request asks Ollama to keep its model loaded indefinitely; another app or an Ollama
+    restart can still free it. LM Studio can still follow its own idle policy. Free memory, pausing
+    and switching cleanup off still work.
+  - The first dictation after the model was freed waits up to 30 seconds for it to start; a slower start
+    leaves that dictation as heard. The recording indicator says **Starting local model** when the
+    load is known at the end of recording.
+  - A failed or timed-out local model preparation keeps that dictation as heard instead of starting a
+    fresh cleanup request and retry behind the same failed load. The next recording checks again.
+    Ollama or LM Studio server errors say to check that app; Scribe does not silently change the model,
+    context size or GPU settings.
 - **Microsoft Foundry,** with your Azure CLI sign-in or an app registration. [Set up a Foundry
   resource](docs/foundry-setup.md) or [use a service principal](docs/service-principal-setup.md). Scribe asks
   the model not to spend time reasoning, which cleans a dictation faster at the same quality. Turning
   off **Let Microsoft Foundry cache what Scribe sends** asks Microsoft Foundry not to use its prompt cache
   for new cleanup requests (see [Privacy](#privacy)).
 - **GitHub Copilot,** with your own Copilot subscription, through the GitHub Copilot command-line tool.
+  Each cleanup uses a fresh session and attempts to delete its local session data afterward.
+  This is best-effort and does not change GitHub's own retention policy.
 - **Another AI service** that works like the OpenAI API, such as OpenRouter, OpenAI, or a server on another
   computer. Choose whether it takes **Chat Completions** or **Responses**; an address that ends in
   `/chat/completions` or `/responses` is used as it is. With Responses, Scribe asks the service not to store
   responses.
 
+Requests using Scribe's OpenAI client also include client language/version, operating system,
+processor architecture and runtime name/version headers, sent to the same AI service.
+
 Settings doesn't recommend a model. The [local model benchmark](docs/local-model-benchmark.md) compares 39
 open models across Foundry Local, Ollama and LM Studio, and the cloud models, on quality and time.
+
+If Microsoft Foundry or another AI service fails its connection check with a temporary connection error,
+throttling or a server error, Scribe makes one automatic reconnect at a later recording, once 30 seconds
+have passed. It does not poll while idle. A failed reconnect needs a manual retry in Settings; sign-in,
+configuration and recognized model-load failures do not trigger this automatic retry.
 
 With Ollama, keep its Windows app running in the background. Seeing a model in Settings isn't proof that
 it has loaded or can answer. Ollama chooses where its model runs; Scribe doesn't force CPU mode or set

@@ -116,11 +116,11 @@ public sealed class AppFormattingSourceTests
         var footer = Read("src", "Scribe.App", "Settings", "SettingsWindow.Footer.cs");
         var tryDictation = Read("src", "Scribe.App", "Settings", "SettingsWindow.TryDictation.cs");
         var formatting = Read("src", "Scribe.App", "Settings", "SettingsWindow.Formatting.cs");
-        foreach (var source in new[] { footer, tryDictation })
-        {
-            Assert.Contains("draft.AppAwareFormattingEnabled = AppAwareFormattingCheck.IsChecked == true;", source, StringComparison.Ordinal);
-            Assert.Contains("draft.DefaultTextFormat = SelectedDefaultTextFormat;", source, StringComparison.Ordinal);
-        }
+        var captured = Body(footer, "private AppSettings CaptureDraftSettings()");
+        Assert.Contains("draft.AppAwareFormattingEnabled = AppAwareFormattingCheck.IsChecked == true;", captured, StringComparison.Ordinal);
+        Assert.Contains("draft.DefaultTextFormat = SelectedDefaultTextFormat;", captured, StringComparison.Ordinal);
+        Assert.Contains("var draft = CaptureDraftSettings();", Body(footer, "private SettingsChangeSet ComputeCurrentChanges()"), StringComparison.Ordinal);
+        Assert.Contains("var changes = currentChanges ?? ComputeCurrentChanges();", tryDictation, StringComparison.Ordinal);
 
         Assert.Contains("AppAwareFormattingCheck.IsChecked = source.AppAwareFormattingEnabled;", formatting, StringComparison.Ordinal);
         Assert.DoesNotContain("_applySettings", formatting, StringComparison.Ordinal);

@@ -33,13 +33,14 @@ public sealed class GitHubCopilotCleanupAgentTests
         var instructions = "Clean up the dictation. " + CleanupPrompt.BuildGlossary([Entry(LibrarySpoken, LibraryCanary)]);
         var messages = new[] { new ChatMessage(ChatRole.User, "first line"), new ChatMessage(ChatRole.User, "second line") };
 
-        // The agent Scribe ran before, from Agent Framework 1.20.0, over the configuration the factory builds.
+        // Agent Framework's agent, over the configuration the factory builds.
         var reference = client.AsAIAgent(
             GitHubCopilotAgentFactory.BuildSessionConfig(instructions, " cleanup-model "), ownsClient: false, name: "ScribeCleanup");
         var expected = await reference.RunAsync(messages).WaitAsync(Bound);
         var referenceCalls = SessionCalls(runtime);
 
-        var agent = GitHubCopilotAgentFactory.Create(client, instructions, " cleanup-model ", "ScribeCleanup");
+        var agent = GitHubCopilotAgentFactory.Create(
+            client, new GitHubCopilotClientLifetime(client), instructions, " cleanup-model ", "ScribeCleanup");
         AgentResponse actual;
         using (new CleanupAdmission(CleanupRequestKind.Dictation, AiVocabularyScope.None, null).Enter())
         {
@@ -48,10 +49,10 @@ public sealed class GitHubCopilotCleanupAgentTests
 
         var calls = SessionCalls(runtime).Skip(referenceCalls.Count).ToList();
 
-        // The same calls in the same order, each with the same parameters but for the ids the SDK generates per call.
-        Assert.Equal(["session.create", "session.send", "session.destroy"], referenceCalls.Select(call => call.Method));
-        Assert.Equal(referenceCalls.Select(call => call.Method), calls.Select(call => call.Method));
-        for (var i = 0; i < calls.Count; i++)
+        // The same creation, send and detach, then Scribe's explicit permanent deletion.
+        Assert.Equal(["session.create", "session.send", "session.detach"], referenceCalls.Select(call => call.Method));
+        Assert.Equal(["session.create", "session.send", "session.detach", "session.delete"], calls.Select(call => call.Method));
+        for (var i = 0; i < referenceCalls.Count; i++)
         {
             Assert.Equal(WithoutGeneratedIds(referenceCalls[i].Params), WithoutGeneratedIds(calls[i].Params));
         }
@@ -71,7 +72,7 @@ public sealed class GitHubCopilotCleanupAgentTests
     }
 
     [Fact]
-    public async Task A_session_error_fails_the_segment_by_its_shape_and_every_session_is_destroyed()
+    public async Task A_session_error_fails_the_segment_by_its_shape_and_every_session_is_deleted()
     {
         var permitted = Of(1, new Library("kestrelmoor-private", H1, true, Entry(LibrarySpoken, LibraryCanary)));
         await using var runtime = new FakeCopilotRuntime();
@@ -87,7 +88,7 @@ public sealed class GitHubCopilotCleanupAgentTests
 
         Assert.Equal(CleanupOutcome.Failed, result.Outcome);
         Assert.Equal(Dictated, result.Text);
-        Assert.Equal(runtime.Creates.Count, runtime.Requests.Count(request => request.Method == "session.destroy"));
+        Assert.Equal(runtime.Creates.Count, runtime.Requests.Count(request => request.Method == "session.delete"));
 
         // Surfaced as the provider failure it is, by its shape (the exception's type), never as an empty answer and never
         // with the runtime's words.

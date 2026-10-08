@@ -181,21 +181,31 @@ not the current macOS effort described here.
 - **Query the NuGet feed for versions, never a web search.** `dotnet package search <id>
   --exact-match --format json` is authoritative; a search result claimed 1.17.0 when the feed had
   1.18.0.
-- **`OpenAI` moves in lockstep with the AI packages, and is held at 2.12.0.**
+- **`OpenAI` moves in lockstep with the AI packages.**
   `Microsoft.Extensions.AI.OpenAI` and `Microsoft.Agents.AI.OpenAI` are compiled against one `OpenAI`
   build and bind to its members at runtime, so an `OpenAI` that merely satisfies a declared range can
   still compile cleanly and throw `MissingMethodException`: `ProjectResponsesClient` (from
   `Azure.AI.Projects`, removed in 0.4.3 together with `Microsoft.Agents.AI.Foundry`) did exactly that on
   2.12.0. `Microsoft.Extensions.AI.OpenAI` 10.9.0 also constrains `OpenAI` to `[2.12.0, 2.13.0)`, so
   2.13.0 alone breaks restore with NU1608. Move `OpenAI`, `Microsoft.Extensions.AI.*` and
-  `Microsoft.Agents.AI.*` together, to a set built against each other (2.13.0, 10.10.0 and 1.22.0 is
-  one), and never to `OpenAI` 2.14.0 with `Microsoft.Extensions.AI.OpenAI` 10.10.0, which still
-  references a type 2.14.0 renamed.
-- **The AI stack was held for 0.4.3 on purpose.** Nothing in the newer set fixes a security issue, and
-  two of its changes need live verification this release did not have: `OpenAI` 2.13 adds platform
-  headers (OS, runtime, CPU architecture) to every request, and the GitHub Copilot SDK 1.0.11 that
-  Agent Framework 1.22.0 resolves shuts its client down gracefully on dispose, which can add about 10 s
-  to an exit. Take them as their own change, with the Copilot provider exercised end to end.
+  `Microsoft.Agents.AI.*` together, to a set built against each other. The 0.5.6 set is OpenAI 2.14.0,
+  Extensions.AI 10.10.0 with Extensions.AI.OpenAI 10.10.1, and Agent Framework 1.24.0. OpenAI 2.14.0
+  must not use Extensions.AI.OpenAI 10.10.0, which references an experimental type 2.14.0 renamed;
+  10.10.1 fixes that binary mismatch.
+- **AI SDK updates change privacy and lifetime too.** The maintainer approved the newer stack for 0.5.6.
+  OpenAI adds six `X-Stainless-*` headers (client language/version, OS, architecture, runtime name/version)
+  to requests, now disclosed in Settings, README and PRIVACY. They go to the request's service, not a
+  separate telemetry service. GitHub Copilot SDK session disposal now detaches rather than deletes a
+  session; keep explicit bounded best-effort deletion and the client lifetime separate. A fake runtime
+  proves the protocol, not the installed tool's behavior or GitHub's retention. Native speech and
+  Foundry pins remain unchanged.
+- **Copilot SDK 1.0.15 to 1.0.17 are held despite binary compatibility.** They force
+  `COPILOT_RUNTIME_PROCESS_FILE_LOGGING=1` for their default runtime mode after copying Scribe's child
+  environment, overriding an inherited 0. Their packages do not establish the logs' contents or
+  retention, and deleting a session does not prove process-level logs are gone. This was not part
+  of the approved header/session-cleanup change. Keep Framework 1.24.0's transitive 1.0.14 until
+  that new behavior is understood and approved. The newer patches still provide no overall
+  detach/StopAsync deadline, so they do not replace the bounded owner.
 - **The overlay references Windows App SDK component packages, not the metapackage.** A
   self-contained build ships every referenced component's runtime, and the pill needs only WinUI and
   what WinUI depends on, so `Scribe.Overlay.csproj` references `Microsoft.WindowsAppSDK.WinUI`,
@@ -221,7 +231,7 @@ not the current macOS effort described here.
   and that an error answer is still an `HttpRequestException` with a status code; `LocalContextServiceTests` pins the
   wire against a scripted Ollama.
 
-### Cloud cleanup stores nothing (keep it that way)
+### Cloud cleanup's current response-storage guarantee
 
 The Azure **Responses API defaults to `store=true`**, which retains every cleaned dictation
 server-side. `TextCleanupService.WithStoredOutputDisabled` applies the control through
@@ -239,8 +249,9 @@ server-side. `TextCleanupService.WithStoredOutputDisabled` applies the control t
 - A client that names neither surface keeps the flag off on whatever options it was given, and an
   object nobody recognizes **fails closed** to Responses options with the flag off.
 
-This is a privacy control, not a preference: if it silently stops applying, Scribe breaks its own
-promise. `CleanupStoredOutputWireTests` pins both surfaces from the actual request JSON over a fake
+This is the current request guarantee, not something an optimization may silently drop. A future
+disclosed user choice can change storage policy, but until such a choice exists and is selected,
+Scribe must keep the behavior it promised. `CleanupStoredOutputWireTests` pins both surfaces from the actual request JSON over a fake
 transport; `StoredOutputWireContractTests` pins that the packages do not send `store=false` on their
 own, which is what makes those wire tests measure Scribe's control; and the fail-closed tests stay. Do
 not relax any of them. The Azure agents carry the control, and so does another AI service reached
@@ -389,6 +400,22 @@ anything was dictated.
   coding-agent toolset is approved. A blank model stays null and leaves the choice to the CLI. The agent never owns the
   client: the client is released with the service. `GitHubCopilotCleanupAgentTests` pins wire and answer parity with
   Agent Framework's agent against a loopback fake runtime.
+- **Session disposal is not disk deletion.** The SDK's detach preserves local state. Every run assigns
+  a fresh id before creation and attempts detach then `DeleteSessionAsync`, after success, failure
+  or cancellation, each bounded to two seconds. Failure logs carry shapes and do not replace the
+  answer or admission refusal. The shared client has its own lazy `GitHubCopilotClientLifetime`
+  owner, never an agent's owner: close admission, drain, graceful stop, force fallback and final
+  disposal. The drain and each later step wait at most two seconds. Pending tasks are observed;
+  those eight seconds bound Scribe's wait, not runtime exit
+  or data erasure. Initialization cancellation and failed/rejected startup release that owner too.
+  Start, create, send, detach and delete all pass through the owner: SDK deletion can reconnect a
+  stopped client, so a late cleanup or queued old agent must not touch it after admission closes.
+  A drain that does not finish leaves its client for process exit rather than stopping beneath
+  reconnect-capable work. Model listing uses the same bounded owner.
+  `GitHubCopilotSessionLifetimeTests` and `GitHubCopilotClientLifetimeTests` pin the protocol and bounds.
+  `DelegatingAIAgent` cannot replace this agent: the official Copilot agent creates and sends inside
+  its Run, while its framework CreateSession only allocates metadata, so a decorator has no
+  checkpoint between the two SDK requests.
 - **The runtime's child process gets its own environment.** `GitHubCopilotCli.BuildRuntimeEnvironment`
   copies this process's environment, minus `GITHUB_COPILOT_MODEL`, plus the selected model when there
   is one, into `CopilotClientOptions.Environment`, which replaces the child's environment wholesale. The
@@ -2333,6 +2360,15 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   walking the repo to `src\Scribe.Overlay\bin\...\Scribe.Overlay.exe`.
 - **Orphan safety:** the overlay is launched into an OS **Job Object** (kill‑on‑close) and
   also runs a parent‑PID watchdog (`--parent`), so the pill can never outlive the engine.
+- **Failure feedback follows actual availability.** `OverlayAvailability` in the Core lifetime opens an
+  episode on failed launch or helper loss and settles it only after a replacement survives the existing
+  ten-second stability window. The existing consumer wakes on process exit and the stability deadline;
+  there is no health polling timer or idle relaunch loop. `OverlayFeedback` gives one best-effort tray
+  notice per demanded episode, separately from speech-model conditions. Problem routing uses the
+  recording-indicator preference and availability, with revision-gated fallback if queued delivery
+  fails. Intentional suspend, pause release and shutdown are not failures. Survival and pipe delivery
+  do not prove compositor rendering; native `MILERR_NO_HARDWARE_DEVICE` still needs driver/platform
+  investigation. `OverlayExitCode` formats hexadecimal exit codes without logging user content.
 - **The helper's lifetime is decided in Core, and only there.** `Scribe.Core.Overlay.OverlayHelperLifetime`
   (built on the internal `OverlayIdleDeadline` and `OverlayLaunchBackoff`) makes every keep, trim, suspend and
   relaunch decision; `OverlayProcessClient` only carries them out (process start, pipe I/O, trim, kill) and has
@@ -2644,6 +2680,18 @@ Each of these compiled warning-clean and showed only at run time or in a render,
   runs or an IME composes, so the capture is cancelled and the IME keeps its key. Only then do the Escape order and the
   close guard run. Every keyboard command other than Save goes through `SettingsCloseGuard.CanRunAccelerator` with the page
   it belongs to (Alt+Left is `BackToWordPacks`), so a Dictionary tab's command never runs while another page shows.
+- **Try dictation uses the footer's dirty check and Save's draft.** `ComputeCurrentChanges` decides its unsaved notice
+  and Save now button, and a footer refresh updates the page too. Never compare all enabled word packs with
+  `EnabledDictionaryLibraryIds`: that list excludes packs kept from AI cleanup, so the lists can differ in an unchanged
+  window. The word pack workspace decides whether its draft changed. Shortcut instructions name the committed bindings,
+  not unsaved choices. `TryDictationWindowTests` opens the real window on a private desktop over an isolated database.
+- **Idle model memory is one shared setting.** AI cleanup, On this PC mirrors Advanced's
+  `ReleaseModelsAfterIdleMinutes` controls through two-way bindings, not a second draft or setting. The presets are
+  Never and every five minutes from 5 to 60; older custom values still load as Custom, with the existing 1 to 120 range.
+  Save applies both views, and the initializer stays 10 minutes. Never asks Ollama to keep its model indefinitely
+  (`keep_alive: "-1m"`) on both API routes, including plain requests, probes, readying and one-off completions; null
+  leaves its policy untouched, and LM Studio still gets no retention field for Never. Both routes use
+  `OllamaKeepAliveDuration` with invariant culture: a regional negative sign can make Ollama refuse Never.
 - **WPF-UI's AutoSuggestBox throws when its template is applied without a window handle,** so an off-screen render of the
   window has to hide Find a setting's box and render its list separately; and a render that detaches the window's content
   must give layout code that measures `Content` (the Word packs planner's `WordPackLayoutRoot`) another root.
@@ -2894,7 +2942,7 @@ store, GitHub signing secrets, or a publisher trust bundle.
   different version, so a machine that already has the right vpk can pack offline. Never go back to an
   unpinned `dotnet tool install -g vpk`, which on a clean runner takes whatever is newest.
 - Each release's notes live in `docs/release-notes-<version>.md` (this release:
-  `docs/release-notes-0.5.5.md`). Neither workflow reads the file; copy it into the GitHub release body.
+  `docs/release-notes-0.5.6.md`). Neither workflow reads the file; copy it into the GitHub release body.
 - The release workflow downloads the latest prior stable full nupkg before packing so a clean
   hosted runner can produce the delta package. `pack.ps1` requires the delta whenever a prior
   full package is present.
@@ -3464,8 +3512,10 @@ recording indicator saying so, rather than being typed without cleanup.
   (`ModelMemoryRelease.Pause`), cleanup no longer using the model (off, from Settings or the tray, or another model or
   place), a shorter idle time, or one turned on (`LocalServerModelToRelease`: a model loaded under the old time can keep
   it until it is loaded again), and Free memory (`FreeLocalAppModelAsync`, which Settings calls) unload it explicitly,
-  for other apps using it too, which Settings says. Never (0) sends no retention field and never unloads on idle; Ollama
-  then keeps whatever time a request last asked for. Nothing is unloaded at exit: the app's clock does it. **The one
+  for other apps using it too, which Settings says. Never (0) sends Ollama `keep_alive: "-1m"` with each new request,
+  the documented negative duration that keeps it loaded indefinitely; it sends LM Studio no retention field, leaving
+  that app's own policy. Null, a caller that asks for no choice, sends neither field. Nothing is explicitly unloaded
+  at exit: Ollama keeps the last duration asked for, and LM Studio's own clock applies. **The one
   exception is an LM Studio copy Scribe loaded at a chosen size** (see "Context size and the whole vocabulary on this
   PC"): LM Studio keeps such a copy for its own hour whatever Scribe's requests ask, so the idle release frees it, by its
   instance id and through the same lane, and so does shutdown (`ReleaseScribeLoadedCopyAsync`, after the drain, bounded
@@ -3491,12 +3541,23 @@ recording indicator saying so, rather than being typed without cleanup.
   `_releaseSync` then `_gate`, never the reverse. Every release forgets the last answer, so the next recording readies the
   model again and says so when it has to load it.
 - **The readying request is bound to its configuration.** `Prewarm` publishes, under `_gate` and before its work starts,
-  the readying task, the options it readies (`_readyingFor`) and `ReadyingChecking`; the request then asks the app
+  the readying task, its initialization owner (`_readyingOwner`), the options it readies (`_readyingFor`) and
+  `ReadyingChecking`; the request then asks the app
   whether it holds the model (`ReadyingLoading` or back to none), checks it still serves those options before the read,
   builds its agent after the read and any load only while it still serves them (from the options served then, so a
   prompt-only change meanwhile is what it carries), and hands over through `WhileServing(recipient)`. A dictation joins
-  it only while it readies the configuration served now; warmth (`_lastModelAnswer`) is recorded only for the
+  it only while it readies the configuration served now, including while it caches instructions for an already loaded
+  model: no dictation request queues behind that work with its own shorter timeout. A release after recording started,
+  or a cleanup without a recording, starts another residency check and readying request before cleanup when the release
+  forgot the last answer. Warmth (`_lastModelAnswer`) is recorded only for the
   configuration served now (`NoteModelAnswered`), and a configuration change that is not prompt-only forgets it.
+- **A failed preparation is not a completed preparation.** Its typed result distinguishes an unfinished
+  wait from a completed local-app load failure or timeout. A matching completed failure keeps the
+  dictation raw without buying another call/retry budget; a later recording checks again. An old
+  preparation cannot block an A-to-B-to-A configuration, because its owner must still match. A
+  local-app server error during cleanup also stops requests for the remaining chunks, keeping them
+  raw, even when its client reports no response body. Local-app 5xx diagnostics give a fixed load-or-run cause and next step, never
+  arbitrary server text. Cleanup's unchanged total deadline now includes preparation waiting.
 - **A released Foundry Local model is not a failure.** An unload of the configured model while Ready (Free memory, or
   the idle release) is decided as `ResidentChangeKind.Released`: the agent and Ready status stay, `_foundryReleased`
   is set, and the next dictation's start reloads it (`TryStartReleasedModelReload`, one reload at a time, leased).
@@ -3506,7 +3567,8 @@ recording indicator saying so, rather than being typed without cleanup.
 - **A dictation waits for a model that is starting** (`WaitForLocalModelStartAsync`, at most
   `LocalModelStartWait`, 30 s; tests set it to zero in the harnesses, and a zero bound gives nothing up): an
   initialization for a model on this PC that is loading it, a released model's reload, an unload already on its way,
-  or the readying request while it loads a model Ollama or LM Studio did not hold. Foundry Local counts only once its
+  or the matching readying request until its instruction readying finishes, on an already loaded model too. A release
+  after recording's readying, or cleanup without a recording, can start another check before cleanup. Foundry Local counts only once its
   runtime is up in this process (`_managerReady`): the first setup downloads several GB of runtime, and neither that nor
   a model download (the setup's own or a Load's, `_foundryDownloading`) is a start to wait for. Past the bound it is
   typed as heard (a Skip, or NotReady for a one-off request), rather than sending a request that would wait behind the
@@ -3657,6 +3719,14 @@ docs/local-model-benchmark.md (evidence `docs/benchmarks/context-window-2026-09-
 
 ## AI cleanup service state (read before touching TextCleanupService)
 
+- **Transient initialization has one recording-triggered reconnect.** `TextCleanupService.Reconnect.cs`
+  keeps a budget per explicit configuration, not per initialization generation. After 30 seconds a
+  recording may reserve one automatic initialization for Microsoft Foundry or another AI service:
+  connection failures without an HTTP status, 429 and generic 5xx qualify; cancellation, timeouts,
+  sign-in/configuration errors and recognized model-load failures do not. No timer polls or reconnects
+  at idle, and neither Foundry Local downloads nor GitHub Copilot are retried this way. A second failure
+  stays Unavailable until manual retry. An explicit Configure resets the budget. Reservations and
+  failure publications obey the existing generation owner, lifetime and status writer.
 - **One writer for the status, and only its owner lands.** `WriteStatusLocked` is the only place the
   status is assigned. It accepts a write only on behalf of the current generation's owner, and never once
   disposal has begun, so a writer that lost ownership (a superseded initialization failing late, a reload
@@ -3762,6 +3832,32 @@ docs/local-model-benchmark.md (evidence `docs/benchmarks/context-window-2026-09-
   never commit build artifacts or the downloaded models.
 
 ## Boundaries
+
+### Privacy and performance choices (maintainer policy)
+
+- **Privacy is a capability and a user choice, not a blanket ban on performance improvements.**
+  Keep a fully local/private path available, and investigate useful caching, retention and runtime
+  improvements even when they have privacy tradeoffs. Offer a stricter-privacy alternative with
+  clear disclosure of what is sent, where it goes, what is retained and for how long. An upgrade
+  with an unknown or compulsory side effect is not a selectable option yet; establish its behavior
+  rather than permanently rule it out.
+- **New tradeoff options favor performance on fresh installs.** Put first-run choices in
+  `AppSettings.CreateDefault`, not a property initializer that also affects older documents.
+  Missing settings retain the behavior existing installs had, and upgrades preserve saved choices.
+  This policy does not silently enable remote cleanup, override word-pack AI permissions, or
+  remove an existing user's selected storage/cache constraint.
+- **Response storage, prompt caching and model residency are different decisions.** Stateless
+  rewrites can reuse stable instructions and writing-style prefixes without storing responses.
+  `store=false` does not disable prompt caching; do not enable storage as a proxy for a cache gain.
+  Local KV/prefix caches belong to the runtime, and cached C# agents or strings do not prove an
+  inference-cache hit.
+- **Show measured benchmarks and adversarial review.** For a claimed caching improvement, report
+  matched before/after cold and warm latency, P50/P95, preparation time, cache-hit/input/output
+  tokens where exposed, memory, quality and failures. Separate new measurements from historical
+  evidence and unknown counters. Use public synthetic fixtures, an isolated Scribe data folder
+  and an explicitly chosen backend; do not send the user's history for a benchmark. Share this
+  same product policy and evidence with different-model reviewers, who should challenge both the
+  privacy/performance tradeoff and whether the measurement proves the claimed mechanism.
 
 **Always:**
 - Keep the **offline‑first promise** intact: the core dictation path must never require a

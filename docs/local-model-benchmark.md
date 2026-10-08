@@ -8,6 +8,70 @@ Foundry Local, what Scribe did wrong with them, what 0.5.2 changes, and which mo
 > 95 GB of memory, Windows 11 build 26200. Times are this PC's; the ranking and the quality scores
 > are what carries over.
 
+## October 8 prefix-cache check
+
+Measured October 8, 2026, with Scribe 0.5.6's shipped short cleanup instructions and default writing
+style, Ollama 0.40.0 and `gemma4:12b`. This is a new backend microbenchmark, not a rerun of the
+September model leaderboard. The [raw evidence](benchmarks/prompt-cache-2026-10-08.json) contains
+63 requests: 55 rewrites of eight public synthetic dictations and eight one-token readying requests.
+There is no user history, vocabulary, cloud call or change to saved settings.
+
+The same model, 4,096-token context (Ollama's own setting), temperature 0.1, thinking off and seed
+were used throughout. Native streaming exposes time to first token; production dictation still
+uses its existing API and response handling. The system/style prefix was 4,686 characters.
+
+| Condition | Requests | Median rewrite | P95 rewrite | Median first token | Median cached input tokens |
+|---|---:|---:|---:|---:|---:|
+| Model unloaded before each request | 8 | 6.656 s | 13.976 s | 6.556 s | 0 |
+| Resident model, stable prefix, changing dictation | 16 | **0.317 s** | **0.350 s** | 0.245 s | **1,084** |
+| Resident model, changing prefix | 16 | 0.708 s | 0.871 s | 0.636 s | 0 |
+| After a cold one-token readying request | 8 | 0.286 s | 0.303 s | 0.193 s | 1,083 |
+| Repeating the complete request | 6 | 0.181 s | 0.238 s | 0.135 s | 1,105 |
+
+**Prefix reuse is observed, not inferred from cached C# objects.** Ollama reported
+`prompt_eval_cached_count` on every request. The stable arm normally reused 1,084 of about 1,106
+input tokens. A unique neutral marker at the start of the system prompt produced zero cache hits
+without unloading the model; this is a cache-miss control, not an API setting that disables caching.
+Median prompt evaluation was 202 ms with the stable prefix and 401 ms with the changing prefix.
+The roughly 55% lower rewrite median in this small sample is separate from the much larger model
+loading cost. Arms ran in blocks rather than randomized order, so timing effects are not fully
+controlled; cache counters and matched outputs are stronger evidence of the mechanism than the
+precise percentage.
+
+**Readying moves work, rather than removing it.** Its median was 6.200 s before the 0.286 s rewrite.
+That preparation can overlap the user speaking; it is not included in the rewrite-only row. The
+first cold request took 13.976 s, so the eight-sample P95 is simply that maximum, not a reliable
+estimate of a long-run tail.
+All P95 values in this table are sample maxima at these small sample sizes. "Cold" means the
+model was unloaded, not that operating-system file caches were empty. Preparation plus rewrite
+was 6.476 s at the median and 7.283 s at observed P95.
+
+**A bounded confirmation addressed order and length.** A
+[second check](benchmarks/prompt-cache-confirmation-2026-10-08.json) used four existing cases,
+equal-length constant/changing markers and both stable-then-changed and changed-then-stable block
+orders. Per-case prompt token counts matched exactly. Stable-prefix medians were 327 ms and
+313 ms in the two orders, against 689 ms and 724 ms for misses. Stable calls reused 1,100 to
+1,101 tokens; changed markers reused zero. All 16 rewritten outputs matched across the arms and
+passed the production sanitizer. The two priming requests are recorded separately, including
+their 12.315 s and 0.719 s costs; they are not hidden in the rewrite timing.
+
+**Quality is matched, not a new leaderboard score.** All 55 rewrite answers passed Scribe's
+production sanitizer. Each of the eight stable-prefix outputs was identical to its changed-prefix
+counterpart. Both arms matched five of eight fixed references exactly (62.5%); the other answers
+differed in capitalization or punctuation. There was no blind judge, real speech, long dictation
+or app-profile/vocabulary-switch corpus in this check.
+
+**Memory was not independently profiled.** Ollama's `api/ps` reported `size` and `size_vram` of
+1.01 GiB, retained verbatim in the evidence. Those fields do not establish total process memory
+or complete physical GPU allocation. The model was unloaded at the end, restoring the initially
+nonresident state.
+
+This supports the existing stable instruction/style ordering, local readying and selectable idle
+duration/Never behavior. It does not justify an extra cache knob that the backend does not expose,
+or prove a Foundry Local/LM Studio/cloud caching gain. Microsoft Foundry's existing cache-on
+setting is separate from `store=false`; cache reads should be measured directly on that deployment
+before claiming an additional cloud performance improvement.
+
 ## Summary
 
 1. **A small open model on this PC is good enough for dictation, fast, and costs no tokens.**

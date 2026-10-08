@@ -69,7 +69,11 @@ public partial class App : Application
     private PlainTextOnce? _plainTextOnce;
     private long _shownPlainTextOnceRevision;
     private Scribe.Core.Lifecycle.PresentationRelay<DictationStateChange>? _dictationState;
-    private IOverlayController? _overlay;
+    private OverlayProcessClient? _overlay;
+    private readonly OverlayFeedback _overlayFeedback = new();
+    // UI thread only: a full problem notice and its outcome's late delivery fallback must not notify twice.
+    private OverlayOutcomeFeedback? _overlayOutcomeFeedback;
+    private bool _overlayProblemNoticed;
 
     // UI thread only: the dictation state rendered last, so a render can tell a resume (Paused, then anything else) and warm
     // the helper the pause released, and a settings save can tell it is paused.
@@ -470,6 +474,7 @@ public partial class App : Application
             services.GetRequiredService<ILogger<OverlayProcessClient>>(),
             services.GetRequiredService<Scribe.Core.Diagnostics.PerfFlags>(),
             logAppendMode);
+        _overlay.AvailabilityChanged += OnOverlayAvailabilityChanged;
 
         // State changes are raised on whichever thread made them and can arrive out of order; the relay posts each to this
         // thread without making the raising thread wait, and shows only the newest (see PresentationRelay).
@@ -510,7 +515,8 @@ public partial class App : Application
             });
         _controller.Error += report =>
         {
-            Dispatcher.BeginInvoke(() => ShowDictationProblem(report, controllerError: true));
+            var revision = _dictationState?.LastRenderedRevision ?? 0;
+            Dispatcher.BeginInvoke(() => ShowDictationProblem(report, controllerError: true, reportedRevision: revision));
         };
         _controller.Warning += report =>
         {
@@ -1008,6 +1014,11 @@ public partial class App : Application
         var state = change.State;
         var previous = _lastRenderedState;
         _lastRenderedState = state;
+        if (state is DictationState.Recording or DictationState.Processing)
+        {
+            _overlayProblemNoticed = false;
+            _overlayOutcomeFeedback = null;
+        }
 
         // The tray and the overlay are independent views of the same state. A failure updating one
         // must never stop the other: when this method threw, the overlay was left showing whatever
@@ -1061,7 +1072,12 @@ public partial class App : Application
                             // a quietly discarded one, a pause while idle and every other idle change just hide.
                             if (change.Outcome is { } outcome)
                             {
-                                _overlay?.ShowOutcome(outcome);
+                                var feedback = new OverlayOutcomeFeedback(change.Revision, outcome, _overlayProblemNoticed);
+                                _overlayOutcomeFeedback = feedback;
+                                var copyEntryId = _host?.Services.GetRequiredService<LastTranscriptStore>().CurrentId();
+                                _overlay?.ShowOutcome(outcome, delivered =>
+                                    _dictationState?.PublishIfCurrent(change.Revision,
+                                        () => ShowOverlayOutcomeFallback(feedback, delivered, copyEntryId)));
                             }
                             else
                             {
@@ -1072,6 +1088,8 @@ public partial class App : Application
                     }
                 }
             });
+
+        TryShowOverlayFailureNotice(change.Revision);
 
         // A pause released the helper; the first dictation after the resume would otherwise wait for a launch (0.5 s idle,
         // 2 to 11 s while the speech models reload), so the resume warms it again (OverlayWarmup decides).
@@ -1088,6 +1106,78 @@ public partial class App : Application
         if (state == DictationState.Paused)
         {
             _overlay?.ReleaseWhenIdle();
+        }
+    }
+
+    private void OnOverlayAvailabilityChanged()
+    {
+        if (_dictationState is not { } relay)
+        {
+            return;
+        }
+
+        var revision = relay.LastRenderedRevision;
+        relay.PublishIfCurrent(revision, () => TryShowOverlayFailureNotice(revision));
+    }
+
+    private void TryShowOverlayFailureNotice(long revision)
+    {
+        if (_controller?.IsClosing != false || _overlay is not { } overlay || _dictationState is not { } relay)
+        {
+            return;
+        }
+
+        var demand = _lastRenderedState is DictationState.Recording or DictationState.Processing
+            ? OverlayDemand.Sustained
+            : OverlayDemand.None;
+        if (_overlayFeedback.TryTakeFailureNotice(
+                overlay.Availability, _controller.CurrentSettings.ShowOverlay, demand, revision, relay.LastRenderedRevision))
+        {
+            TryShowOverlayNotice(OverlayFeedback.FailureNotice());
+        }
+    }
+
+    private void ShowOverlayOutcomeFallback(OverlayOutcomeFeedback feedback, bool delivered, Guid? copyEntryId)
+    {
+        var canShow = OverlayFeedback.CanShow(_controller?.CurrentSettings.ShowOverlay == true, _overlay?.Availability);
+        if (feedback.TakeNotice(delivered && canShow, _dictationState?.LastRenderedRevision ?? 0) is not { } notice)
+        {
+            return;
+        }
+
+        if (notice.Action == TrayNoticeAction.CopyLastDictation)
+        {
+            _noticeCopyEntryId = copyEntryId;
+        }
+
+        TryShowOverlayNotice(notice);
+    }
+
+    private void NoteOverlayProblemNoticed(bool controllerError, long reportedRevision)
+    {
+        if (controllerError && OverlayFeedback.IsCurrent(reportedRevision, _dictationState?.LastRenderedRevision ?? 0))
+        {
+            _overlayProblemNoticed = true;
+            _overlayOutcomeFeedback?.NoteProblemNoticed();
+        }
+    }
+
+    private void TryShowOverlayNotice(TrayNotice notice)
+    {
+        try
+        {
+            ShowTrayNotice(notice);
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                _appLog?.LogDebug("Could not show a recording indicator notice ({Failure}).", FailureShape.Describe(ex));
+            }
+            catch
+            {
+                // A notice or its diagnostics must never stop the indicator's warmup or intentional release.
+            }
         }
     }
 
@@ -1120,9 +1210,10 @@ public partial class App : Application
         // The same revision twice on purpose: here only a warning for a recording that was already over (revision 0) is
         // decided. Whether its recording is still the one shown is decided by PublishIfCurrent below, in queue order after
         // that recording's own change has rendered; reading the relay's last revision here could run ahead of it.
-        if (DictationProblemRouting.DecideRecordingWarning(
+        if (OverlayFeedback.DecideRecordingWarning(
                 report.Problem,
-                recordingIndicatorOn: _controller?.CurrentSettings.ShowOverlay == true,
+                indicatorOn: _controller?.CurrentSettings.ShowOverlay == true,
+                availability: _overlay?.Availability,
                 report.RecordingRevision,
                 report.RecordingRevision) == DictationProblemSurface.Notice)
         {
@@ -1136,9 +1227,17 @@ public partial class App : Application
             report.RecordingRevision,
             () =>
             {
-                if (_controller?.CurrentSettings.ShowOverlay == true)
+                if (OverlayFeedback.CanShow(_controller?.CurrentSettings.ShowOverlay == true, _overlay?.Availability))
                 {
-                    _overlay?.ShowRecordingWarning(reason);
+                    _overlay?.ShowRecordingWarning(reason, delivered =>
+                        relay.PublishIfCurrent(report.RecordingRevision, () =>
+                        {
+                            if (!delivered || !OverlayFeedback.CanShow(
+                                    _controller?.CurrentSettings.ShowOverlay == true, _overlay?.Availability))
+                            {
+                                ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
+                            }
+                        }));
                 }
                 else
                 {
@@ -1495,7 +1594,7 @@ public partial class App : Application
         }
     }
 
-    private void ShowDictationProblem(DictationProblemReport report, bool controllerError)
+    private void ShowDictationProblem(DictationProblemReport report, bool controllerError, long reportedRevision = 0)
     {
         // Posted from the dictation path, so it can run after shutdown began; nobody is left to read a notice then.
         if (Dispatcher.HasShutdownStarted || _controller?.IsClosing != false)
@@ -1511,7 +1610,7 @@ public partial class App : Application
             report,
             mode,
             (report.Shortcut ?? settings?.Hotkey) is { } hotkey ? HotkeyText.SentenceName(hotkey) : null);
-        var routing = DictationProblemRouting.Decide(report.Problem, settings?.ShowOverlay == true);
+        var routing = OverlayFeedback.DecideProblem(report.Problem, settings?.ShowOverlay == true, _overlay?.Availability);
         if (routing == DictationProblemSurface.PillAndNotice)
         {
             // Only a notice that offers Copy last dictation binds the entry it copies: a no-model notice (Open Settings)
@@ -1521,6 +1620,7 @@ public partial class App : Application
                 _noticeCopyEntryId = _host?.Services.GetRequiredService<LastTranscriptStore>().CurrentId();
             }
 
+            NoteOverlayProblemNoticed(controllerError, reportedRevision);
             ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
             return;
         }
@@ -1543,6 +1643,7 @@ public partial class App : Application
                 _noticeCopyEntryId = _host?.Services.GetRequiredService<LastTranscriptStore>().CurrentId();
             }
 
+            NoteOverlayProblemNoticed(controllerError, reportedRevision);
             ShowTrayNotice(new TrayNotice(notice.Title, notice.Body, notice.Kind, notice.Action));
         }
     }

@@ -89,6 +89,31 @@ public static class QuickDictionaryAdd
         public bool CanSave => Kind is PlanKind.Create or PlanKind.Update or PlanKind.UpdateTurnOn or PlanKind.UpdateReplacement or PlanKind.UpdateToRemoval or PlanKind.UpdateFromRemoval or PlanKind.UpdateWholeWord or PlanKind.OverridesWordPack or PlanKind.CreateRemoval;
     }
 
+    public readonly record struct CopyPlan(bool CanCopy, bool SaveFirst, string ButtonText, string Name, string HelpText);
+
+    public static CopyPlan BuildCopy(QuickAddRequest request, Plan correction, bool dirtySinceSave)
+    {
+        var pending = dirtySinceSave
+            && (!string.IsNullOrWhiteSpace(request.Heard)
+                || !string.IsNullOrWhiteSpace(request.Writes)
+                || request.Remove);
+        var hasTranscript = !string.IsNullOrWhiteSpace(request.PickedTranscript);
+        var canCopy = hasTranscript && (!pending || correction.CanSave);
+        var help = !hasTranscript
+            ? "Choose a recent dictation to copy. You can still save a word without one."
+            : pending && !correction.CanSave
+                ? "Finish a valid correction before copying. Copying saves it first and keeps this window open."
+                : pending
+                    ? "Save this correction, then copy the corrected dictation and keep this window open."
+                    : "Copy the current dictation and keep this window open.";
+        return new CopyPlan(
+            canCopy,
+            pending,
+            pending ? "Save and co_py" : "Co_py dictation",
+            pending ? "Save and copy dictation" : "Copy dictation",
+            help);
+    }
+
     public static WordRange Toggle(WordRange current, int index)
     {
         if (index < 0) return current;

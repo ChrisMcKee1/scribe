@@ -280,7 +280,7 @@ public sealed class VocabularyHandOffTests
 
         var cleaning = harness.Service.Admit(admitted.Cleanup).CleanAsync(Dictated);
         var creation = await created.WaitAsync(Bound);
-        var destroyed = runtime.Next(request => request.Method == "session.destroy" && request.SessionId == creation.SessionId);
+        var destroyed = runtime.Next(request => request.Method == "session.delete" && request.SessionId == creation.SessionId);
         source.Publish(Revoked);
         held.SetResult();
         var result = await cleaning.WaitAsync(Bound);
@@ -420,7 +420,8 @@ public sealed class VocabularyHandOffTests
         });
         await copilot.StartAsync();
         var calls = runtime.Requests.Count;
-        var gated = GitHubCopilotAgentFactory.Create(copilot, "instructions " + LibraryCanary, null, "ScribeCleanup");
+        var gated = GitHubCopilotAgentFactory.Create(
+            copilot, new GitHubCopilotClientLifetime(copilot), "instructions " + LibraryCanary, null, "ScribeCleanup");
         var run = await Record.ExceptionAsync(() => gated.RunAsync(Dictated));
         Assert.False(VocabularyHandOffRefusedException.Find(run)?.Admitted ?? true);
         Assert.Equal(calls, runtime.Requests.Count);

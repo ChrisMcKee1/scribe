@@ -38,7 +38,7 @@ internal sealed record CopilotRuntimeRequest(int Index, string Method, JsonEleme
 /// A Copilot runtime for the SDK to connect to over loopback (<see cref="RuntimeConnection.ForUri"/>), answering the
 /// JSON-RPC calls a cleanup run makes the way the CLI answers them: <c>connect</c>, <c>session.create</c>,
 /// <c>session.send</c> (answered, then followed by the events the CLI streams: the answer in two deltas, the message, its
-/// usage, and idle) and <c>session.destroy</c>. The events are the SDK's own types serialized by the SDK
+/// usage, and idle), <c>session.detach</c> and <c>session.delete</c>. The events are the SDK's own types serialized by the SDK
 /// (<see cref="SessionEvent.ToJson"/>), so the SDK reads what it reads from the CLI. Every call is recorded as it arrives,
 /// before it is answered, and a test holds any answer to put a step between two others without a sleep. The listener is
 /// in the test process, bound to the loopback address: nothing leaves the machine.
@@ -76,8 +76,17 @@ internal sealed class FakeCopilotRuntime : IAsyncDisposable
     /// <summary>When set, a send is followed by a <c>session.error</c> with this message instead of an answer.</summary>
     public string? SessionError { get; set; }
 
+    /// <summary>A JSON-RPC failure, instead of the usual answer, for the calls the test chooses.</summary>
+    public Func<CopilotRuntimeRequest, string?> RequestError { get; set; } = _ => null;
+
+    /// <summary>When set, deletion returns an unsuccessful result with this error, rather than a JSON-RPC failure.</summary>
+    public string? DeletionError { get; set; }
+
     /// <summary>Runs before a call is answered; a test holds an answer by returning a task it completes later.</summary>
     public Func<CopilotRuntimeRequest, CancellationToken, Task> BeforeAnswer { get; set; } = (_, _) => Task.CompletedTask;
+
+    /// <summary>Runs after a send has been acknowledged and before the model's events arrive.</summary>
+    public Func<CopilotRuntimeRequest, CancellationToken, Task> BeforeEvents { get; set; } = (_, _) => Task.CompletedTask;
 
     /// <summary>Signalled with each call as it arrives, before it is answered.</summary>
     public event Action<CopilotRuntimeRequest>? Arrived;
@@ -185,6 +194,16 @@ internal sealed class FakeCopilotRuntime : IAsyncDisposable
         try
         {
             await BeforeAnswer(request, _stop.Token);
+            if (RequestError(request) is { } error)
+            {
+                await WriteAsync(
+                    stream,
+                    writes,
+                    "{\"jsonrpc\":\"2.0\",\"id\":" + id.GetRawText() +
+                    ",\"error\":{\"code\":-32603,\"message\":" + JsonSerializer.Serialize(error) + "}}");
+                return;
+            }
+
             switch (request.Method)
             {
                 case "connect":
@@ -202,6 +221,7 @@ internal sealed class FakeCopilotRuntime : IAsyncDisposable
                 case "session.send":
                     var messageId = "message-" + Interlocked.Increment(ref _messages).ToString(CultureInfo.InvariantCulture);
                     await WriteAsync(stream, writes, Result(id, "{\"messageId\":\"" + messageId + "\"}"));
+                    await BeforeEvents(request, _stop.Token);
                     foreach (var sessionEvent in EventsFor(request, messageId))
                     {
                         await WriteAsync(
@@ -213,8 +233,24 @@ internal sealed class FakeCopilotRuntime : IAsyncDisposable
 
                     break;
 
-                case "session.destroy":
-                    await WriteAsync(stream, writes, Result(id, "null"));
+                case "models.list":
+                    await WriteAsync(
+                        stream, writes, Result(id,
+                            "{\"models\":[{\"id\":\"cleanup-model\",\"name\":\"Cleanup model\"," +
+                            "\"supportedReasoningEfforts\":[\"low\"],\"defaultReasoningEffort\":\"low\"}]}"));
+                    break;
+
+                case "session.detach":
+                    await WriteAsync(stream, writes, Result(id, "{\"success\":true}"));
+                    break;
+
+                case "session.delete":
+                    await WriteAsync(
+                        stream,
+                        writes,
+                        Result(id, DeletionError is { } deletionError
+                            ? "{\"success\":false,\"error\":" + JsonSerializer.Serialize(deletionError) + "}"
+                            : "{\"success\":true}"));
                     break;
 
                 default:

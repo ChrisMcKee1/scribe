@@ -302,6 +302,13 @@ real Mac.
   broader LM Studio candidate/configuration ownership reconciliation remain open. Local-app idle/pause release,
   use barriers, chosen-size load settlement and shorter-retention retirement are integrated and tested headlessly.
   The recording-time readiness check and bounded readying request are present, as is "Starting local model".
+  Windows now also waits for instruction readying on an already loaded model and rechecks after Free memory lands
+  between recording readiness and cleanup. Those orderings have not been verified against the Swift implementation.
+  Windows now offers idle memory choices every five minutes from 5 to 60 plus Never, on AI cleanup as well as Advanced.
+  Never asks Ollama to keep its model indefinitely on each new request. These UI and Never changes are not ported here.
+  Windows also preserves completed preparation failures without starting a fresh cleanup retry, counts preparation
+  waiting in the total cleanup deadline, and offers one next-recording reconnect after a transient connection-check
+  failure and a 30-second backoff. Those Windows recovery changes have not been ported or verified here.
 - Not applicable on macOS: Remote Desktop typing, Windows text size and
   accent contrast, contrast themes, Velopack and Store packaging, performance flags and memory work that is Windows
   code only.

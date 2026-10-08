@@ -82,6 +82,12 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     private string? _exePath;
     private bool _loggedMissing;
     private long _launchAttempts; // consumer only, for the log
+    private OverlayAvailability _availability = OverlayAvailability.Initial;
+
+    public OverlayAvailability Availability => _closed ? OverlayAvailability.Initial : Volatile.Read(ref _availability);
+
+    /// <summary>Raised on the consumer thread after publishing a new snapshot; subscribers must only post.</summary>
+    public event Action? AvailabilityChanged;
 
     // The keep-warm period and whether the helper is kept resident, as last pushed: one object, so the consumer always
     // applies the two together. The push that comes with every state change queues nothing when the pair is unchanged;
@@ -141,7 +147,13 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         Enqueue(OverlayPipeProtocol.Recording, desired, ensureAlive: true);
     }
 
-    public void ShowRecordingWarning(string? reason)
+    public void ShowRecordingWarning(string? reason) => ShowRecordingWarning(reason, null);
+
+    /// <summary>
+    /// Reports whether the command reached an available helper. The pipe is one-way: this is delivery evidence, not a
+    /// promise that Windows rendered it. Completion runs on the consumer thread, including a command dropped or refused.
+    /// </summary>
+    public void ShowRecordingWarning(string? reason, Action<bool>? delivered)
     {
         CancelPreview();
         Subscribe();
@@ -150,7 +162,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         // state replaces the recording.
         var desired = _desired is { IsRecording: true } recording ? recording : DesiredState.Recording();
         _desired = desired;
-        Enqueue(OverlayPipeProtocol.WarningLine(reason), desired, ensureAlive: true);
+        Enqueue(OverlayPipeProtocol.WarningLine(reason), desired, ensureAlive: true, delivered: delivered);
     }
 
     public void ShowProcessing(bool aiPolishing, bool startingLocalModel = false)
@@ -162,14 +174,17 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         Enqueue(desired.Line, desired, ensureAlive: true);
     }
 
-    public void ShowOutcome(PillOutcome outcome)
+    public void ShowOutcome(PillOutcome outcome) => ShowOutcome(outcome, null);
+
+    /// <summary>Reports the same delivery evidence as a recording warning.</summary>
+    public void ShowOutcome(PillOutcome outcome, Action<bool>? delivered)
     {
         ArgumentNullException.ThrowIfNull(outcome);
         CancelPreview();
         Unsubscribe();
         var desired = new DesiredState(OverlayPipeProtocol.OutcomeLine(outcome), OverlayDemand.Transient);
         _desired = desired;
-        Enqueue(desired.Line, desired, ensureAlive: true, showsFor: outcome.OnScreen);
+        Enqueue(desired.Line, desired, ensureAlive: true, showsFor: outcome.OnScreen, delivered: delivered);
     }
 
     public void HideOverlay()
@@ -295,9 +310,12 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     // ---- Command queue plumbing -----------------------------------------------------------------
 
-    private void Enqueue(string text, DesiredState? state, bool ensureAlive, bool cancelsRetry = false, TimeSpan showsFor = default) =>
+    private void Enqueue(
+        string text, DesiredState? state, bool ensureAlive, bool cancelsRetry = false, TimeSpan showsFor = default,
+        Action<bool>? delivered = null) =>
         EnqueueStamped(new Command(
-            CommandKind.State, text, ensureAlive, cancelsRetry, ShowsForMs: (long)showsFor.TotalMilliseconds, State: state));
+            CommandKind.State, text, ensureAlive, cancelsRetry, ShowsForMs: (long)showsFor.TotalMilliseconds, State: state,
+            Delivery: delivered is null ? null : new DeliveryReceipt(delivered)));
 
     private void EnqueuePreview(long generation, OverlayPreviewRole role, string text, bool ensureAlive) =>
         EnqueueStamped(new Command(CommandKind.State, text, ensureAlive, Role: role, Generation: generation));
@@ -363,6 +381,11 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     private void RunDueWork()
     {
+        if (_closed)
+        {
+            return;
+        }
+
         var nowMs = Environment.TickCount64;
         if (_lifetime.NextWakeAtMs() is not { } wakeMs || wakeMs > nowMs)
         {
@@ -404,10 +427,17 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
                 Launch();
                 break;
         }
+
+        PublishAvailability();
     }
 
     private int WaitMilliseconds()
     {
+        if (_closed)
+        {
+            return Timeout.Infinite; // EXIT, not an overdue health deadline, wakes a closing consumer.
+        }
+
         if (_lifetime.NextWakeAtMs() is not { } wakeMs)
         {
             return Timeout.Infinite;
@@ -423,8 +453,15 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         if (item.Kind == CommandKind.Exit)
         {
             _lifetime.OnExit();
+            PublishAvailability();
             EndHelper();
             return false;
+        }
+
+        if (_closed)
+        {
+            CompleteDelivery(item.Delivery);
+            return true;
         }
 
         try
@@ -440,6 +477,9 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
                 case CommandKind.Meter:
                     HandleMeter();
                     break;
+                case CommandKind.HelperChanged:
+                    HandleHelperChanged();
+                    break;
                 default:
                     HandleState(item);
                     break;
@@ -448,11 +488,16 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         catch (Exception ex)
         {
             // The command word only: a WARNING or outcome argument is user-facing text.
-            TryLog(LogLevel.Warning, ex, "Overlay command {Command} failed; tearing down for relaunch.", item.Verb);
-            RecoverFromFailedWrite();
+            if (!_closed)
+            {
+                TryLog(LogLevel.Warning, ex, "Overlay command {Command} failed; tearing down for relaunch.", item.Verb);
+                RecoverFromFailedWrite();
+            }
         }
         finally
         {
+            PublishAvailability();
+            CompleteDelivery(item.Delivery);
             if (item.Kind == CommandKind.Meter)
             {
                 Volatile.Write(ref _meterQueued, 0);
@@ -512,6 +557,10 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         }
 
         WriteWithTimeout(item.AppliedAnchor ? AppliedAnchorLine : item.Text);
+        if (item.Delivery is { } receipt)
+        {
+            receipt.Delivered = _lifetime.Availability.IsAvailable;
+        }
 
         // Timed from a fresh reading once the write has returned: it can take up to the write timeout and still
         // succeed, and the overlay starts its own hold only once it has the line.
@@ -545,6 +594,13 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
                 _meterDelivery.Sent(level, nowMs);
             }
         }
+    }
+
+    private void HandleHelperChanged()
+    {
+        var nowMs = Environment.TickCount64;
+        var helper = ObserveHelper(nowMs);
+        Prepare(_lifetime.OnHelperChanged(nowMs, _desired.Demand, helper), helper, nowMs);
     }
 
     private void HandleRelease(long stamp)
@@ -690,6 +746,11 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
     private void DiscardLostHelper()
     {
+        PublishAvailability();
+        TryLog(LogLevel.Warning, null,
+            "Overlay helper loss: attempt {Attempt}, exit code {ExitCode}, episode {Episode}, demand {Demand}.",
+            _launchAttempts, OverlayExitCode.Format(_process is { } process ? TryGetExitCode(process) : null),
+            _lifetime.Availability.FailureEpisode, _desired.Demand);
         if (_lifetime.LastLoss is { CooldownMs: { } cooldownMs } early)
         {
             TryLog(LogLevel.Warning, null,
@@ -711,6 +772,11 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     {
         try
         {
+            if (_closing.IsCancellationRequested)
+            {
+                return;
+            }
+
             if (!HasHelperState)
             {
                 return; // nothing was running, so nothing was lost
@@ -748,6 +814,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     {
         LaunchOutcome outcome;
         long attempt = 0;
+        var started = Stopwatch.GetTimestamp();
         var failuresBefore = _lifetime.ConsecutiveFailures;
         if (_closing.IsCancellationRequested)
         {
@@ -761,8 +828,20 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
             outcome = TryLaunch();
         }
 
+        // Closing can break a replay or process read as well as cancel the connect. None is a failed startup on close.
+        if (_closing.IsCancellationRequested)
+        {
+            outcome = LaunchOutcome.Abandoned;
+        }
+
         // Read after the attempt, which can block: the state may have moved on meanwhile.
         _lifetime.OnLaunchCompleted(Environment.TickCount64, ToResult(outcome), _desired.Demand);
+        PublishAvailability();
+        TryLog(LogLevel.Debug, null,
+            "Overlay launch completed: attempt {Attempt}, outcome {Outcome}, duration {DurationMs} ms, episode {Episode}, " +
+            "available {Available}, stability pending {StabilityPending}.",
+            attempt, outcome, (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
+            _lifetime.Availability.FailureEpisode, _lifetime.Availability.IsAvailable, _lifetime.StableDueAtMs is not null);
 
         switch (outcome)
         {
@@ -770,7 +849,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
                 if (failuresBefore > 0)
                 {
                     TryLog(LogLevel.Information, null,
-                        "Overlay launch attempt {Attempt} succeeded after {Failures} consecutive failures; backoff reset.",
+                        "Overlay launch attempt {Attempt} connected after {Failures} consecutive failures; recovery awaits stability.",
                         attempt, failuresBefore);
                 }
 
@@ -835,6 +914,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
         var pipeName = "Scribe.Overlay." + Guid.NewGuid().ToString("N");
         var launchStarted = Stopwatch.GetTimestamp();
+        var stage = "process";
         try
         {
             var psi = new ProcessStartInfo
@@ -889,19 +969,27 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
             // later loss is judged by the process's own exit time.
             var exitWatch = HelperExitWatch.Attach(process, _log);
             _exitWatch = exitWatch;
+            _ = exitWatch.Exited.ContinueWith(
+                _ => TryAdd(Command.HelperChanged),
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
 
             // OS-level safety net: tie the overlay's lifetime to ours so it can never orphan, even if
             // we are force-killed in the window before the pipe connects (pipe EOF only fires once a
             // connection exists). KILL_ON_JOB_CLOSE fires when our process handle table is torn down.
             OverlayChildJob.TryAssign(process, _log);
 
+            stage = "connect";
             var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.Out, PipeOptions.Asynchronous);
             _pipe = pipe;
             if (!ConnectBeforeExit(pipe, exitWatch))
             {
                 TryLog(LogLevel.Warning, null,
-                    "Overlay helper exited during startup before opening its pipe (exit code {ExitCode}).",
-                    TryGetExitCode(process));
+                    "Overlay helper exited during startup before opening its pipe: stage {Stage}, exit code {ExitCode}, " +
+                    "duration {DurationMs} ms, attempt {Attempt}.",
+                    stage, OverlayExitCode.Format(TryGetExitCode(process)),
+                    (long)Stopwatch.GetElapsedTime(launchStarted).TotalMilliseconds, _launchAttempts);
                 KillProcess(graceful: false);
                 return LaunchOutcome.Failed;
             }
@@ -914,8 +1002,9 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
             // relaunches (crash recovery, lazy launch) come up where the user chose and in the latest
             // visible state rather than waiting for a future dictation transition. A dictation's outcome is
             // not replayed (see DesiredState.ReplayLine): its own command, written after this, shows it.
-            writer.WriteLine(OverlayPipeProtocol.PositionLine(_position));
-            writer.WriteLine(_desired.ReplayLine);
+            stage = "replay";
+            WriteWithTimeout(OverlayPipeProtocol.PositionLine(_position));
+            WriteWithTimeout(_desired.ReplayLine);
         }
         catch (OperationCanceledException) when (_closing.IsCancellationRequested)
         {
@@ -923,11 +1012,21 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
             KillProcess(graceful: false); // it never connected, so it cannot be asked to exit
             return LaunchOutcome.Abandoned;
         }
+        catch (Exception ex) when (_closing.IsCancellationRequested)
+        {
+            TryLog(LogLevel.Debug, ex, "Overlay launch abandoned during {Stage} because the overlay is closing.", stage);
+            KillProcess(graceful: false);
+            return LaunchOutcome.Abandoned;
+        }
         catch (Exception ex)
         {
             // Only genuine launch/connect I/O is inside the try, and logging here is non-throwing, so
             // this catch reliably means the overlay really failed to start.
-            TryLog(LogLevel.Error, ex, "Failed to launch/connect the overlay process at {Exe}.", _exePath);
+            TryLog(LogLevel.Error, ex,
+                "Failed to launch/connect the overlay process: stage {Stage}, exit code {ExitCode}, duration {DurationMs} ms, " +
+                "attempt {Attempt}.",
+                stage, OverlayExitCode.Format(_process is { } process ? TryGetExitCode(process) : null),
+                (long)Stopwatch.GetElapsedTime(launchStarted).TotalMilliseconds, _launchAttempts);
             if (_exePath is not null && !File.Exists(_exePath))
             {
                 _exePath = null; // the exe vanished mid-flight, so force re-resolution next time
@@ -1010,6 +1109,47 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
     {
         var sentExit = IsAlive && TryWrite(OverlayPipeProtocol.Exit);
         KillProcess(graceful: sentExit);
+    }
+
+    private void PublishAvailability()
+    {
+        var availability = _lifetime.Availability;
+        if (Equals(Interlocked.Exchange(ref _availability, availability), availability))
+        {
+            return;
+        }
+
+        TryLog(LogLevel.Debug, null,
+            "Overlay availability: available {Available}, faulted {Faulted}, episode {Episode}, attempt {Attempt}.",
+            availability.IsAvailable, availability.IsFaulted, availability.FailureEpisode, _launchAttempts);
+        if (AvailabilityChanged is not { } handlers)
+        {
+            return;
+        }
+
+        foreach (Action handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler();
+            }
+            catch (Exception ex)
+            {
+                TryLog(LogLevel.Debug, ex, "Overlay availability subscriber failed.");
+            }
+        }
+    }
+
+    private void CompleteDelivery(DeliveryReceipt? receipt)
+    {
+        try
+        {
+            receipt?.Complete();
+        }
+        catch (Exception ex)
+        {
+            TryLog(LogLevel.Debug, ex, "Overlay delivery subscriber failed.");
+        }
     }
 
     // The helper is kept resident (the pill is on, dictation not paused) and nothing used it for the keep-warm period: its
@@ -1288,6 +1428,7 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         Exit,
         KeepWarm,
         Release,
+        HelperChanged,
     }
 
     private enum LaunchOutcome
@@ -1318,7 +1459,8 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
         long Generation = 0,
         long ShowsForMs = 0,
         DesiredState? State = null,
-        bool AppliedAnchor = false)
+        bool AppliedAnchor = false,
+        DeliveryReceipt? Delivery = null)
     {
         public static Command Exit { get; } = new(CommandKind.Exit);
 
@@ -1327,6 +1469,9 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
 
         /// <summary>Unstamped and valueless: the consumer reads the latest pushed period; a setting is not activity.</summary>
         public static Command KeepWarmChanged { get; } = new(CommandKind.KeepWarm);
+
+        /// <summary>Unstamped process-exit wake, never activity or a request to launch an idle helper.</summary>
+        public static Command HelperChanged { get; } = new(CommandKind.HelperChanged);
 
         /// <summary>
         /// The command word alone, for the log. A WARNING or outcome argument is user-facing text: a reason, or a next step
@@ -1338,9 +1483,17 @@ public sealed class OverlayProcessClient : IOverlayController, IDisposable
             CommandKind.Exit => OverlayPipeProtocol.Exit,
             CommandKind.KeepWarm => "KEEPWARM",
             CommandKind.Release => "RELEASE",
+            CommandKind.HelperChanged => "HELPER-CHANGED",
             _ when Role == OverlayPreviewRole.End => "PREVIEW-END",
             _ => Text.IndexOf(' ') is var space and >= 0 ? Text[..space] : Text,
         };
+    }
+
+    private sealed class DeliveryReceipt(Action<bool> complete)
+    {
+        public bool Delivered { get; set; }
+
+        public void Complete() => complete(Delivered);
     }
 
     /// <summary>

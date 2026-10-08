@@ -94,6 +94,7 @@ public static class SettingsSearchIndex
         Entry("ai.local.scribe", SettingsPage.AiCleanup, "LocalAppScribeRadio", "Let Scribe manage it", ["foundry local", "download", "local model", "scribe"], "On this PC", [RequiresAi, RequiresLocal]),
         Entry("ai.local.ollama", SettingsPage.AiCleanup, "LocalAppOllamaRadio", "Ollama", ["local model", "gemma", "llama", "free memory"], "On this PC", [RequiresAi, RequiresLocal]),
         Entry("ai.local.lmstudio", SettingsPage.AiCleanup, "LocalAppLmStudioRadio", "LM Studio", ["lm studio", "lmstudio", "local model", "free memory"], "On this PC", [RequiresAi, RequiresLocal]),
+        Entry("ai.local.idle", SettingsPage.AiCleanup, "AiIdleReleaseCombo", LocalModelTuningText.IdleReleaseTitle, ["idle", "unload", "release", "memory", "minutes", "never"], "On this PC", [RequiresAi, RequiresLocal]),
         Entry("ai.model", SettingsPage.AiCleanup, "AiModelBox", "Model", ["foundry local", "download", "load", "free memory"], "On this PC", [RequiresAi, RequiresLocal, RequiresScribeModel]),
         Entry("ai.local.scribe.vocabulary", SettingsPage.AiCleanup, "FoundryWholeVocabularyCheck", LocalModelTuningText.WholeVocabularyTitle, ["vocabulary", "dictionary", "word packs", "context", "foundry local"], "On this PC", [RequiresAi, RequiresLocal, RequiresScribeModel]),
         Entry("ai.local.ollama.download", SettingsPage.AiCleanup, "OllamaDownloadModelBox", "Model name", ["ollama", "download", "install", "catalog"], "Ollama download", [RequiresAi, RequiresLocal, RequiresOllama]),

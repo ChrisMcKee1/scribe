@@ -1,6 +1,6 @@
 # Scribe AI Privacy Policy
 
-**Effective date:** September 26, 2026
+**Effective date:** October 8, 2026
 **Publisher:** Chris McKee
 
 This Privacy Policy applies to Scribe AI, also known as Scribe, a Windows voice
@@ -269,8 +269,10 @@ and still holds the model at the size AI cleanup uses.
 It carries none of your vocabulary, unless "Send your whole vocabulary when it
 fits" is on for that app, when it also carries as much of your vocabulary as
 fits. A server like this unloads a model it has not used for a
-while, and this request has it loaded again by the time you stop talking. It
-goes only to that server on this PC, never to a service elsewhere. When AI
+while, and this request readies it while you speak. It
+can also be sent before cleanup if the model was freed after the recording's
+readying request, with the same instructions and vocabulary rules. It goes only
+to that server on this PC, never to a service elsewhere. When AI
 cleanup runs on Ollama or LM Studio at its own address on this PC (choosing it
 under "On this PC" saves that address), Scribe also asks that app, including as
 each dictation starts, which models it has, which it holds in memory and how
@@ -278,6 +280,9 @@ much each reads at once, and asks it to free a model's memory when
 AI cleanup stops using the model or you shorten the time Scribe keeps models,
 when you choose Free memory, and when you pause dictation. Each cleanup request
 also asks the app to free the model after the time you set without a dictation.
+In the Windows app, Never instead asks Ollama to keep its model loaded
+indefinitely with each new request; LM Studio keeps its own policy with Never.
+Another app or a restart of Ollama can still free the model.
 With a context size chosen for LM Studio, Scribe asks LM Studio to load the
 model at that size with a request holding the word "ok", which it asks LM Studio
 not to keep, and frees that copy itself after the time you set without a
@@ -372,6 +377,12 @@ either way.
 Another AI service and GitHub Copilot follow their own caching policy; the
 setting does not change what Scribe sends to them.
 
+Requests made through Scribe's OpenAI client also include six `X-Stainless-*`
+headers: client language and version, operating system, processor architecture,
+and runtime name and version. These go to the same AI service as the request,
+not to a separate telemetry service. Connections using Ollama's own API or
+GitHub Copilot use those clients' own behavior instead.
+
 The GitHub Copilot provider differs from the others in how it connects. There is
 no endpoint you configure and no key Scribe stores. Scribe runs the GitHub
 Copilot command-line tool that is already installed and signed in on this device, so requests
@@ -380,6 +391,12 @@ Copilot subscription terms and privacy policy. Scribe never sees or stores a
 GitHub token. Asking Settings to list the models your subscription includes also
 contacts GitHub. Which model handles a request is whichever one you select, or
 your account default when you leave that blank.
+
+Each Copilot cleanup run uses a fresh local session. Scribe attempts to detach
+and explicitly delete its local session state after success, failure or
+cancellation, with a two-second wait for each cleanup step. This is
+best-effort: failed, canceled or stalled cleanup can leave local session data.
+Deletion does not erase anything GitHub may keep under its own policy.
 
 You can stop this transmission at any time by turning off AI cleanup, selecting
 Foundry Local, not invoking AI suggestions or insights, or removing the remote

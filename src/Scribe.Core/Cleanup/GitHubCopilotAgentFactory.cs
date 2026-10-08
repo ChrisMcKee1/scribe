@@ -11,7 +11,7 @@ namespace Scribe.Core.Cleanup;
 /// </para>
 /// <para>
 /// The session configuration is exactly what Agent Framework's convenience overload built
-/// (Agent Framework dotnet-1.20.0, GitHubCopilotAgent.GetSessionConfig): the instructions as an
+/// (Agent Framework dotnet-1.24.0, GitHubCopilotAgent.GetSessionConfig): the instructions as an
 /// appended system message, no tools, and no permission handler, so nothing in the Copilot runtime's
 /// coding-agent toolset is approved. The one addition is <c>Model</c>, which the pinned SDK forwards
 /// into the create-session request; a blank model stays null and leaves the choice to the CLI, as before.
@@ -20,7 +20,8 @@ namespace Scribe.Core.Cleanup;
 /// <see cref="GitHubCopilotCleanupAgent"/> runs it rather than Agent Framework's agent, so the
 /// session's creation and its send are each handed over through the library vocabulary's admission
 /// point (contract 2.10). The agent never owns the client: the client is released with the service,
-/// and an owning agent would dispose it every time a setting changed.
+/// and an owning agent would dispose it every time a setting changed. Every agent receives that
+/// same client's lifetime owner, whose closed admission prevents a late cleanup from restarting it.
 /// </para>
 /// </remarks>
 internal static class GitHubCopilotAgentFactory
@@ -38,6 +39,11 @@ internal static class GitHubCopilotAgentFactory
 
     /// <summary>An agent over the shared client, which the service keeps and releases.</summary>
     internal static Microsoft.Agents.AI.AIAgent Create(
-        GitHub.Copilot.CopilotClient client, string instructions, string? model, string name) =>
-        new GitHubCopilotCleanupAgent(client, BuildSessionConfig(instructions, model), name);
+        GitHub.Copilot.CopilotClient client,
+        GitHubCopilotClientLifetime owner,
+        string instructions,
+        string? model,
+        string name,
+        Microsoft.Extensions.Logging.ILogger? logger = null) =>
+        new GitHubCopilotCleanupAgent(client, owner, BuildSessionConfig(instructions, model), name, logger);
 }

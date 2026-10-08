@@ -102,7 +102,7 @@ public sealed class CompletionRecipientHandOffTests
         var created = runtime.Next(IsInsightCreation);
         var completing = harness.Service.CompleteAsync(UsageInsight.SystemPrompt, Summary, recipient, Permitted.AiScope);
         var creation = await created.WaitAsync(Bound);
-        var destroyed = runtime.Next(request => request.Method == "session.destroy" && request.SessionId == creation.SessionId);
+        var destroyed = runtime.Next(request => request.Method == "session.delete" && request.SessionId == creation.SessionId);
 
         if (change == "provider")
         {

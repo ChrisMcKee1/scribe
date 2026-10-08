@@ -61,11 +61,11 @@ public partial class SettingsWindow
     private void TryDictationOpenAiCleanup_Click(object sender, RoutedEventArgs e) =>
         ShowPage(SettingsPage.AiCleanup);
 
-    private void UpdateTryDictationPage()
+    private void UpdateTryDictationPage(SettingsChangeSet? currentChanges = null)
     {
         try
         {
-            UpdateTryDictationPageCore();
+            UpdateTryDictationPageCore(currentChanges);
         }
         catch (Exception ex)
         {
@@ -73,18 +73,18 @@ public partial class SettingsWindow
         }
     }
 
-    private void UpdateTryDictationPageCore()
+    private void UpdateTryDictationPageCore(SettingsChangeSet? currentChanges)
     {
         if (TryDictationPrimaryInstruction is null)
         {
             return;
         }
 
-        var primary = _pendingBinding with { Mode = SelectedMode };
+        var primary = _committedSettings.Hotkey;
         TryDictationPrimaryInstruction.Text = TryDictationInstruction(primary, primaryShortcut: true);
 
-        var secondary = _committedSettings.EnableAiCleanup && _pendingDictationOnlyBinding is not null
-            ? _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode }
+        var secondary = _committedSettings.EnableAiCleanup
+            ? _committedSettings.DictationOnlyHotkey
             : null;
         if (secondary is null)
         {
@@ -110,7 +110,7 @@ public partial class SettingsWindow
             TryDictationSecondSampleText.Visibility = Visibility.Collapsed;
         }
 
-        var changes = CurrentTryDictationChanges();
+        var changes = currentChanges ?? ComputeCurrentChanges();
         var restartNeeded = !changes.IsDirty && TryDictationRestartNotice.Needed(
             _committedSettings.TranscriptionModelId,
             _committedSettings.DecodeThreads,
@@ -122,115 +122,12 @@ public partial class SettingsWindow
         TryDictationSaveNowButton.Visibility = changes.IsDirty ? Visibility.Visible : Visibility.Collapsed;
         TryDictationRestartBar.Message = SettingsChangeTracker.TryDictationRestartNotice;
         TryDictationRestartBar.IsOpen = restartNeeded;
-        TryDictationRestartBar.Visibility = restartNeeded ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private IReadOnlyList<DictionaryEntry> TryDictationSampleDictionaryEntries() =>
         _dictionaryLoad.IsLoaded
             ? _rows.Select(row => new DictionaryEntry(row.Id, row.Pattern, row.Replacement, row.WholeWord, row.Enabled)).ToList()
             : [];
-
-    private SettingsChangeSet CurrentTryDictationChanges()
-    {
-        var pages = new SortedSet<SettingsPage>(SettingsChangeTracker.Compare(_committedSettings, TryDictationDraft(), recoveredMode: _settingsRecovered).Pages);
-        if (_dictionaryLoad.HasChanges(DictionarySignature()) || _libraryLoad.HasChanges(LibrarySignature()))
-        {
-            pages.Add(SettingsPage.Dictionary);
-        }
-
-        if (_snippetLoad.HasChanges(SnippetSignature()))
-        {
-            pages.Add(SettingsPage.VoiceSnippets);
-        }
-
-        return new SettingsChangeSet(pages);
-    }
-
-    private AppSettings TryDictationDraft()
-    {
-        var draft = _committedSettings.Clone();
-        draft.Hotkey = _pendingBinding with { Mode = SelectedMode };
-        draft.DictationOnlyHotkey = _pendingDictationOnlyBinding is null
-            ? null
-            : _pendingDictationOnlyBinding with { Mode = DictationOnlySelectedMode };
-        draft.ShowOverlay = OverlayCheck.IsChecked == true;
-        draft.OverlayPosition = SelectedOverlayPosition;
-        draft.UseVoiceActivityDetection = VadCheck.IsChecked == true;
-        draft.AutoStopOnSilence = AutoStopCheck.IsChecked == true;
-        draft.ApplyPostProcessing = PostCheck.IsChecked == true;
-        draft.StoreAudioHistory = StoreAudioCheck.IsChecked == true;
-        draft.ShiftEnterLineBreaks = ShiftEnterCheck.IsChecked == true;
-        draft.AccentSource = AccentSourceCheck.IsChecked == true ? AccentSource.Windows : AccentSource.Scribe;
-        draft.AddSpaceAfterDictation = SpaceAfterDictationCheck.IsChecked == true;
-        draft.AppAwareFormattingEnabled = AppAwareFormattingCheck.IsChecked == true;
-        draft.DefaultTextFormat = SelectedDefaultTextFormat;
-        draft.MaxDictationMinutes = SelectedDurationValue(MaxDictationCombo, MaxDictationCustomBox, draft.MaxDictationMinutes);
-        draft.ReleaseModelsAfterIdleMinutes = SelectedDurationValue(IdleReleaseCombo, IdleReleaseCustomBox, draft.ReleaseModelsAfterIdleMinutes);
-        draft.HistoryRetentionDays = SelectedDurationValue(HistoryRetentionCombo, HistoryRetentionCustomBox, draft.HistoryRetentionDays);
-        draft.InjectionMethod = ((InjectionChoice?)InjectionCombo.SelectedItem)?.Method ?? InjectionMethod.UnicodeType;
-        draft.NewlineHandling = ((NewlineChoice?)NewlineCombo.SelectedItem)?.Mode ?? NewlineInjectionMode.SmartFlatten;
-        draft.DecodeThreads = ((ThreadChoice?)ThreadsCombo.SelectedItem)?.Value ?? draft.DecodeThreads;
-        draft.TranscriptionModelId = ((TranscriptionModelChoice?)TranscriptionModelCombo.SelectedItem)?.Id ?? TranscriptionModelCatalog.DefaultId;
-        draft.EnableAiCleanup = _externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true);
-        draft.AiCleanupProvider = SelectedProvider;
-        draft.AiCleanupModel = NullIfBlank(SelectedFoundryModelAlias) ?? CleanupModelCatalog.DefaultAlias;
-        draft.AiCleanupAzureEndpoint = NullIfBlank(AzureEndpointBox.Text);
-        draft.AiCleanupAzureDeployment = NullIfBlank(AzureDeploymentBox.Text);
-        draft.AiCleanupAzureAuthMode = SelectedAzureAuthMode;
-
-        // As Save stores them: a field the shown sign-in method hides is no part of the draft.
-        var signIn = ShownAzureSignInFields;
-        draft.AiCleanupAzureApiKey = signIn.ApiKey;
-        draft.AiCleanupAzureTenantId = signIn.TenantId;
-        draft.AiCleanupAzureClientId = signIn.ClientId;
-        draft.AiCleanupAzureClientSecret = signIn.ClientSecret;
-        var azureSubscription = AzureSubscriptionSelection.ResolveAuthenticationSubscription(
-            _selectedAzureDeployment,
-            SelectedAzureSubscription,
-            AzureEndpointBox.Text,
-            AzureDeploymentBox.Text);
-        draft.AiCleanupAzureSubscriptionId = azureSubscription?.Id;
-        draft.AiCleanupAzureSubscriptionName = azureSubscription?.Name;
-        draft.AiCleanupAzureSubscriptionTenantId = azureSubscription?.TenantId;
-        var customService = ShownCustomService;
-        draft.AiCleanupCustomEndpoint = customService.Endpoint;
-        draft.AiCleanupCustomModel = customService.Model;
-        draft.AiCleanupCustomApiStyle = customService.ApiStyle;
-        var rememberedService = ShownRememberedService;
-        draft.AiCleanupOtherServiceEndpoint = rememberedService.Endpoint;
-        draft.AiCleanupOtherServiceModel = rememberedService.Model;
-        draft.AiCleanupOtherServiceApiKey = rememberedService.ApiKey;
-        draft.AiCleanupOtherServiceApiStyle = rememberedService.ApiStyle;
-        draft.AiCleanupCopilotModel = NullIfBlank(CopilotModelCombo.Text);
-        draft.AiCleanupPromptCaching = AiPromptCachingCheck.IsChecked != false;
-        draft.AiCleanupOllamaContextTokens = SelectedOllamaContextTokens;
-        draft.AiCleanupLmStudioContextTokens = SelectedLmStudioContextTokens;
-        draft.AiCleanupOllamaSendWholeVocabulary = OllamaWholeVocabularyCheck.IsChecked == true;
-        draft.AiCleanupLmStudioSendWholeVocabulary = LmStudioWholeVocabularyCheck.IsChecked == true;
-        draft.AiCleanupFoundryLocalSendWholeVocabulary = FoundryWholeVocabularyCheck.IsChecked == true;
-        draft.AiCleanupCustomApiKey = customService.ApiKey;
-        var writingStyle = AiWritingStyleBox.Text?.Trim() ?? string.Empty;
-        draft.AiCleanupWritingStyle = writingStyle.Length == 0 || writingStyle == CleanupPrompt.DefaultWritingStyle
-            ? string.Empty
-            : writingStyle;
-        draft.AiCleanupPromptStyle = SelectedPromptStyle;
-        var frontierPrompt = NormalizePrompt(AiFrontierPromptBox.Text);
-        draft.AiCleanupFrontierPrompt = frontierPrompt.Length == 0 || frontierPrompt == CleanupPrompt.DefaultFrontierPrompt
-            ? string.Empty
-            : frontierPrompt;
-        var localPrompt = NormalizePrompt(AiLocalPromptBox.Text);
-        draft.AiCleanupLocalPrompt = localPrompt.Length == 0 || localPrompt == CleanupPrompt.DefaultLocalPrompt
-            ? string.Empty
-            : localPrompt;
-        draft.Profiles = BuildProfiles();
-        if (_libraryLoad.IsLoaded)
-        {
-            draft.EnabledDictionaryLibraryIds = CollectEnabledLibraryIds();
-        }
-
-        _externalMicrophone.ForSave(ShownMicrophone).ApplyTo(draft);
-        return draft;
-    }
 
     private static string TryDictationInstruction(HotkeyBinding binding, bool primaryShortcut)
     {

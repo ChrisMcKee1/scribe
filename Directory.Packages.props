@@ -28,15 +28,17 @@
          architecture-specific; Scribe.Core references both and selects by RuntimeIdentifier so
          one source tree builds for Intel/AMD and for Snapdragon Copilot+ PCs. All three move
          together: the managed wrapper and the natives are built from the same release. The
-         bundled onnxruntime.dll is also the one Foundry Local's GenAI runtime loads in-process
-         (it wins the same-name native conflict on file version), so a sherpa-onnx bump changes the
-         ONNX Runtime that on-device cleanup runs on as well. -->
+         speech engine and Foundry Local's GenAI runtime load one onnxruntime.dll in-process,
+         whichever has the higher file version. Foundry Local's 1.30.0 currently wins over the
+         natives' 1.28.2, so a move of either SDK can change the runtime both paths use. -->
     <PackageVersion Include="org.k2fsa.sherpa.onnx" Version="1.13.8" />
     <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="1.13.8" />
     <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-arm64" Version="1.13.8" />
 
-    <!-- Audio capture -->
-    <PackageVersion Include="NAudio" Version="3.0.1" />
+    <!-- Audio capture. 3.1.0 fixes under-fed WDL resampling and native format marshalling.
+         Its removed WaveFormat StructLayout and widened IsFormatSupported out parameter have
+         no Scribe callers; keep the capture/conversion suites and real WASAPI checks as gates. -->
+    <PackageVersion Include="NAudio" Version="3.1.0" />
 
     <!-- Persistence. SQLitePCLRaw.bundle_e_sqlite3 is pinned directly to pull a patched native
          e_sqlite3 and override Microsoft.Data.Sqlite's transitive 2.1.x bundle; the 2.1.11 bundle
@@ -71,19 +73,20 @@
          both are compiled against one OpenAI build and bind to its members at runtime, so an OpenAI
          that merely satisfies a declared range can still compile cleanly and throw
          MissingMethodException (Azure.AI.Extensions.OpenAI, since removed, did exactly that to the
-         ResponsesClient constructor on 2.12.0). Held at 2.12.0 because Microsoft.Extensions.AI.OpenAI
-         10.9.0 constrains OpenAI to >= 2.12.0 && < 2.13.0 (NU1608 otherwise). 10.10.0 widens that to
-         >= 2.13.0 and was built against 2.13.0: move OpenAI, Microsoft.Extensions.AI.* and
-         Microsoft.Agents.AI.* together, and not to 2.14.0, which renames the experimental
-         GlobalMcpToolCallApprovalPolicy type that 10.10.0 still references. -->
-    <PackageVersion Include="OpenAI" Version="2.12.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.9.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.9.0" />
+         ResponsesClient constructor on 2.12.0). The compatible set is OpenAI
+         2.14.0, Microsoft.Extensions.AI.OpenAI 10.10.1, AI/Evaluation 10.10.0 and Microsoft.Agents.AI.*
+         1.24.0: both OpenAI adapters reference OpenAI 2.14.0, and 10.10.1 uses its renamed experimental
+         MCP approval types (10.10.0 does not). The approved move includes disclosing OpenAI's
+         X-Stainless platform headers (OS, architecture and runtime), introduced in 2.13, and
+         adapting Copilot's per-dictation session deletion, below. -->
+    <PackageVersion Include="OpenAI" Version="2.14.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.1" />
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.10.0" />
     <!-- Microsoft.Extensions.AI.Evaluation is referenced directly only by the offline evals harness
          (tools/Scribe.Evals, PrivateAssets=all), but it ships with the app anyway: Microsoft.Agents.AI
          and Microsoft.Agents.AI.OpenAI both depend on it, so it is a runtime dependency of cleanup and
          moves with the Microsoft.Extensions.AI set. -->
-    <PackageVersion Include="Microsoft.Extensions.AI.Evaluation" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Evaluation" Version="10.10.0" />
 
     <!-- Microsoft Agent Framework (GA). Every cleanup provider is unified on its AIAgent primitive.
          Microsoft.Agents.AI.OpenAI supplies the .AsAIAgent(model, instructions, name) extension on the
@@ -91,25 +94,34 @@
          URL, normalized to the account's /openai/v1/ inference endpoint) uses
          GetResponsesClient().AsAIAgent with a Chat Completions fallback, and Foundry Local and
          OpenAI-compatible endpoints use GetChatClient().AsAIAgent. -->
-    <PackageVersion Include="Microsoft.Agents.AI" Version="1.20.0" />
-    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.20.0" />
+    <PackageVersion Include="Microsoft.Agents.AI" Version="1.24.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.24.0" />
     <!-- The GitHub Copilot backend, so a user with a Copilot licence can bring their own model
          instead of standing up Azure. It drives the Copilot CLI rather than an HTTP endpoint, so
          Scribe detects that CLI before offering the provider (Cleanup/GitHubCopilotCli.cs), and
          every reference to its types stays inside one method so the .NET loader never loads the
          assembly for a user who does not select it. Its GitHub.Copilot.SDK dependency is transitive
-         and resolves to the lowest version the package allows. That matters: SDK 1.0.13 changed
-         session cleanup from session.destroy to session.detach, so review what the CLI keeps for a
-         detached per-dictation session before pinning the SDK any higher. -->
-    <PackageVersion Include="Microsoft.Agents.AI.GitHub.Copilot" Version="1.20.0" />
+         and resolves to the lowest version the package allows. The 1.24.0 package requires
+         SDK 1.0.14, whose DisposeAsync sends session.detach (changed in 1.0.13), not session.destroy.
+         Both SDK versions document
+         preserving session data on disk; permanent deletion is a separate DeleteSessionAsync
+         call, not what session.destroy guaranteed. The approved move requires explicit deletion
+         of each stateless cleanup session before the shared client stops, with cancellation
+         and disposal ordering held by the loopback runtime tests. Keep the transitive 1.0.14 floor:
+         1.0.15 to 1.0.17 unconditionally enable runtime process-file logging after copying the child
+         environment. Its content/retention needs a separate privacy decision; newer patches still
+         have unbounded detach waits and do not replace Scribe's bounded owner. -->
+    <PackageVersion Include="Microsoft.Agents.AI.GitHub.Copilot" Version="1.24.0" />
 
     <!-- Ollama's own chat API, for the context size Scribe chooses
          (AppSettings.AiCleanupOllamaContextTokens; a size chosen is what selects it): Ollama's OpenAI-compatible API reads no num_ctx, so
          only /api/chat can ask for one. OllamaSharp is the IChatClient for Ollama that the
          Microsoft.Extensions.AI documentation uses; it maps ChatOptions.MaxOutputTokens to num_predict,
          ReasoningEffort.None to think: false, and the num_ctx and keep_alive additional properties to
-         the request. MIT. Built against Microsoft.Extensions.AI 10.8.0, which 10.9.0 satisfies. -->
-    <PackageVersion Include="OllamaSharp" Version="5.4.30" />
+         the request. MIT. 5.5.0 still depends on Microsoft.Extensions.AI 10.8.0, which
+         10.10.0 satisfies, and keeps these option mappings. Its streamed-body reads still omit the
+         cancellation token, so OllamaDownloadReadCancellation and its stalled-body test stay. -->
+    <PackageVersion Include="OllamaSharp" Version="5.5.0" />
 
     <!-- Optional cloud AI cleanup via Microsoft Foundry / Azure OpenAI, discovered through the
          user's existing Azure CLI sign-in (AzureCliCredential, AAD tokens, no key stored).
@@ -124,14 +136,16 @@
     <PackageVersion Include="Azure.ResourceManager.ResourceGraph" Version="1.1.1" />
 
     <!-- Installer + delta auto-update. -->
-    <PackageVersion Include="Velopack" Version="1.2.0" />
+    <PackageVersion Include="Velopack" Version="1.2.161" />
 
     <!-- Observability: OpenTelemetry tracing of the dictation lifecycle (capture → VAD → decode →
          AI cleanup → inject). Always-on locally via a log-bridge processor; OTLP export is opt-in
-         when OTEL_EXPORTER_OTLP_ENDPOINT is set (Aspire dashboard / Jaeger / any collector). -->
-    <PackageVersion Include="OpenTelemetry" Version="1.18.0" />
-    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
-    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
+         when OTEL_EXPORTER_OTLP_ENDPOINT is set (Aspire dashboard / Jaeger / any collector).
+         Move the three together. 1.19.1 keeps the ParentBasedSampler.ShouldSample implementation;
+         TraceLogBridgeTests still holds the lightweight path to the SDK actually resolved. -->
+    <PackageVersion Include="OpenTelemetry" Version="1.19.1" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.19.1" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.19.1" />
 
     <!-- DPAPI (Windows) to encrypt the optional Azure API key at rest so it never sits in the
          settings store in plaintext. -->
@@ -139,7 +153,7 @@
 
     <!-- Test -->
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
-    <PackageVersion Include="coverlet.collector" Version="10.0.1" />
+    <PackageVersion Include="coverlet.collector" Version="10.1.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <!-- 4.x still runs xUnit.net v2 test projects; the major version is for v3 4.0 support. -->

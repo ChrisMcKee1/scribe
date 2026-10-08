@@ -117,8 +117,9 @@ public readonly record struct OverlayHelperLoss(long? LivedMs, long? CooldownMs)
 /// that makes a suspend safe against a racing command) and <see cref="OverlayLaunchBackoff"/> (cooldown,
 /// the one coalesced retry, and the stable window). The combination rules live here: a suspend or release
 /// cancels a pending retry, a lost helper is classified before anything else is decided, the consumer
-/// wakes at the earliest of the idle deadline, the retry and a waiting release, and after shutdown nothing
-/// falls due.
+/// wakes at the earliest of the idle deadline, the retry, a waiting release and a replacement's stability deadline, and
+/// after shutdown nothing falls due. Availability remains false across connecting replacements until one survives the
+/// stable window; this closes the failure episode silently, without changing the user's preference.
 /// </para>
 /// <para>
 /// What the idle deadline does depends on whether the helper is kept resident (<see cref="SetKeepResident"/>), which the
@@ -162,6 +163,7 @@ public sealed class OverlayHelperLifetime
     private long _idleMs;
     private bool _keepResident;
     private bool _exited;
+    private long? _stableDueAtMs;
 
     // A pause release that waits for the outcome on screen to hide: its stamp, and when it falls due.
     private long _releaseStamp;
@@ -200,6 +202,12 @@ public sealed class OverlayHelperLifetime
     /// <summary>How the most recently lost helper was classified, or <c>null</c> before any loss. For logging.</summary>
     public OverlayHelperLoss? LastLoss { get; private set; }
 
+    /// <summary>The immutable availability snapshot for the client to publish after each decision.</summary>
+    public OverlayAvailability Availability { get; private set; } = OverlayAvailability.Initial;
+
+    /// <summary>When a replacement can close the current failure episode, if it is still alive.</summary>
+    public long? StableDueAtMs => _stableDueAtMs;
+
     /// <summary>Milliseconds left in the current cooldown; zero when a launch is allowed.</summary>
     public long CooldownRemainingMs(long nowMs) => _backoff.CooldownRemainingMs(nowMs);
 
@@ -228,11 +236,12 @@ public sealed class OverlayHelperLifetime
 
     /// <summary>
     /// When the consumer must next wake to run <see cref="TakeDueWork"/> even if no command arrives: the
-    /// earliest of the idle deadline, the pending retry and a pause release waiting for an outcome to hide, or
+    /// earliest of the idle deadline, the pending retry, a pause release waiting for an outcome to hide and a recovering
+    /// helper's stability deadline, or
     /// <c>null</c> to wait for the next command.
     /// </summary>
     public long? NextWakeAtMs() =>
-        _exited ? null : Earliest(Earliest(_idle.DueAtMs(_idleMs), _backoff.RetryDueAtMs), _releaseDueAtMs);
+        _exited ? null : Earliest(Earliest(Earliest(_idle.DueAtMs(_idleMs), _backoff.RetryDueAtMs), _releaseDueAtMs), _stableDueAtMs);
 
     /// <summary>
     /// Runs whatever has fallen due at <paramref name="nowMs"/>. Call it whenever <see cref="NextWakeAtMs"/>
@@ -251,6 +260,15 @@ public sealed class OverlayHelperLifetime
         }
 
         NoteIfLost(helper, demand);
+        if (_stableDueAtMs is { } stableDueMs && nowMs >= stableDueMs)
+        {
+            _stableDueAtMs = null;
+            if (helper.Status == OverlayHelperStatus.Alive)
+            {
+                Availability = Availability with { IsAvailable = true, IsFaulted = false };
+            }
+        }
+
         if (_releaseDueAtMs is { } releaseDueMs && nowMs >= releaseDueMs && TryRelease(nowMs, _releaseStamp, demand))
         {
             return helper.Status == OverlayHelperStatus.Alive ? OverlayDueWork.Release : OverlayDueWork.None;
@@ -310,6 +328,13 @@ public sealed class OverlayHelperLifetime
     /// a helper on its own, but one that finds the helper lost brings it back while the pill is on screen.
     /// </summary>
     public OverlayCommandAction OnMeter(long nowMs, OverlayDemand demand, OverlayHelperObservation helper) =>
+        _exited ? OverlayCommandAction.Drop : Decide(nowMs, ensureAlive: false, demand, helper);
+
+    /// <summary>
+    /// The helper's exit notification woke the consumer. A sustained state recovers through the ordinary launch gate;
+    /// an idle helper or an outcome never starts a relaunch loop. An exit from an intentionally ended helper is absent.
+    /// </summary>
+    public OverlayCommandAction OnHelperChanged(long nowMs, OverlayDemand demand, OverlayHelperObservation helper) =>
         _exited ? OverlayCommandAction.Drop : Decide(nowMs, ensureAlive: false, demand, helper);
 
     /// <summary>
@@ -400,9 +425,19 @@ public sealed class OverlayHelperLifetime
         {
             case OverlayLaunchResult.Launched:
                 _backoff.OnLaunchSucceeded(nowMs);
+                if (Availability.IsFaulted)
+                {
+                    _stableDueAtMs = nowMs + StableAfterMs;
+                }
+                else
+                {
+                    Availability = Availability with { IsAvailable = true };
+                }
+
                 break;
             case OverlayLaunchResult.Failed:
                 _backoff.OnLaunchFailed(nowMs, demand);
+                NoteUnavailable();
                 break;
         }
     }
@@ -477,6 +512,16 @@ public sealed class OverlayHelperLifetime
         var cooldownMs = _backoff.OnHelperLost(lostAtMs, demand);
         LastLoss = new OverlayHelperLoss(launchedAtMs is { } atMs ? Math.Max(0, lostAtMs - atMs) : null, cooldownMs);
         _idle.ClearShown(); // a gone helper shows nothing
+        NoteUnavailable();
+    }
+
+    private void NoteUnavailable()
+    {
+        _stableDueAtMs = null;
+        Availability = new OverlayAvailability(
+            IsAvailable: false,
+            IsFaulted: true,
+            FailureEpisode: Availability.IsFaulted ? Availability.FailureEpisode : Availability.FailureEpisode + 1);
     }
 
     private void EndedOnPurpose()
@@ -484,5 +529,7 @@ public sealed class OverlayHelperLifetime
         _backoff.CancelRetry();
         _backoff.OnHelperStopped();
         _releaseDueAtMs = null;
+        _stableDueAtMs = null;
+        Availability = Availability with { IsAvailable = false };
     }
 }

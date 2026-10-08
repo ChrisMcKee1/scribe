@@ -706,7 +706,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
 
         Assert.Contains("_committedSettings = _settings.Clone();", source, StringComparison.Ordinal);
         Assert.Equal(2, CountOccurrences(source, "_committedSettings = _settings.Clone();"));
-        Assert.Contains("SettingsChangeTracker.Compare(_committedSettings, TryDictationDraft()", tryDictation, StringComparison.Ordinal);
+        Assert.Contains("var changes = currentChanges ?? ComputeCurrentChanges();", tryDictation, StringComparison.Ordinal);
         Assert.Contains("_committedSettings.AiCleanupProvider", tryDictation, StringComparison.Ordinal);
 
         // A tray change confirmed as stored moves the baseline; the optimistic word of it, which may still fail, doesn't.

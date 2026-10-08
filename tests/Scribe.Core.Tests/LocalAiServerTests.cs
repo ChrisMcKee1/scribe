@@ -292,6 +292,8 @@ public sealed class LocalAiServerTests
         Assert.Contains($"unless it answered in the last {LocalAiServer.PrewarmAfterIdleSeconds} seconds and still holds the model at the size AI cleanup uses", CleanupDisclosure.ReadiesALocalServer, StringComparison.Ordinal);
         Assert.Contains("It goes only to that server on this PC, never to a service elsewhere.", policy, StringComparison.Ordinal);
         Assert.Contains("none of your vocabulary", CleanupDisclosure.ReadiesALocalServer, StringComparison.Ordinal);
+        Assert.Contains("another readying request before cleanup", CleanupDisclosure.ReadiesALocalServer, StringComparison.Ordinal);
+        Assert.Contains("before cleanup if the model was freed after", policy, StringComparison.Ordinal);
 
         // With the whole vocabulary on, the readying request carries the leading run of it that fits (GlossaryForLocked),
         // and every request to a model on this PC may carry all of it: said on the card and in the policy.
@@ -317,6 +319,9 @@ public sealed class LocalAiServerTests
         Assert.Contains("only an API key you saved for that address, if any", policy, StringComparison.Ordinal);
         Assert.Contains("to free a copy Scribe loaded with a key you have since replaced, that earlier key", policy, StringComparison.Ordinal);
         Assert.Contains("only an API key you saved for that address, if any", CleanupDisclosure.ManagesALocalApp, StringComparison.Ordinal);
+        Assert.Contains("loaded indefinitely with each new request", CleanupDisclosure.ManagesALocalApp, StringComparison.Ordinal);
+        Assert.Contains("indefinitely with each new request", policy, StringComparison.Ordinal);
+        Assert.Contains("LM Studio keeps its own policy with Never", policy, StringComparison.Ordinal);
     }
 
     private static ScriptedHttpHandler Capturing(List<JsonElement> bodies) => new(async (request, ct) =>

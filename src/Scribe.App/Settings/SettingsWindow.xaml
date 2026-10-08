@@ -719,7 +719,7 @@
 
         <ui:TitleBar Grid.Row="0" Title="Scribe Settings">
             <ui:TitleBar.Icon>
-                <ui:ImageIcon Source="pack://application:,,,/Assets/scribe-mark.png" Width="16" Height="16" RenderOptions.BitmapScalingMode="HighQuality"/>
+                <ui:ImageIcon Source="pack://application:,,,/Scribe;component/Assets/scribe-mark.png" Width="16" Height="16" RenderOptions.BitmapScalingMode="HighQuality"/>
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 
@@ -1196,7 +1196,7 @@
                                         <StackPanel Grid.Column="0" Margin="0,0,12,0">
                                             <TextBlock Text="Free memory when Scribe isn't used" Style="{StaticResource CardTitle}"/>
                                             <TextBlock Style="{StaticResource CardDescription}"
-                                                       Text="After this long without a dictation, Scribe frees the memory its speech model and its own AI cleanup model use, and asks Ollama and LM Studio to free theirs. The next dictation may take longer before Scribe types it. Ollama and LM Studio may also free a model on their own."/>
+                                                       Text="{x:Static coresettings:LocalModelTuningText.IdleReleaseDescription}"/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                                             <ComboBox x:Name="IdleReleaseCombo" MinWidth="240" DisplayMemberPath="Label"
@@ -1432,6 +1432,25 @@
                                                         <TextBlock x:Name="LocalAppLmStudioDescription" Text="Uses a model you downloaded in LM Studio." Style="{StaticResource CardDescription}"/>
                                                     </StackPanel>
                                                 </RadioButton>
+                                            </StackPanel>
+
+                                            <StackPanel Margin="0,16,0,0">
+                                                <TextBlock x:Name="AiIdleReleaseTitle" Style="{StaticResource CardTitle}"
+                                                           Text="Free memory when Scribe isn't used"/>
+                                                <TextBlock x:Name="AiIdleReleaseHintText" Style="{StaticResource CardDescription}" Margin="0,6,0,0"/>
+                                                <WrapPanel Margin="0,8,0,0">
+                                                    <ComboBox x:Name="AiIdleReleaseCombo" MinWidth="240" DisplayMemberPath="Label"
+                                                              ItemsSource="{Binding ItemsSource, ElementName=IdleReleaseCombo}"
+                                                              SelectedItem="{Binding SelectedItem, ElementName=IdleReleaseCombo, Mode=TwoWay}"
+                                                              AutomationProperties.LabeledBy="{Binding ElementName=AiIdleReleaseTitle}"
+                                                              AutomationProperties.HelpText="{Binding Text, ElementName=AiIdleReleaseHintText}"/>
+                                                    <ui:NumberBox x:Name="AiIdleReleaseCustomBox" MinWidth="96" Margin="8,0,0,0"
+                                                                  SmallChange="1" MaxDecimalPlaces="0" ClearButtonEnabled="False"
+                                                                  SpinButtonPlacementMode="Inline"
+                                                                  Value="{Binding Value, ElementName=IdleReleaseCustomBox, Mode=TwoWay}"
+                                                                  Visibility="{Binding Visibility, ElementName=IdleReleaseCustomBox}"
+                                                                  AutomationProperties.Name="Free memory custom minutes"/>
+                                                </WrapPanel>
                                             </StackPanel>
 
                                             <StackPanel x:Name="ScribeModelPanel">
@@ -3247,7 +3266,7 @@
                                 <StackPanel Grid.Column="0">
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                        <Image Grid.Column="0" Source="pack://application:,,,/Assets/scribe-mark.png" Width="72" Height="72" Margin="0,0,18,0" RenderOptions.BitmapScalingMode="HighQuality" AutomationProperties.Name="Scribe"/>
+                                        <Image Grid.Column="0" Source="pack://application:,,,/Scribe;component/Assets/scribe-mark.png" Width="72" Height="72" Margin="0,0,18,0" RenderOptions.BitmapScalingMode="HighQuality" AutomationProperties.Name="Scribe"/>
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                             <TextBlock Text="Scribe" Style="{StaticResource PageTitle}"/>
                                             <TextBlock x:Name="AboutVersionText" Text="Version" Style="{StaticResource CardDescription}" Margin="0,3,0,0"/>

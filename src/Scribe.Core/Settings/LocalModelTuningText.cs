@@ -10,6 +10,23 @@ namespace Scribe.Core.Settings;
 /// </summary>
 public static class LocalModelTuningText
 {
+    public const string IdleReleaseTitle = "Free memory when Scribe isn't used";
+
+    public const string IdleReleaseDescription =
+        "Choose how long to keep the models ready between dictations. Longer times use more memory and avoid loading " +
+        "the model again so often. Never turns off Scribe's idle release. Free memory, pausing and turning AI cleanup " +
+        "off can still free the AI model.";
+
+    public static string IdleReleaseHint(LocalServerApp app) =>
+        "This is the same choice as Advanced and also controls Scribe's speech models. Save applies it. " +
+        IdleReleaseDescription + " " +
+        (app == LocalServerApp.Ollama
+            ? "With its next request, Scribe asks Ollama to keep the model for this time, or indefinitely for Never. " +
+                "Another app or an Ollama restart can still free it."
+            : app == LocalServerApp.LmStudio
+                ? "LM Studio may still free a model according to its own settings, including with Never."
+                : "The next dictation may take longer after memory is freed.");
+
     /// <summary>The line under each app's settings expander.</summary>
     public const string TuningSummary =
         "How much the model reads at once, and how much of your vocabulary it gets. Most people never need to change these.";

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using Microsoft.UI;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Windowing;
@@ -63,8 +64,11 @@ public sealed partial class OverlayWindow : Window
 
     public OverlayWindow()
     {
+        var started = Stopwatch.GetTimestamp();
         OverlayLog.Write("OverlayWindow.ctor enter");
+        OverlayLog.Write("OverlayWindow.ctor stage=xaml begin");
         InitializeComponent();
+        OverlayLog.Write("OverlayWindow.ctor stage=xaml complete");
         _barScales = [Bar1Scale, Bar2Scale, Bar3Scale, Bar4Scale, Bar5Scale];
 
         _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
@@ -72,8 +76,12 @@ public sealed partial class OverlayWindow : Window
         _appWindow = AppWindow.GetFromWindowId(_windowId);
         OverlayLog.Write($"OverlayWindow.ctor hwnd=0x{_hwnd.ToInt64():X} windowId={_windowId.Value}");
 
+        OverlayLog.Write("OverlayWindow.ctor stage=presenter begin");
         ConfigurePresenter();
+        OverlayLog.Write("OverlayWindow.ctor stage=presenter complete");
+        OverlayLog.Write("OverlayWindow.ctor stage=styles begin");
         ApplyExtendedStyles();
+        OverlayLog.Write("OverlayWindow.ctor stage=styles complete");
 
         // DWM-composition transparency: a window with no opaque backdrop shows whatever is behind it.
         if (Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_DIAG_NOBACKDROP") == "1")
@@ -86,7 +94,9 @@ public sealed partial class OverlayWindow : Window
             OverlayLog.Write("OverlayWindow.ctor SystemBackdrop=TransparentBackdrop assigned");
         }
 
+        OverlayLog.Write("OverlayWindow.ctor stage=position begin");
         SizeAndPosition();
+        OverlayLog.Write("OverlayWindow.ctor stage=position complete");
 
         // The fade out ends in the hide. Without the storyboard the pill hides at once instead.
         if (FindStoryboard(FadeOutStoryboardKey) is { } fadeOut)
@@ -107,21 +117,30 @@ public sealed partial class OverlayWindow : Window
         _appWindow.Changed += OnAppWindowChanged;
 
         // Start hidden; the host (or App.OnLaunched in Phase 0) drives the first visible state.
+        OverlayLog.Write("OverlayWindow.ctor stage=hide begin");
         _appWindow.Hide();
         LogState("ctor.exit");
         OverlayLog.Write("OverlayWindow.ctor exit (hidden)");
+        OverlayLog.Write($"OverlayWindow.ctor complete durationMs={(long)Stopwatch.GetElapsedTime(started).TotalMilliseconds}");
     }
 
     private void ConfigurePresenter()
     {
+        OverlayLog.Write("OverlayWindow.ConfigurePresenter stage=switchers begin");
         _appWindow.IsShownInSwitchers = false; // hidden from Alt-Tab / task switcher
+        OverlayLog.Write("OverlayWindow.ConfigurePresenter stage=title begin");
         _appWindow.Title = "Scribe recording indicator";
 
+        OverlayLog.Write("OverlayWindow.ConfigurePresenter stage=presenter begin");
         if (_appWindow.Presenter is OverlappedPresenter presenter)
         {
+            OverlayLog.Write("OverlayWindow.ConfigurePresenter stage=border begin");
             presenter.SetBorderAndTitleBar(false, false);
+            OverlayLog.Write("OverlayWindow.ConfigurePresenter stage=resize begin");
             presenter.IsResizable = false;
+            OverlayLog.Write("OverlayWindow.ConfigurePresenter stage=maximize begin");
             presenter.IsMaximizable = false;
+            OverlayLog.Write("OverlayWindow.ConfigurePresenter stage=minimize begin");
             presenter.IsMinimizable = false;
             // NOTE: deliberately NOT using presenter.IsAlwaysOnTop; it is known to break
             // WS_EX_TRANSPARENT click-through. Top-most is asserted via SetWindowPos instead.

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using Scribe.Core.Cleanup;
@@ -16,6 +17,96 @@ public sealed class LocalContextServiceTests
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(20);
     private const string OllamaModel = "gemma4:e4b";
     private const string LmStudioModel = "google/gemma-4-e2b";
+
+    [Theory]
+    [InlineData("reasoning_effort")]
+    [InlineData("max_tokens")]
+    public async Task Ollama_Never_stays_on_plain_requests_after_generation_fields_were_refused(string refusedField)
+    {
+        var requests = new List<JsonElement>();
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct)).RootElement.Clone();
+            lock (requests)
+            {
+                requests.Add(body);
+            }
+
+            return body.TryGetProperty(refusedField, out _)
+                ? ScriptedHttpHandler.Json(HttpStatusCode.BadRequest, """{"error":{"message":"unsupported generation field"}}""")
+                : ScriptedHttpHandler.ChatCompletion("We ship on Friday.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        harness.Service.Configure(CleanupHarness.Custom(LocalAiServer.OllamaAddress, OllamaModel) with
+        {
+            LocalModelKeepAliveMinutes = 0,
+        });
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        Assert.Equal(CleanupOutcome.Cleaned,
+            (await harness.Service.CleanAsync("um so we ship on friday").WaitAsync(Bound)).Outcome);
+        var sent = Snapshot(requests);
+        Assert.True(sent.Count >= 3);
+        Assert.False(sent[^1].TryGetProperty(refusedField, out _));
+        Assert.All(sent, body => Assert.Equal("-1m", body.GetProperty("keep_alive").GetString()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Never_keeps_Ollama_loaded_on_both_routes_for_probe_readying_dictation_and_one_off_requests(bool nativeApi)
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        try
+        {
+            foreach (var name in new[] { "en-US", "sv-SE", "ar-SA", "fa-IR", "he-IL" })
+            {
+                CultureInfo.CurrentCulture = new CultureInfo(name);
+                await AssertNeverKeepAliveAsync(nativeApi);
+            }
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
+    }
+
+    private static async Task AssertNeverKeepAliveAsync(bool nativeApi)
+    {
+        var requests = new List<JsonElement>();
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct)).RootElement.Clone();
+            lock (requests)
+            {
+                requests.Add(body);
+            }
+
+            return nativeApi ? OllamaAnswer("We ship on Friday.") : ScriptedHttpHandler.ChatCompletion("We ship on Friday.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.Custom(LocalAiServer.OllamaAddress, OllamaModel) with
+        {
+            LocalContextTokens = nativeApi ? 8192 : null,
+            LocalModelKeepAliveMinutes = 0,
+        });
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        harness.LocalServers.State = new LocalServerState(LocalServerReach.Reached, [], []);
+        svc.ForgetLastModelAnswerForTesting();
+        var admitted = svc.Admit(CleanupVocabulary.None);
+        admitted.Prewarm();
+        await svc.WaitForPrewarmForTesting().WaitAsync(Bound);
+        Assert.Equal(CleanupOutcome.Cleaned, (await admitted.CleanAsync("um so we ship on friday").WaitAsync(Bound)).Outcome);
+        Assert.Equal(CompletionOutcome.Completed,
+            (await svc.CompleteAsync("Return a short answer.", "So we ship on Friday.", svc.Recipient!).WaitAsync(Bound)).Outcome);
+        var sent = Snapshot(requests);
+        Assert.True(sent.Count >= 4);
+        Assert.All(sent, body => Assert.Equal("-1m", body.GetProperty("keep_alive").GetString()));
+        Assert.Contains(sent, body =>
+            nativeApi ? body.GetProperty("options").GetProperty("num_predict").GetInt32() == 1
+                : body.GetProperty("max_tokens").GetInt32() == 1);
+        Assert.Empty(harness.LocalServers.Unloads);
+    }
 
     [Fact]
     public async Task Ollama_s_own_API_asks_for_the_size_on_every_request_with_the_rest_of_the_tuning()
@@ -69,7 +160,7 @@ public sealed class LocalContextServiceTests
 
     [Theory]
     [InlineData(HttpStatusCode.NotFound, "The AI service could not find that model (404). Check the model name.")]
-    [InlineData(HttpStatusCode.InternalServerError, "The AI service returned a server error (500). This is usually transient.")]
+    [InlineData(HttpStatusCode.InternalServerError, "Ollama couldn't load or run the model (500). Check the app and try again.")]
     public async Task An_error_Ollama_answers_on_its_own_API_is_reported_by_its_status_not_as_a_network_failure(
         HttpStatusCode status, string reason)
     {

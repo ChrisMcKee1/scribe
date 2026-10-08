@@ -18,6 +18,7 @@ public sealed class LocalModelMemoryTests
 
     [Theory]
     [InlineData(Ollama, 10, "keep_alive", "10m")]
+    [InlineData(Ollama, 0, "keep_alive", "-1m")]
     [InlineData(LmStudio, 10, "ttl", "600")]
     public async Task Ollama_and_LM_Studio_keep_the_model_as_long_as_Scribe_keeps_its_own(
         string endpoint, int minutes, string field, string expected)
@@ -33,7 +34,7 @@ public sealed class LocalModelMemoryTests
 
     [Theory]
     [InlineData(Ollama, null)]
-    [InlineData(Ollama, 0)]
+    [InlineData(LmStudio, 0)]
     [InlineData("http://localhost:8080/v1", 10)]
     [InlineData("https://ai.example.invalid/v1", 10)]
     public async Task Any_other_server_or_a_setting_that_never_frees_memory_keeps_its_own_policy(string endpoint, int? minutes)
@@ -78,9 +79,11 @@ public sealed class LocalModelMemoryTests
     /// and it loads with the new time when it is next used. Nothing is loaded again in the meantime.
     /// </summary>
     [Theory]
-    [InlineData(30, 5)]
-    [InlineData(null, 10)]
-    public async Task A_shorter_idle_time_frees_the_model_once_so_it_loads_with_the_new_time(int? before, int after)
+    [InlineData(LmStudio, "google/gemma-4-e2b", 30, 5)]
+    [InlineData(LmStudio, "google/gemma-4-e2b", null, 10)]
+    [InlineData(Ollama, "gemma4:e2b", 0, 10)]
+    public async Task A_shorter_idle_time_frees_the_model_once_so_it_loads_with_the_new_time(
+        string endpoint, string model, int? before, int after)
     {
         var bodies = new List<JsonElement>();
         var http = new ScriptedHttpHandler(async (request, ct) =>
@@ -95,7 +98,7 @@ public sealed class LocalModelMemoryTests
         });
         await using var harness = new CleanupHarness(http: http);
         var svc = harness.Service;
-        svc.Configure(CleanupHarness.Custom(LmStudio, "google/gemma-4-e2b") with { LocalModelKeepAliveMinutes = before });
+        svc.Configure(CleanupHarness.Custom(endpoint, model) with { LocalModelKeepAliveMinutes = before });
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
         int Sent()
         {
@@ -106,11 +109,11 @@ public sealed class LocalModelMemoryTests
         }
 
         var sent = Sent();
-        svc.Configure(CleanupHarness.Custom(LmStudio, "google/gemma-4-e2b") with { LocalModelKeepAliveMinutes = after });
+        svc.Configure(CleanupHarness.Custom(endpoint, model) with { LocalModelKeepAliveMinutes = after });
 
         await harness.LocalServers.WaitForUnloadsAsync(1, Bound);
         await Task.Delay(100);
-        Assert.Equal([(LmStudio, "google/gemma-4-e2b")], harness.LocalServers.Unloads);
+        Assert.Equal([(endpoint, model)], harness.LocalServers.Unloads);
         Assert.Equal(sent, Sent());
         Assert.Equal(CleanupStatus.Ready, svc.Status);
 
@@ -121,7 +124,48 @@ public sealed class LocalModelMemoryTests
             last = bodies[^1];
         }
 
-        Assert.Equal(after * 60, last.GetProperty("ttl").GetInt32());
+        if (endpoint == Ollama)
+        {
+            Assert.Equal($"{after}m", last.GetProperty("keep_alive").GetString());
+        }
+        else
+        {
+            Assert.Equal(after * 60, last.GetProperty("ttl").GetInt32());
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Choosing_Never_keeps_the_loaded_Ollama_model_and_applies_indefinite_retention_on_the_next_request(bool nativeApi)
+    {
+        var bodies = new List<JsonElement>();
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct)).RootElement.Clone();
+            lock (bodies)
+            {
+                bodies.Add(body);
+            }
+
+            return ModelAnswer("So we ship on Friday.", nativeApi);
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        var finite = CleanupHarness.Custom(Ollama, "gemma4:e2b") with
+        {
+            LocalModelKeepAliveMinutes = 10,
+            LocalContextTokens = nativeApi ? 8192 : null,
+        };
+        svc.Configure(finite);
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        svc.Configure(finite with { LocalModelKeepAliveMinutes = 0 });
+        Assert.Equal(CleanupOutcome.Cleaned, (await svc.CleanAsync("um so we ship on friday").WaitAsync(Bound)).Outcome);
+        Assert.Empty(harness.LocalServers.Unloads);
+        lock (bodies)
+        {
+            Assert.Equal("-1m", bodies[^1].GetProperty("keep_alive").GetString());
+        }
     }
 
     [Fact]
@@ -154,18 +198,18 @@ public sealed class LocalModelMemoryTests
     }
 
     /// <summary>
-    /// Every request asked the app to keep the model only the idle time (keep_alive, ttl), so at the idle time the app has
-    /// freed it on its own clock, counted from Scribe's last request: Scribe asks nothing more, which also leaves alone a
-    /// model someone else used since, or one the user loaded in the app itself. Only requests that could not say so (the
-    /// idle time off, which releases nothing on idle anyway) leave the asking to Scribe.
+    /// Each request gives the app the retention choice, a finite idle time or Ollama's indefinite keep. Scribe does not
+    /// repeat that idle decision, which could free a model someone else used since. A pause still explicitly frees it.
     /// </summary>
     [Theory]
-    [InlineData(Ollama, "gemma4:e2b")]
-    [InlineData(LmStudio, "google/gemma-3-4b")]
-    public async Task At_the_idle_time_the_app_frees_the_model_on_its_own_clock(string endpoint, string model)
+    [InlineData(Ollama, "gemma4:e2b", 10)]
+    [InlineData(Ollama, "gemma4:e2b", 0)]
+    [InlineData(LmStudio, "google/gemma-3-4b", 10)]
+    public async Task Idle_release_leaves_the_requested_retention_to_the_app_and_pause_still_frees_the_model(
+        string endpoint, string model, int minutes)
     {
         await using var harness = new CleanupHarness();
-        harness.Service.Configure(CleanupHarness.Custom(endpoint, model) with { LocalModelKeepAliveMinutes = 10 });
+        harness.Service.Configure(CleanupHarness.Custom(endpoint, model) with { LocalModelKeepAliveMinutes = minutes });
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
 
         harness.Service.ReleaseModelMemory(ModelMemoryRelease.Idle);
@@ -321,6 +365,179 @@ public sealed class LocalModelMemoryTests
         var result = await dictation.WaitAsync(Bound);
         Assert.Equal(CleanupOutcome.Cleaned, result.Outcome);
         Assert.Equal(0, Volatile.Read(ref sentWhileLoading));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_dictation_waits_for_readied_instructions_even_when_the_model_was_already_loaded(bool nativeApi)
+    {
+        var readyingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishReadying = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dictationSent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var body = await request.Content!.ReadAsStringAsync(ct);
+            if (IsReadying(body))
+            {
+                readyingStarted.TrySetResult();
+                await finishReadying.Task.WaitAsync(ct);
+                return ModelAnswer("ok", nativeApi);
+            }
+
+            if (body.Contains("um so we ship on friday", StringComparison.Ordinal))
+            {
+                dictationSent.TrySetResult();
+            }
+
+            return ModelAnswer("So we ship on Friday.", nativeApi);
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.LocalModelStartWait = Bound;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b") with { LocalContextTokens = nativeApi ? 8192 : null });
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        harness.LocalServers.State = new LocalServerState(
+            LocalServerReach.Reached,
+            [new LocalServerModel("gemma4:e2b", "gemma4:e2b", 1)],
+            [new LocalServerLoadedModel("gemma4:e2b", 1)]);
+
+        try
+        {
+            svc.ForgetLastModelAnswerForTesting();
+            var admitted = svc.Admit(CleanupVocabulary.None);
+            admitted.Prewarm();
+            await readyingStarted.Task.WaitAsync(Bound);
+            Assert.False(svc.IsLocalModelStarting);
+
+            var dictation = admitted.CleanAsync("um so we ship on friday");
+            Assert.False(dictationSent.Task.IsCompleted);
+            Assert.False(dictation.IsCompleted);
+
+            finishReadying.SetResult();
+            Assert.Equal(CleanupOutcome.Cleaned, (await dictation.WaitAsync(Bound)).Outcome);
+            Assert.True(dictationSent.Task.IsCompleted);
+        }
+        finally
+        {
+            finishReadying.TrySetResult();
+        }
+    }
+
+    [Theory]
+    [InlineData(Ollama)]
+    [InlineData("http://localhost:8080/v1")]
+    public async Task Instruction_readying_that_outlasts_the_wait_is_not_reported_as_a_model_start_and_recovers(string endpoint)
+    {
+        var readyingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishReadying = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dictationRequests = 0;
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var body = await request.Content!.ReadAsStringAsync(ct);
+            if (IsReadying(body))
+            {
+                readyingStarted.TrySetResult();
+                await finishReadying.Task.WaitAsync(ct);
+                return ScriptedHttpHandler.ChatCompletion("ok");
+            }
+
+            if (body.Contains("um so we ship on friday", StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref dictationRequests);
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("So we ship on Friday.");
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.LocalModelStartWait = TimeSpan.FromMilliseconds(20);
+        svc.Configure(CleanupHarness.Custom(endpoint, "gemma4:e2b"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        harness.LocalServers.State = new LocalServerState(
+            LocalServerReach.Reached, [], [new LocalServerLoadedModel("gemma4:e2b", 1)]);
+        try
+        {
+            svc.ForgetLastModelAnswerForTesting();
+            var admitted = svc.Admit(CleanupVocabulary.None);
+            admitted.Prewarm();
+            await readyingStarted.Task.WaitAsync(Bound);
+            Assert.False(svc.IsLocalModelStarting);
+            var skipped = await admitted.CleanAsync("um so we ship on friday").WaitAsync(Bound);
+            Assert.Equal(CleanupOutcome.Skipped, skipped.Outcome);
+            Assert.Equal("um so we ship on friday", skipped.Text);
+            Assert.Contains("getting ready", skipped.DisplayDetail, StringComparison.Ordinal);
+            Assert.DoesNotContain("starting", skipped.DisplayDetail, StringComparison.Ordinal);
+            Assert.Equal(0, Volatile.Read(ref dictationRequests));
+            finishReadying.SetResult();
+            await svc.WaitForPrewarmForTesting().WaitAsync(Bound);
+            Assert.Equal(CleanupOutcome.Cleaned, (await admitted.CleanAsync("um so we ship on friday").WaitAsync(Bound)).Outcome);
+            Assert.Equal(1, Volatile.Read(ref dictationRequests));
+        }
+        finally
+        {
+            finishReadying.TrySetResult();
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Free_memory_after_recording_readied_the_model_checks_and_loads_it_before_cleanup(bool nativeApi)
+    {
+        var readyingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finishReadying = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dictationSent = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var body = await request.Content!.ReadAsStringAsync(ct);
+            if (IsReadying(body))
+            {
+                readyingStarted.TrySetResult();
+                await finishReadying.Task.WaitAsync(ct);
+                return ModelAnswer("ok", nativeApi);
+            }
+
+            if (body.Contains("um so we ship on friday", StringComparison.Ordinal))
+            {
+                dictationSent.TrySetResult();
+            }
+
+            return ModelAnswer("So we ship on Friday.", nativeApi);
+        });
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+        svc.LocalModelStartWait = Bound;
+        svc.Configure(CleanupHarness.Custom(Ollama, "gemma4:e2b") with { LocalContextTokens = nativeApi ? 8192 : null });
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        harness.LocalServers.State = new LocalServerState(
+            LocalServerReach.Reached,
+            [new LocalServerModel("gemma4:e2b", "gemma4:e2b", 1)],
+            [new LocalServerLoadedModel("gemma4:e2b", 1)]);
+        var admitted = svc.Admit(CleanupVocabulary.None);
+        admitted.Prewarm();
+        await svc.WaitForPrewarmForTesting().WaitAsync(Bound);
+        var before = harness.LocalServers.Reads;
+        Assert.True(await svc.FreeLocalAppModelAsync(Ollama, "gemma4:e2b").WaitAsync(Bound));
+        harness.LocalServers.State = harness.LocalServers.State with { Loaded = [] };
+
+        try
+        {
+            var dictation = admitted.CleanAsync("um so we ship on friday");
+            await readyingStarted.Task.WaitAsync(Bound);
+            Assert.True(harness.LocalServers.Reads > before);
+            Assert.True(svc.IsLocalModelStarting);
+            Assert.False(dictationSent.Task.IsCompleted);
+            Assert.Equal(CleanupStatus.Ready, svc.Status);
+
+            finishReadying.SetResult();
+            Assert.Equal(CleanupOutcome.Cleaned, (await dictation.WaitAsync(Bound)).Outcome);
+            Assert.True(dictationSent.Task.IsCompleted);
+        }
+        finally
+        {
+            finishReadying.TrySetResult();
+        }
     }
 
     [Fact]
@@ -1294,8 +1511,24 @@ public sealed class LocalModelMemoryTests
     private static bool IsReadying(string body)
     {
         using var json = JsonDocument.Parse(body);
-        return json.RootElement.TryGetProperty("max_tokens", out var max) && max.GetInt32() == 1;
+        return (json.RootElement.TryGetProperty("max_tokens", out var max) && max.GetInt32() == 1) ||
+            (json.RootElement.TryGetProperty("options", out var options) &&
+                options.TryGetProperty("num_predict", out var predicted) && predicted.GetInt32() == 1);
     }
+
+    private static HttpResponseMessage ModelAnswer(string content, bool nativeApi) =>
+        nativeApi
+            ? ScriptedHttpHandler.Json(HttpStatusCode.OK, JsonSerializer.Serialize(new
+            {
+                model = "gemma4:e2b",
+                created_at = "2026-10-08T00:00:00Z",
+                message = new { role = "assistant", content },
+                done = true,
+                done_reason = "stop",
+                prompt_eval_count = 40,
+                eval_count = 1,
+            }))
+            : ScriptedHttpHandler.ChatCompletion(content);
 
     private static string RepositoryRoot()
     {

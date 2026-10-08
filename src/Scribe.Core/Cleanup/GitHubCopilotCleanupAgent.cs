@@ -2,15 +2,17 @@ using System.Threading.Channels;
 using GitHub.Copilot;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
+using Scribe.Core.Diagnostics;
 
 namespace Scribe.Core.Cleanup;
 
 /// <summary>
 /// The GitHub Copilot provider's cleanup agent and its admission point (contract 2.10). A run creates a Copilot session,
 /// whose system message carries the instructions and so the glossary, sends it the transcript, collects the answer and
-/// destroys the session, exactly as Agent Framework 1.20.0's <c>GitHubCopilotAgent</c> runs the same
-/// <see cref="SessionConfig"/>, except that the session's creation and its send are each started only through
-/// <see cref="CleanupAdmission.TryHandOff"/>.
+/// detaches and best-effort deletes the session. It preserves Agent Framework's <see cref="SessionConfig"/> and answer
+/// mapping, except that the session's creation and its send are each started only through
+/// <see cref="CleanupAdmission.TryHandOff"/>, and deletion follows detach.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -21,7 +23,7 @@ namespace Scribe.Core.Cleanup;
 /// the send is handed over on its own, as the contract names it, and so is the creation, because its system message
 /// hands the glossary to a runtime Scribe does not control. A request already handed over cannot be recalled: a
 /// revocation between the two leaves a session that received the instructions and never a transcript, and it is
-/// destroyed.
+/// best-effort deleted.
 /// </para>
 /// <para>
 /// What the runtime receives is what the Agent Framework agent sent: the same session configuration
@@ -37,23 +39,46 @@ namespace Scribe.Core.Cleanup;
 /// Referenced only from <see cref="GitHubCopilotAgentFactory"/>, so the Copilot assemblies still load only for a user who
 /// selects the provider.
 /// </para>
+/// <para>
+/// Each cleanup step waits at most two seconds, four in total, independently of the cancelled caller. Its owner keeps
+/// the actual SDK work leased after a wait expires and refuses any step once shutdown closes admission. A refused
+/// deletion leaves disk cleanup best-effort; it must never reconnect a client the owner already stopped.
+/// </para>
 /// </remarks>
 internal sealed class GitHubCopilotCleanupAgent : AIAgent
 {
     private readonly CopilotClient _client;
+    private readonly GitHubCopilotClientLifetime _owner;
     private readonly SessionConfig _sessionConfig;
     private readonly string _name;
+    private readonly ILogger? _logger;
+    private readonly TimeProvider _timeProvider;
+
+    internal static readonly TimeSpan CleanupStepTimeout = TimeSpan.FromSeconds(2);
 
     /// <param name="client">The service's client; the service owns it and releases it, never the agent.</param>
+    /// <param name="owner">The same owner the service releases, which closes admission before stopping its client.</param>
     /// <param name="sessionConfig">This agent's configuration, copied for each run because creating a session edits it.</param>
     /// <param name="name">The agent's name.</param>
-    internal GitHubCopilotCleanupAgent(CopilotClient client, SessionConfig sessionConfig, string name)
+    /// <param name="logger">Receives cleanup failures by shape only, behind a non-throwing boundary.</param>
+    /// <param name="timeProvider">The clock for the cleanup bounds.</param>
+    internal GitHubCopilotCleanupAgent(
+        CopilotClient client,
+        GitHubCopilotClientLifetime owner,
+        SessionConfig sessionConfig,
+        string name,
+        ILogger? logger = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(owner);
         ArgumentNullException.ThrowIfNull(sessionConfig);
         _client = client;
+        _owner = owner;
         _sessionConfig = sessionConfig;
         _name = name;
+        _logger = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public override string Name => _name;
@@ -78,23 +103,29 @@ internal sealed class GitHubCopilotCleanupAgent : AIAgent
         // Everything a request needs is ready before it is handed over, so each hand-off only starts its request.
         var prompt = string.Join("\n", messages.Select(message => message.Text));
         var config = _sessionConfig.Clone();
+        // Known before the RPC, so a failed or cancelled creation can still have its disk state deleted.
+        var sessionId = Guid.NewGuid().ToString();
+        config.SessionId = sessionId;
         config.Streaming = _sessionConfig.Streaming ?? true;
         var streaming = config.Streaming.Value;
 
         // The client was started when the provider was set up, so this carries nothing and returns at once; it keeps the
         // start of the runtime, should it ever be needed here, out of the permission gate.
-        await _client.StartAsync(cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+        await _owner.RunAsync(() => _client.StartAsync(cancellationToken)).ConfigureAwait(false);
 
         Task<CopilotSession>? creating = null;
-        if (!admission.TryHandOff(() => creating = Start(() => _client.CreateSessionAsync(config, cancellationToken)), out var refusal))
-        {
-            throw new VocabularyHandOffRefusedException(refusal);
-        }
-
-        var copilotSession = await creating!.ConfigureAwait(false);
-        var answered = false;
+        CopilotSession? copilotSession = null;
         try
         {
+            if (!admission.TryHandOff(
+                () => creating = Start(() => _owner.RunAsync(() => _client.CreateSessionAsync(config, cancellationToken))), out var refusal))
+            {
+                throw new VocabularyHandOffRefusedException(refusal);
+            }
+
+            copilotSession = await creating!.ConfigureAwait(false);
+
             // Subscribed before the send, so no event of the answer can be missed.
             var updates = Channel.CreateUnbounded<AgentResponseUpdate>();
             using var subscription = copilotSession.On<SessionEvent>(sessionEvent => Deliver(sessionEvent, streaming, updates.Writer));
@@ -103,7 +134,8 @@ internal sealed class GitHubCopilotCleanupAgent : AIAgent
             // the send back.
             Task<string>? sending = null;
             var send = new MessageOptions { Prompt = prompt };
-            if (!admission.TryHandOff(() => sending = Start(() => copilotSession.SendAsync(send, cancellationToken)), out refusal))
+            if (!admission.TryHandOff(
+                () => sending = Start(() => _owner.RunAsync(() => copilotSession.SendAsync(send, cancellationToken))), out refusal))
             {
                 throw new VocabularyHandOffRefusedException(refusal);
             }
@@ -115,20 +147,21 @@ internal sealed class GitHubCopilotCleanupAgent : AIAgent
                 received.Add(update);
             }
 
-            answered = true;
             return received.ToAgentResponse();
         }
         finally
         {
-            try
+            if (creating is not null)
             {
-                await copilotSession.DisposeAsync().ConfigureAwait(false);
-            }
-            catch (Exception) when (!answered)
-            {
-                // The run's own outcome is what the caller must see, a held-back send above all: a failed teardown after
-                // it never turns a permission change into a failure. After an answer, a failed teardown fails the run, as
-                // it did with the Agent Framework agent.
+                if (copilotSession is not null)
+                {
+                    // SDK 1.0.14 closes the event channel before awaiting detach, then unregisters in its finally.
+                    // Disposal preserves disk state; deletion is still attempted if detach fails or exceeds its bound.
+                    await CleanupStepAsync(_ => copilotSession.DisposeAsync().AsTask(), "detach").ConfigureAwait(false);
+                }
+
+                await CleanupStepAsync(
+                    token => _client.DeleteSessionAsync(sessionId, token), "delete").ConfigureAwait(false);
             }
         }
     }
@@ -157,7 +190,50 @@ internal sealed class GitHubCopilotCleanupAgent : AIAgent
         throw new NotSupportedException(StatelessMessage);
 
     private const string StatelessMessage =
-        "A cleanup run is stateless: each run creates its own Copilot session and destroys it.";
+        "A cleanup run is stateless: each run creates its own Copilot session and attempts to delete it.";
+
+    internal async Task CleanupStepAsync(Func<CancellationToken, Task> cleanup, string step)
+    {
+        Task? work = null;
+        // Never linked to the caller: a cancelled dictation still owes cleanup. WaitAsync also bounds a stalled SDK
+        // operation, notably DisposeAsync, which has no cancellation parameter. A pending detach stays with the SDK
+        // until a reply or the owner disconnects; successful deletion removes its client registration in the meantime.
+        try
+        {
+            using var bound = new CancellationTokenSource(CleanupStepTimeout, _timeProvider);
+            var token = bound.Token;
+            // Admission is taken on the worker immediately before invoking the SDK. It covers the actual task,
+            // including a synchronous prefix and any tail that outlives this caller's bound.
+            work = Task.Run(() => _owner.RunAsync(() =>
+            {
+                token.ThrowIfCancellationRequested();
+                return cleanup(token);
+            }));
+            await work.WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            if (work is not null)
+            {
+                _ = work.ContinueWith(
+                    completed => { _ = completed.Exception; },
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+
+            try
+            {
+                _logger?.LogWarning(
+                    "Copilot session cleanup {Step} failed: {FailureShape}. Local session data may remain.",
+                    step, FailureShape.Describe(ex));
+            }
+            catch (Exception)
+            {
+                // Cleanup and its diagnostics never change an answer, a cancellation or a held-back send.
+            }
+        }
+    }
 
     // Runs inside the permission gate, so it never throws there: a request that fails to start fails its own task.
     private static Task<T> Start<T>(Func<Task<T>> start)
@@ -172,7 +248,7 @@ internal sealed class GitHubCopilotCleanupAgent : AIAgent
         }
     }
 
-    // The events Agent Framework 1.20.0's agent maps, mapped to the same content, roles and message ids, which is what
+    // The events Agent Framework's agent maps, mapped to the same content, roles and message ids, which is what
     // decides the response's text and usage. Tool arguments are not parsed: Scribe registers no tools and reads neither.
     private void Deliver(SessionEvent sessionEvent, bool streaming, ChannelWriter<AgentResponseUpdate> updates)
     {

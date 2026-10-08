@@ -57,6 +57,54 @@ public sealed class CleanupDisclosureTests
     }
 
     [Fact]
+    public void The_client_request_headers_are_disclosed_in_settings_and_the_privacy_policy()
+    {
+        var text = CleanupDisclosure.AiClientRequestMetadata;
+        Assert.Contains(text, CleanupDisclosure.WhatCleanupSends, StringComparison.Ordinal);
+        foreach (var field in new[] { "language and version", "operating system", "processor architecture", "runtime name and version" })
+        {
+            Assert.Contains(field, text, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("same AI service", text, StringComparison.Ordinal);
+        var privacy = File.ReadAllText(Path.Combine(RepositoryRoot(), "PRIVACY.md"));
+        Assert.Contains("six `X-Stainless-*`", privacy, StringComparison.Ordinal);
+        Assert.Contains("not to a separate telemetry service", privacy, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_openai_client_sends_the_six_disclosed_metadata_headers_to_the_request_service()
+    {
+        var requests = new List<Dictionary<string, string>>();
+        var http = new ScriptedHttpHandler((request, _) =>
+        {
+            requests.Add(request.Headers
+                .Where(header => header.Key.StartsWith("X-Stainless-", StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(header => header.Key, header => string.Join(",", header.Value), StringComparer.OrdinalIgnoreCase));
+            return Task.FromResult(ScriptedHttpHandler.ChatCompletion("So we ship on Friday."));
+        });
+        await using var harness = new CleanupHarness(http: http);
+        harness.Service.Configure(CleanupHarness.Custom("https://ai.example.invalid/v1", "test-model"));
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        Assert.Equal(CleanupOutcome.Cleaned,
+            (await harness.Service.CleanAsync("um so we ship on friday", CancellationToken.None)).Outcome);
+
+        Assert.True(requests.Count >= 2);
+        Assert.All(requests, headers =>
+        {
+            foreach (var field in new[]
+                     {
+                         "X-Stainless-Lang", "X-Stainless-Package-Version", "X-Stainless-OS",
+                         "X-Stainless-Arch", "X-Stainless-Runtime", "X-Stainless-Runtime-Version",
+                     })
+            {
+                Assert.True(headers.TryGetValue(field, out var value), field);
+                Assert.False(string.IsNullOrWhiteSpace(value), field);
+            }
+        });
+    }
+
+    [Fact]
     public void The_connection_check_is_disclosed_and_says_it_carries_no_vocabulary()
     {
         var text = CleanupDisclosure.WhatCleanupNeverSends;

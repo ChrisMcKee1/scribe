@@ -12,6 +12,7 @@ public sealed class SettingsSearchIndexTests
         ["ModeCombo"] = "Part of its shortcut row; the shortcut's entry lands beside it.",
         ["DictationOnlyModeCombo"] = "Part of its shortcut row; the shortcut's entry lands beside it.",
         ["IdleReleaseCustomBox"] = "Shown only for Custom in its duration list; the list's entry covers it.",
+        ["AiIdleReleaseCustomBox"] = "The AI cleanup copy of the same custom duration; its duration list's entry covers it.",
         ["MaxDictationCustomBox"] = "Shown only for Custom in its duration list; the list's entry covers it.",
         ["SnippetEnabledCheck"] = "A row editor; the page's entry covers it.",
         ["SnippetPhraseBox"] = "A row editor; the page's entry covers it.",
@@ -64,6 +65,7 @@ public sealed class SettingsSearchIndexTests
     [InlineData("boot", "Start with Windows", SettingsPage.Dictation)]
     [InlineData("download ollama", "Model name", SettingsPage.AiCleanup)]
     [InlineData("ollama service", "Start Ollama", SettingsPage.AiCleanup)]
+    [InlineData("unload", "Free memory when Scribe isn't used", SettingsPage.AiCleanup)]
     [InlineData("markdown", "Default text format for app profiles", SettingsPage.Dictation)]
     [InlineData("plain text once", "Use app-aware formatting", SettingsPage.Dictation)]
     [InlineData("profile clipboard", "App profiles", SettingsPage.AppProfiles)]

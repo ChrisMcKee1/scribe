@@ -166,6 +166,11 @@ public partial class SettingsWindow
         SaveButton.IsEnabled = dirty || _settingsRecovered;
         SaveCloseButton.IsEnabled = !_saveInProgress;
         RecoveredSettingsNotice.IsOpen = _settingsRecovered;
+        if (SectionTryDictation.Visibility == Visibility.Visible)
+        {
+            UpdateTryDictationPage(_currentChanges);
+        }
+
         if (!string.Equals(_footerStatus, text, StringComparison.Ordinal))
         {
             _footerStatus = text;

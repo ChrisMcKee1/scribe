@@ -60,10 +60,14 @@ public sealed class DictationOutcomeHandOffTests
         var delivery = warning.IndexOf("relay.PublishIfCurrent(", StringComparison.Ordinal);
         Assert.True(delivery >= 0);
         var work = warning[delivery..];
+        Assert.Contains(
+            "if (OverlayFeedback.CanShow(_controller?.CurrentSettings.ShowOverlay == true, _overlay?.Availability))",
+            work, StringComparison.Ordinal);
+        Assert.Contains("_overlay?.ShowRecordingWarning(reason, delivered =>", work, StringComparison.Ordinal);
         Assert.True(
-            work.IndexOf("if (_controller?.CurrentSettings.ShowOverlay == true)", StringComparison.Ordinal) <
-            work.IndexOf("_overlay?.ShowRecordingWarning(reason);", StringComparison.Ordinal),
-            "The pill shows the warning only if the indicator is still on when the warning is delivered.");
+            work.IndexOf("if (OverlayFeedback.CanShow(_controller?.CurrentSettings.ShowOverlay == true, _overlay?.Availability))", StringComparison.Ordinal) <
+            work.IndexOf("_overlay?.ShowRecordingWarning(reason, delivered =>", StringComparison.Ordinal),
+            "The pill shows the warning only if the indicator is still on and available when the warning is delivered.");
     }
 
     [Fact]

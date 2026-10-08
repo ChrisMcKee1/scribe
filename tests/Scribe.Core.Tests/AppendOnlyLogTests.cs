@@ -1084,7 +1084,7 @@ public sealed class AppendOnlyLogTests : IDisposable
         foreach (var later in new[]
                  {
                      "Process.Start(psi)", "_process = process;", "HelperExitWatch.Attach(process, _log);",
-                     "new NamedPipeClientStream(", "writer.WriteLine(_desired.ReplayLine);",
+                     "new NamedPipeClientStream(", "WriteWithTimeout(_desired.ReplayLine);",
                  })
         {
             Assert.True(client.IndexOf(later, StringComparison.Ordinal) > refused, later);

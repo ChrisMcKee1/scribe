@@ -11,6 +11,23 @@ namespace Scribe.Core.Tests;
 public sealed class LocalModelTuningTextTests
 {
     [Fact]
+    public void Idle_memory_copy_explains_the_shared_choice_and_Never_without_promising_external_ownership()
+    {
+        foreach (var app in new[] { LocalServerApp.None, LocalServerApp.Ollama, LocalServerApp.LmStudio })
+        {
+            var hint = LocalModelTuningText.IdleReleaseHint(app);
+            Assert.Contains("same choice as Advanced", hint, StringComparison.Ordinal);
+            Assert.Contains("Save applies it", hint, StringComparison.Ordinal);
+            Assert.Contains("speech models", hint, StringComparison.Ordinal);
+            Assert.Contains("pausing and turning AI cleanup", hint, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("indefinitely for Never", LocalModelTuningText.IdleReleaseHint(LocalServerApp.Ollama), StringComparison.Ordinal);
+        Assert.Contains("Another app or an Ollama restart", LocalModelTuningText.IdleReleaseHint(LocalServerApp.Ollama), StringComparison.Ordinal);
+        Assert.Contains("according to its own settings", LocalModelTuningText.IdleReleaseHint(LocalServerApp.LmStudio), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void The_size_list_starts_with_the_app_s_own_setting_and_names_each_size_in_tokens()
     {
         var sizes = LocalModelTuningText.ContextSizes("Ollama");
@@ -90,6 +107,9 @@ public sealed class LocalModelTuningTextTests
     {
         string[] texts =
         [
+            LocalModelTuningText.IdleReleaseDescription,
+            LocalModelTuningText.IdleReleaseHint(LocalServerApp.Ollama),
+            LocalModelTuningText.IdleReleaseHint(LocalServerApp.LmStudio),
             LocalModelTuningText.TuningSummary,
             LocalModelTuningText.WholeVocabularyTitle,
             LocalModelTuningText.AppWholeVocabularyHint,

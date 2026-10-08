@@ -37,34 +37,55 @@ public static class GitHubCopilotModels
     /// Lists the models available to the signed-in account, or an empty list when the CLI cannot
     /// answer. Never throws: an unreadable list is a reason to fall back to free text, not an error
     /// to show a user who was only opening Settings.
+    /// The query waits at most 60 seconds, followed by the owner's at most eight seconds of shutdown waits.
     /// </summary>
     /// <param name="cliPath">Path to the Copilot CLI, from <see cref="GitHubCopilotCli.Detect"/>.</param>
     /// <param name="cancellationToken">Cancellation for the whole probe.</param>
-    public static async Task<IReadOnlyList<GitHubCopilotModel>> ListAsync(
-        string cliPath, CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(cliPath))
-        {
-            return [];
-        }
+    public static Task<IReadOnlyList<GitHubCopilotModel>> ListAsync(
+        string cliPath, CancellationToken cancellationToken = default) =>
+        string.IsNullOrWhiteSpace(cliPath)
+            ? Task.FromResult<IReadOnlyList<GitHubCopilotModel>>([])
+            : ListCoreAsync(cliPath, null, TimeProvider.System, cancellationToken);
 
+    internal static Task<IReadOnlyList<GitHubCopilotModel>> ListForRuntimeAsync(
+        string runtimeUrl, TimeProvider timeProvider, CancellationToken cancellationToken = default) =>
+        ListCoreAsync(null, runtimeUrl, timeProvider, cancellationToken);
+
+    private static async Task<IReadOnlyList<GitHubCopilotModel>> ListCoreAsync(
+        string? cliPath, string? runtimeUrl, TimeProvider timeProvider, CancellationToken cancellationToken)
+    {
         // Bounded independently of the caller: this runs from a button in Settings, and a CLI that
         // never answers must not leave that button disabled for the life of the window.
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(TimeSpan.FromSeconds(60));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60), timeProvider);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
 
-        GitHub.Copilot.CopilotClient? client = null;
+        GitHubCopilotClientLifetime? owner = null;
         try
         {
-            client = new GitHub.Copilot.CopilotClient(new GitHub.Copilot.CopilotClientOptions
+            var client = new GitHub.Copilot.CopilotClient(new GitHub.Copilot.CopilotClientOptions
             {
                 // The user's own installed CLI, exactly as the cleanup path does it. Scribe ships no
                 // Copilot runtime of its own (see CopilotSkipCliDownload in Directory.Build.props).
-                Connection = GitHub.Copilot.RuntimeConnection.ForStdio(cliPath),
+                Connection = runtimeUrl is null
+                    ? GitHub.Copilot.RuntimeConnection.ForStdio(cliPath!)
+                    : GitHub.Copilot.RuntimeConnection.ForUri(runtimeUrl),
             });
+            var clientOwner = new GitHubCopilotClientLifetime(client, timeProvider: timeProvider);
+            owner = clientOwner;
 
-            await client.StartAsync(cts.Token).ConfigureAwait(false);
-            var models = await client.ListModelsAsync(cts.Token).ConfigureAwait(false);
+            var token = cts.Token;
+            var listing = Task.Run(async () =>
+            {
+                token.ThrowIfCancellationRequested();
+                await clientOwner.RunAsync(() => client.StartAsync(token)).ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                return await clientOwner.RunAsync(() => client.ListModelsAsync(token)).ConfigureAwait(false);
+            });
+            _ = listing.ContinueWith(
+                completed => { _ = completed.Exception; },
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            var models = await listing.WaitAsync(token).ConfigureAwait(false);
 
             return [.. models
                 .Where(m => !string.IsNullOrWhiteSpace(m.Id))
@@ -82,11 +103,11 @@ public static class GitHubCopilotModels
         }
         finally
         {
-            if (client is not null)
+            if (owner is not null)
             {
                 try
                 {
-                    await client.DisposeAsync().ConfigureAwait(false);
+                    await owner.DisposeAsync().ConfigureAwait(false);
                 }
                 catch (Exception)
                 {

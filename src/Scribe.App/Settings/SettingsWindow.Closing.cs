@@ -433,7 +433,7 @@ public partial class SettingsWindow
     {
         var fields = new List<DurationDraftField>();
         AddIfCustom(MaxDictationCombo, MaxDictationCustomBox, DurationChoiceKind.MaxDictation, SettingsPage.Advanced, nameof(MaxDictationCustomBox), 1, 120);
-        AddIfCustom(IdleReleaseCombo, IdleReleaseCustomBox, DurationChoiceKind.IdleRelease, SettingsPage.Advanced, nameof(IdleReleaseCustomBox), 1, 1440);
+        AddIfCustom(IdleReleaseCombo, IdleReleaseCustomBox, DurationChoiceKind.IdleRelease, SettingsPage.Advanced, nameof(IdleReleaseCustomBox), 1, 120);
         AddIfCustom(HistoryRetentionCombo, HistoryRetentionCustomBox, DurationChoiceKind.HistoryRetention, SettingsPage.History, nameof(HistoryRetentionCustomBox), 1, 3650);
         return fields;
 

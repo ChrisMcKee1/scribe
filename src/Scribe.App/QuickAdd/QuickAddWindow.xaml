@@ -136,7 +136,7 @@
 
         <ui:TitleBar Grid.Row="0" Title="Add to dictionary" ShowMaximize="False">
             <ui:TitleBar.Icon>
-                <ui:ImageIcon Source="pack://application:,,,/Assets/scribe-mark.png" Width="16" Height="16" RenderOptions.BitmapScalingMode="HighQuality"/>
+                <ui:ImageIcon Source="pack://application:,,,/Scribe;component/Assets/scribe-mark.png" Width="16" Height="16" RenderOptions.BitmapScalingMode="HighQuality"/>
             </ui:TitleBar.Icon>
         </ui:TitleBar>
 
@@ -288,13 +288,6 @@
                            Margin="24,4,0,0"
                            Visibility="Collapsed"
                            Text="Text you already typed doesn't change. To replace it, copy the fixed dictation and paste it."/>
-                <ui:Button x:Name="CopyFixedButton"
-                           HorizontalAlignment="Right"
-                           Margin="0,8,0,0"
-                           Visibility="Collapsed"
-                           Content="Copy fixed dictation"
-                           Click="CopyFixedButton_Click"/>
-
                 <TextBlock x:Name="AiVocabularyText"
                            Style="{StaticResource CardDescription}"
                            Margin="0,16,0,0"
@@ -302,19 +295,24 @@
             </StackPanel>
         </ScrollViewer>
 
-        <Border Grid.Row="2" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" Padding="24,12,24,18">
-            <WrapPanel HorizontalAlignment="Right">
+        <Border x:Name="QuickAddFooter" Grid.Row="2" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" BorderThickness="0,1,0,0" Padding="24,12,24,18">
+            <WrapPanel x:Name="FooterActions" HorizontalAlignment="Right">
                 <ui:Button x:Name="SaveButton" Content="_Save" Appearance="Primary" MinWidth="96"
                            KeyboardNavigation.AcceptsReturn="False"
                            Margin="0,0,8,8" Click="SaveButton_Click"/>
                 <ui:Button x:Name="SaveCloseButton" Content="Save _and close" MinWidth="132"
                            KeyboardNavigation.AcceptsReturn="False"
                            Margin="0,0,8,8" Click="SaveCloseButton_Click"/>
+                <ui:Button x:Name="CopyFixedButton" Content="Co_py dictation" MinWidth="132"
+                           IsEnabled="False"
+                           AutomationProperties.Name="Copy dictation"
+                           AutomationProperties.HelpText="Copy the current dictation and keep this window open."
+                           ToolTipService.ShowOnDisabled="True"
+                           Margin="0,0,8,8" Click="CopyFixedButton_Click"/>
                 <ui:Button x:Name="CloseButton" Content="_Close" MinWidth="96" Margin="0,0,0,8"
                            Click="CloseButton_Click"/>
             </WrapPanel>
         </Border>
     </Grid>
 </ui:FluentWindow>
-
 
