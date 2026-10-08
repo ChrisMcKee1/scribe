@@ -453,12 +453,22 @@ public sealed class FoundryStorageReclaimTests
         await oldVariant.RemoveStarted.Task.WaitAsync(Bound);
 
         // Mid-pass, the user picks the third model.
-        svc.Configure(CleanupHarness.FoundryOn(CleanupHarness.ThirdAlias));
-        oldVariant.RemoveGate.SetResult();
-        await pass.WaitAsync(Bound);
+        // Hold its load so the old pass, not the newer pass finishing, decides the marker assertion.
+        harness.Mistral.LoadGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            svc.Configure(CleanupHarness.FoundryOn(CleanupHarness.ThirdAlias));
+            oldVariant.RemoveGate.SetResult();
+            await pass.WaitAsync(Bound);
 
-        Assert.DoesNotContain("remove:" + CleanupHarness.ThirdVariant, harness.State.Events);
-        Assert.True(harness.Storage!.ReadKeepOnlySelected(), "The newer switch's marker survives.");
+            Assert.DoesNotContain("remove:" + CleanupHarness.ThirdVariant, harness.State.Events);
+            Assert.True(harness.Storage!.ReadKeepOnlySelected(), "The newer switch's marker survives.");
+        }
+        finally
+        {
+            oldVariant.RemoveGate.TrySetResult();
+            harness.Mistral.LoadGate.TrySetResult();
+        }
 
         // The newer switch then finishes the job once its own model is in use.
         await harness.WaitForStatusAsync(CleanupStatus.Ready);
