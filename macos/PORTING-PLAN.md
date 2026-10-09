@@ -171,6 +171,10 @@ real Mac.
 - **Context size and the whole vocabulary** (0.5.3): `TokenEstimate` and `ContextBudget` fit requests to a local
   model's context, with the Context size setting (Ollama through its own chat API, LM Studio by loading at a size)
   and the whole-vocabulary switch, off by default.
+  Windows' off-by-default `CompactLocalGlossary` experiment groups selected spoken forms of the same exact spelling
+  but remains opt-in after vocabulary-quality regressions. Windows 0.5.7 separately bounds the original-format
+  preparation vocabulary to 4,096 estimated tokens without changing actual dictation vocabulary. Neither change
+  is implemented on macOS; the original glossary format and readiness behavior here are unchanged.
 - **Local model readiness and cleanup notices**: for managed Ollama and recognized Ollama or LM Studio addresses on
   this Mac, a recording checks whether the selected model is resident at the needed context size, sends one fixed
   readying request only when necessary, and waits at most 30 seconds. Cloud and unknown endpoints are never readied;

@@ -85,7 +85,9 @@ public sealed class CleanupVocabulary
         LazyInitializer.EnsureInitialized(ref _lines, () => CleanupPrompt.GlossaryLines(GlossaryEntries));
 
     private List<GlossaryLineInfo>? _lines;
+    private IReadOnlyList<GlossaryLineInfo>? _compactLines;
     private string? _wholeGlossary;
+    private string? _wholeCompactGlossary;
 
     /// <summary>The estimated tokens of the whole glossary with no budget, its header included; 0 when it is empty.</summary>
     public long WholeGlossaryTokens => Lines.Count == 0 ? 0 : CleanupPrompt.GlossaryHeaderTokens + CleanupPrompt.Tokens(Lines);
@@ -102,7 +104,17 @@ public sealed class CleanupVocabulary
     /// </param>
     /// <param name="dictation">The text the request carries, which the mentioned terms are picked by; null for a readying request.</param>
     /// <param name="maxTerms">The most terms the request may carry, whatever fits.</param>
-    public string? GlossaryFor(CleanupVocabularyMode mode, bool everything, string? dictation, int tokenBudget, int maxTerms)
+    public string? GlossaryFor(
+        CleanupVocabularyMode mode, bool everything, string? dictation, int tokenBudget, int maxTerms) =>
+        GlossaryFor(mode, everything, dictation, tokenBudget, maxTerms, compactAliases: false, boundedPreparation: false);
+
+    /// <summary>
+    /// The same selection with experimental lossless grouping. A readying request carries only a bounded leading run
+    /// of those groups; a dictation keeps every selected form.
+    /// </summary>
+    internal string? GlossaryFor(
+        CleanupVocabularyMode mode, bool everything, string? dictation, int tokenBudget, int maxTerms,
+        bool compactAliases, bool boundedPreparation = true)
     {
         if (mode == CleanupVocabularyMode.None || GlossaryEntries.Count == 0)
         {
@@ -129,6 +141,36 @@ public sealed class CleanupVocabulary
         if (lines.Count == 0)
         {
             return null;
+        }
+
+        if (compactAliases)
+        {
+            var compact = ReferenceEquals(lines, all)
+                ? LazyInitializer.EnsureInitialized(ref _compactLines, () => CleanupPrompt.CompactGlossaryLines(all))
+                : CleanupPrompt.CompactGlossaryLines(lines);
+            var compactFormat = !ReferenceEquals(compact, lines);
+            if (boundedPreparation && string.IsNullOrWhiteSpace(dictation))
+            {
+                compact = CleanupPrompt.TakeWhileFits(
+                    compact,
+                    (long)Math.Min(tokenBudget, ContextBudget.MaxPreparationVocabularyTokens) -
+                        (compactFormat ? CleanupPrompt.CompactGlossaryHeaderTokens : CleanupPrompt.GlossaryHeaderTokens),
+                    int.MaxValue);
+                return compact.Count == 0 ? null : CleanupPrompt.RenderGlossary(compact, compactFormat);
+            }
+
+            return ReferenceEquals(lines, all)
+                ? LazyInitializer.EnsureInitialized(ref _wholeCompactGlossary, () => CleanupPrompt.RenderGlossary(compact, compactFormat))
+                : CleanupPrompt.RenderGlossary(compact, compactFormat);
+        }
+
+        if (boundedPreparation && string.IsNullOrWhiteSpace(dictation))
+        {
+            var prefix = CleanupPrompt.TakeWhileFits(
+                lines,
+                (long)Math.Min(tokenBudget, ContextBudget.MaxPreparationVocabularyTokens) - CleanupPrompt.GlossaryHeaderTokens,
+                int.MaxValue);
+            return prefix.Count == 0 ? null : CleanupPrompt.RenderGlossary(prefix);
         }
 
         // The whole glossary is the same text for every request that carries it, so it is rendered once.

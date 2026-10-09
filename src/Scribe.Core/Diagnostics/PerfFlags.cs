@@ -33,6 +33,7 @@ public sealed class PerfFlags
         CleanupPhaseTelemetry,
         CliTokenEveryRequest,
         CoalesceDictionaryStatus,
+        CompactLocalGlossary,
         DataLayerWarmUp,
         DeduplicateOverlayMeter,
         DeferSettingsPageData,
@@ -57,6 +58,7 @@ public sealed class PerfFlags
         SparseUsageAggregation,
         StartupStageTiming,
         StopInactiveProgress,
+        UnboundedLocalPreparation,
         UsageTermIndex,
         VadWindowCancellation,
         WarmManagedAudioPath,
@@ -77,6 +79,7 @@ public sealed class PerfFlags
     // per cleanup request for one release (CachingCliTokenCredential).
     public const string CliTokenEveryRequest = nameof(CliTokenEveryRequest);
     public const string CoalesceDictionaryStatus = nameof(CoalesceDictionaryStatus);
+    public const string CompactLocalGlossary = nameof(CompactLocalGlossary);
     public const string DataLayerWarmUp = nameof(DataLayerWarmUp);
     public const string DeduplicateOverlayMeter = nameof(DeduplicateOverlayMeter);
     public const string DeferSettingsPageData = nameof(DeferSettingsPageData);
@@ -101,6 +104,7 @@ public sealed class PerfFlags
     public const string SparseUsageAggregation = nameof(SparseUsageAggregation);
     public const string StartupStageTiming = nameof(StartupStageTiming);
     public const string StopInactiveProgress = nameof(StopInactiveProgress);
+    public const string UnboundedLocalPreparation = nameof(UnboundedLocalPreparation);
     public const string UsageTermIndex = nameof(UsageTermIndex);
     public const string VadWindowCancellation = nameof(VadWindowCancellation);
     public const string WarmManagedAudioPath = nameof(WarmManagedAudioPath);

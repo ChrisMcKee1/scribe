@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Cleanup;
+using Scribe.Core.Diagnostics;
 using Scribe.Core.Tests.CleanupLogging;
 using Scribe.Core.Infrastructure;
 using ManualTimeProvider = Scribe.Core.Tests.Concurrency.ManualTimeProvider;
@@ -22,7 +23,8 @@ internal sealed class CleanupHarness : IAsyncDisposable
         bool armStorage = false,
         HttpMessageHandler? http = null,
         FakeFoundryState? state = null,
-        Func<FakeFoundryState, IReadOnlyList<FakeFoundryModel>>? extraFamilies = null)
+        Func<FakeFoundryState, IReadOnlyList<FakeFoundryModel>>? extraFamilies = null,
+        PerfFlags? perfFlags = null)
     {
         Temp = new TempDirectory();
         State = state ?? new FakeFoundryState();
@@ -37,7 +39,7 @@ internal sealed class CleanupHarness : IAsyncDisposable
 
         Storage = armStorage ? FoundryLocalStorage.For(Paths) : null;
 
-        Service = new TextCleanupService(Log, Paths, Host, Storage)
+        Service = new TextCleanupService(Log, Paths, Host, Storage, perfFlags: perfFlags)
         {
             OpenAIClientOptionsOverride = ScriptedHttpHandler.Install(Http),
 

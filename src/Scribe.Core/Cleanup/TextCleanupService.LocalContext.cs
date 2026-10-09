@@ -1557,7 +1557,9 @@ internal sealed partial class TextCleanupService
             ? int.MaxValue
             : CleanupPrompt.GlossaryTermBudget(options.PromptStyle, options.Provider, options.CustomEndpoint);
         return vocabulary.GlossaryFor(
-            options.VocabularyMode, options.SendWholeVocabulary, readying ? null : dictation, budget, maxTerms);
+            options.VocabularyMode, options.SendWholeVocabulary, readying ? null : dictation, budget, maxTerms,
+            compactAliases: options.SendWholeVocabulary && _perfFlags.IsOn(Diagnostics.PerfFlags.CompactLocalGlossary),
+            boundedPreparation: !_perfFlags.IsOn(Diagnostics.PerfFlags.UnboundedLocalPreparation));
     }
 
     // Through Ollama's own chat API, one client per configuration over the process's shared handler.

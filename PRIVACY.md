@@ -268,7 +268,14 @@ instructions with no dictated text, unless it answered in the last 30 seconds
 and still holds the model at the size AI cleanup uses.
 It carries none of your vocabulary, unless "Send your whole vocabulary when it
 fits" is on for that app, when it also carries as much of your vocabulary as
-fits. A server like this unloads a model it has not used for a
+fits. Preparation carries only a starting part of the vocabulary, at most
+4,096 estimated vocabulary tokens; the actual dictation keeps its full selected
+vocabulary in the original format. UnboundedLocalPreparation restores the
+previous preparation budget for comparison. With the optional experimental
+CompactLocalGlossary performance flag, repeated written spellings can share a
+line with all their selected spoken forms instead. These choices change no
+saved context, retention choice, dictionary entry or word pack.
+A server like this unloads a model it has not used for a
 while, and this request readies it while you speak. It
 can also be sent before cleanup if the model was freed after the recording's
 readying request, with the same instructions and vocabulary rules. It goes only

@@ -47,6 +47,12 @@ public static class ContextBudget
     /// </summary>
     internal const int ReadyingOutputTokens = 1152;
 
+    /// <summary>
+    /// The readying vocabulary prefix, independent of the model's allocation size. A large context
+    /// is not evidence that an idle model can read the whole glossary within the preparation deadline.
+    /// </summary>
+    internal const int MaxPreparationVocabularyTokens = 4096;
+
     /// <summary>A context size Scribe can ask for: zero (the app's own setting) or a size within the bounds.</summary>
     public static int Sanitize(int contextTokens) =>
         contextTokens <= 0 ? 0 : Math.Clamp(contextTokens, MinimumSize, MaximumSize);

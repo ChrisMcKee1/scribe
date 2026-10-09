@@ -624,6 +624,26 @@ the dictionary pass, no added per-call allocation in the measured workloads; one
 add per call. In the usage counts, no allocation with the flags off; each page load does one add per known term, one check
 per phrase, one increment per phrase regex run, one add per dictation or owner list, and one AsyncLocal read.
 
+`CompactLocalGlossary` is an off-by-default local-model experiment. With a recognized local model and its
+whole-vocabulary switch on, it groups selected glossary lines by the exact normalized written spelling
+(`StringComparer.Ordinal`), retaining every normalized spoken form and keeping different written casing separate.
+It compacts only after the existing selection, so terms, precedence, permission admission and context fitting stay
+unchanged. The whole compact rendering is cached by its vocabulary content, never a
+generation number. No saved setting or `num_ctx`/`keep_alive` field changes, and unrecognized and remote servers keep
+their original glossary. `LocalGlossaryCompactionTests` pins both flag states, both Ollama routes, exact mappings,
+preparation bounds and Never. The 25-case paired local comparison found repeatable instruction/vocabulary losses,
+including LLM-as-judge and Qwen4-30B, so this representation stays opt-in. A prompt
+that fits a 131,072-token context can still take longer than preparation allows to read; compacting it does not
+reduce the native runtime's allocation for that context or cure a crashed model loader.
+
+The preparation budget is independent of that experiment. From 0.5.7, the readying request with whole vocabulary
+selected carries only a leading run up to `ContextBudget.MaxPreparationVocabularyTokens` (4,096 estimated tokens,
+header included), in the original format by default. Actual dictations keep the same selected vocabulary and
+original request text. The maintainer approved this default after the quality gate rejected compact formatting;
+`PerfFlags.UnboundedLocalPreparation` restores 0.5.6's preparation budget for comparison. The flag does not change
+context allocation or retention. `BoundedLocalPreparationTests` checks both routes and flag states, exact actual
+glossary text, prefix bounds and Never.
+
 The changes proven by an oracle need no flag: the phrase regexes built without `Compiled`
 (`UsageAnalyzerTests.Cheap_path_matches_legacy_terms_for_seeded_histories`,
 `UsageReportTests.Cheap_path_preserves_snapshot_and_scope`), the dictionary cleanup counting an ASCII term the same search

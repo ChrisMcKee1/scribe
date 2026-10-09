@@ -49,6 +49,9 @@ public static class CleanupDisclosure
         $"{LocalAiServer.PrewarmAfterIdleSeconds} seconds and still holds the model at the size AI cleanup uses, so a model it " +
         "unloaded, or holds at another size, can be loaded while you speak. It carries none of your vocabulary, unless \"" +
         Settings.LocalModelTuningText.WholeVocabularyTitle + "\" is on for that app, when it carries as much of it as fits. " +
+        "Preparation reads a starting part of that vocabulary, up to " +
+        $"{Count(ContextBudget.MaxPreparationVocabularyTokens)} estimated vocabulary tokens, without changing what " +
+        "the actual dictation can send. " +
         "If the model was freed after that request, Scribe can send another readying request before cleanup.";
 
     /// <summary>
@@ -59,7 +62,8 @@ public static class CleanupDisclosure
         "With \"" + Settings.LocalModelTuningText.WholeVocabularyTitle + "\" on for a model on this PC (Foundry Local, " +
         "Ollama or LM Studio), each request carries all of that vocabulary when it fits in the model's context with the " +
         "dictation, and otherwise the words the dictation appears to mention first, then as many others as fit. None of " +
-        "it leaves this PC.";
+        "it leaves this PC. Experimental vocabulary compaction can group different things Scribe hears for the same " +
+        "spelling on one line, without removing any of them.";
 
     /// <summary>
     /// What Scribe asks Ollama or LM Studio itself (<see cref="LocalServerClient"/>): the models it has and holds, and to

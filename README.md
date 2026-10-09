@@ -204,6 +204,16 @@ the text is typed. You choose where it runs:
     fresh cleanup request and retry behind the same failed load. The next recording checks again.
     Ollama or LM Studio server errors say to check that app; Scribe does not silently change the model,
     context size or GPU settings.
+  - Preparation reads only a starting part of the whole vocabulary, at most **4,096 estimated vocabulary
+    tokens**, even with a large context selected. Actual dictations still receive their full selected
+    vocabulary in the original format. This bounds optional preparation work rather than changing
+    the model's memory allocation, and does not repair a native model-loader crash.
+  - **Experimental vocabulary compaction** (`SCRIBE_PERF_FLAGS=CompactLocalGlossary`, off by default)
+    groups different spoken forms of the same exact spelling on one line, without removing any selected
+    spelling or spoken form. The saved context size, Never retention, dictionary entries and word packs
+    are unchanged. It remains opt-in: a 25-case local comparison found repeatable rewriting and vocabulary
+    regressions despite smaller prompts. `UnboundedLocalPreparation` restores the previous preparation
+    vocabulary budget for comparison; it does not change actual dictation requests.
 - **Microsoft Foundry,** with your Azure CLI sign-in or an app registration. [Set up a Foundry
   resource](docs/foundry-setup.md) or [use a service principal](docs/service-principal-setup.md). Scribe asks
   the model not to spend time reasoning, which cleans a dictation faster at the same quality. Turning

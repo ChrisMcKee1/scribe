@@ -284,6 +284,11 @@ public static class CleanupPrompt
     /// <summary>The estimated tokens of <see cref="GlossaryHeader"/>.</summary>
     internal static int GlossaryHeaderTokens { get; } = TokenEstimate.Vocabulary(GlossaryHeader);
 
+    internal const string CompactGlossaryHeader =
+        GlossaryHeader + "Format: preferred spelling <- transcribed forms in quotes.\n";
+
+    internal static int CompactGlossaryHeaderTokens { get; } = TokenEstimate.Vocabulary(CompactGlossaryHeader);
+
     /// <summary>
     /// Every line the glossary would carry with no budget, in priority order, each with its key and estimated tokens: the
     /// same normalization, de-duplication and choice of vocabulary as <see cref="BuildGlossary"/>, which stops at its
@@ -325,27 +330,32 @@ public static class CleanupPrompt
             var text = GlossaryLine(canonical, spoken);
 
             // The line break that joins it to the next counts with it.
-            lines.Add(new GlossaryLineInfo(key, text, TokenEstimate.Vocabulary(text) + 1));
+            lines.Add(new GlossaryLineInfo(key, text, TokenEstimate.Vocabulary(text) + 1)
+            {
+                Canonical = canonical,
+                Spoken = spoken,
+            });
         }
 
         return lines;
     }
 
     /// <summary>The glossary block for <paramref name="lines"/>, in their order: empty when there are none.</summary>
-    internal static string RenderGlossary(IReadOnlyList<GlossaryLineInfo> lines)
+    internal static string RenderGlossary(IReadOnlyList<GlossaryLineInfo> lines, bool compactAliases = false)
     {
         if (lines.Count == 0)
         {
             return string.Empty;
         }
 
-        var length = GlossaryHeader.Length + lines.Count - 1;
+        var header = compactAliases ? CompactGlossaryHeader : GlossaryHeader;
+        var length = header.Length + lines.Count - 1;
         foreach (var line in lines)
         {
             length += line.Text.Length;
         }
 
-        var text = new StringBuilder(length).Append(GlossaryHeader);
+        var text = new StringBuilder(length).Append(header);
         for (var i = 0; i < lines.Count; i++)
         {
             if (i > 0)
@@ -357,6 +367,61 @@ public static class CleanupPrompt
         }
 
         return text.ToString();
+    }
+
+    /// <summary>
+    /// Groups the selected transcribed forms of an exact written spelling without discarding any of them. Selection
+    /// happens before compaction, so neither vocabulary precedence nor the terms admitted to a request change.
+    /// </summary>
+    internal static IReadOnlyList<GlossaryLineInfo> CompactGlossaryLines(IReadOnlyList<GlossaryLineInfo> lines)
+    {
+        var groups = new Dictionary<string, List<GlossaryLineInfo>>(StringComparer.Ordinal);
+        var ordered = new List<List<GlossaryLineInfo>>();
+        foreach (var line in lines)
+        {
+            // A caller-created line need not carry the normalized parts. Never parse user data out of its display text.
+            if (line.Canonical is not { } canonical)
+            {
+                return lines;
+            }
+
+            if (!groups.TryGetValue(canonical, out var group))
+            {
+                group = [];
+                groups.Add(canonical, group);
+                ordered.Add(group);
+            }
+
+            group.Add(line);
+        }
+
+        var compact = new List<GlossaryLineInfo>(ordered.Count);
+        foreach (var group in ordered)
+        {
+            var text = new StringBuilder().Append("- ").Append(group[0].Canonical);
+            var aliases = 0;
+            foreach (var line in group)
+            {
+                if (line.Spoken is not { } spoken)
+                {
+                    continue;
+                }
+
+                text.Append(aliases++ == 0 ? " <- \"" : "\", \"").Append(spoken);
+            }
+
+            if (aliases > 0)
+            {
+                text.Append('"');
+            }
+
+            var rendered = text.ToString();
+            compact.Add(new GlossaryLineInfo(group[0].Key, rendered, TokenEstimate.Vocabulary(rendered) + 1));
+        }
+
+        return CompactGlossaryHeaderTokens + Tokens(compact) <= GlossaryHeaderTokens + Tokens(lines)
+            ? compact
+            : lines;
     }
 
     /// <summary>
@@ -639,4 +704,8 @@ public readonly record struct GlossaryCount(int Included, int Eligible);
 /// <param name="Key">The written form and spoken form it is de-duplicated by, compared ignoring case.</param>
 /// <param name="Text">The line as the glossary writes it.</param>
 /// <param name="Tokens">Its estimated tokens, the line break after it included (<see cref="TokenEstimate.Vocabulary"/>).</param>
-public readonly record struct GlossaryLineInfo(string Key, string Text, int Tokens);
+public readonly record struct GlossaryLineInfo(string Key, string Text, int Tokens)
+{
+    internal string? Canonical { get; init; }
+    internal string? Spoken { get; init; }
+}
