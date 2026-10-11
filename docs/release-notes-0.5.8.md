@@ -16,6 +16,13 @@ leading cause found, not yet confirmed on a PC that shows the problem. If screen
 Scribe.Overlay.exe in Task Manager (or pausing dictation from the tray) tells whether the indicator is involved, and
 turning the recording indicator off in Settings avoids it until a fix is confirmed.
 
+Sometimes the recording indicator can't start at all. The tray says it is unavailable, and the log shows its helper
+ending with exit code 0x8898008D, which means Windows could not give it a graphics device. This release does not fix
+that: it is a graphics driver or Windows problem, and the Snipping Tool draws through the same graphics system, so
+screenshots may fail at the same time for the same reason. If they do, check whether they still fail after quitting
+Scribe. If they still fail, the cause is outside Scribe, and restarting Windows or updating the graphics driver is the
+next step.
+
 A review of how Scribe uses the clipboard, its keyboard shortcuts and every other system-wide setting found nothing
 else that could do this on the default settings. Scribe types its text by default and does not touch the clipboard,
 and its shortcut listener holds back only the keys you chose.
