@@ -644,11 +644,8 @@ public sealed partial class OverlayWindow : Window
 
     private void EnsureShown()
     {
-        // Diagnostic rung. The bisection has shown Win+Shift+S works when the overlay window is
-        // never CREATED and fails once it has been SHOWN, with the backdrop and HWND_TOPMOST both
-        // ruled out. This switch separates the two remaining possibilities: whether the mere
-        // EXISTENCE of the layered/transparent window breaks the screen-snip capture, or whether it
-        // takes the act of showing it (AppWindow.Show).
+        // Diagnostic rung of the Win+Shift+S bisection (see ApplyExtendedStyles): with this switch the window exists but is
+        // never shown, which is the case the bisection found working.
         if (Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_DIAG_NEVERSHOW") == "1")
         {
             OverlayLog.Write("OverlayWindow.EnsureShown DIAG: show suppressed (window exists, stays hidden)");
@@ -684,12 +681,9 @@ public sealed partial class OverlayWindow : Window
 
     private void AssertTopMost()
     {
-        // Diagnostic rung, same shape as SCRIBE_OVERLAY_DIAG_NOBACKDROP and _NOWINDOW. A live
-        // bisection showed Win+Shift+S fails whenever this window EXISTS (screen snip launches two
-        // SnippingTool processes and both exit) and succeeds when it does not (one process, and it
-        // survives). The process, the custom SystemBackdrop and the keyboard hook were each ruled
-        // out. This switch isolates the next candidate: whether holding HWND_TOPMOST is what makes
-        // the capture overlay abort.
+        // Diagnostic rung of the Win+Shift+S bisection (see ApplyExtendedStyles), same shape as
+        // SCRIBE_OVERLAY_DIAG_NOBACKDROP and _NOWINDOW: the window is shown without HWND_TOPMOST, which the bisection ruled
+        // out as the cause.
         if (Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_DIAG_NOTOPMOST") == "1")
         {
             OverlayLog.Write("OverlayWindow.AssertTopMost DIAG: HWND_TOPMOST skipped");

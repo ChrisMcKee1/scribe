@@ -2550,13 +2550,18 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   every show and takes it off after every hide that follows one. Removing it "is desired to let the system know that it
   can free up some memory associated with layering and redirection" (Using Windows, Using Layered Windows). The
   never-shown window keeps it, as the bisection's working case did, and the pill on screen is the window it always was.
-  This is unproven on a machine that shows the failure. `SCRIBE_OVERLAY_DIAG_KEEPLAYERED=1` keeps the style on while
+  This is unproven on a machine that shows the failure, and so is its own transition: the second and every later show
+  of a session re-adds the style to a window that has been on screen, which no earlier build did (the constructor adds
+  it only before the first show). The live-desktop gate is a second dictation whose pill draws as the first did, passes
+  a click to the window under it, and logs `layered=True`, then a screenshot once it has hidden. If the second pill does
+  not draw, `SCRIBE_OVERLAY_DIAG_KEEPLAYERED=1` brings the old behaviour back. That switch keeps the style on while
   hidden, as before, for the comparison, beside the bisection's `NOWINDOW`, `NOBACKDROP`, `NEVERSHOW`, `NOTOPMOST` and
   `NOLAYERED` switches. The helper inherits Scribe's environment, so set them before Scribe starts. The clipboard (typing
   is the default and never opens it), the keyboard hook (it swallows only the bound keys and its own probe, so only a
   shortcut that includes a Windows key, Print Screen, S or Shift could take Win+Shift+S) and every other process-wide call
-  were reviewed after 0.5.7 and found no other cause. `OverlayLayeredWhileShownSourceTests` pins the source. The log shows
-  `OverlayWindow.SetLayered on before show` and `off after hide`, and each state line's `layered=`.
+  were reviewed after 0.5.7 and found no other cause. `OverlayLayeredWhileShownSourceTests` pins the source. Whenever
+  the style changes the log shows `OverlayWindow.SetLayered on before show` or `off after hide`, and every state line
+  shows `layered=`.
 - **A new Windows App SDK feature needs its component package** in `Scribe.Overlay.csproj` (see the
   dependency rules above), or it is missing at runtime while the build stays clean.
 - If you change overlay behavior, verify with the live log: look for `installer layout`,
