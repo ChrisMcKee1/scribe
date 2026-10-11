@@ -2559,7 +2559,7 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   `NOLAYERED` switches. The helper inherits Scribe's environment, so set them before Scribe starts. The clipboard (typing
   is the default and never opens it), the keyboard hook (it swallows only the bound keys and its own probe, so only a
   shortcut that includes a Windows key, Print Screen, S or Shift could take Win+Shift+S) and every other process-wide call
-  were reviewed after 0.5.7 and found no other cause. `OverlayLayeredWhileShownSourceTests` pins the source. Whenever
+  were reviewed for 0.5.8 and found no other cause. `OverlayLayeredWhileShownSourceTests` pins the source. Whenever
   the style changes the log shows `OverlayWindow.SetLayered on before show` or `off after hide`, and every state line
   shows `layered=`.
 - **A new Windows App SDK feature needs its component package** in `Scribe.Overlay.csproj` (see the
@@ -2985,7 +2985,7 @@ store, GitHub signing secrets, or a publisher trust bundle.
   different version, so a machine that already has the right vpk can pack offline. Never go back to an
   unpinned `dotnet tool install -g vpk`, which on a clean runner takes whatever is newest.
 - Each release's notes live in `docs/release-notes-<version>.md` (this release:
-  `docs/release-notes-0.5.6.md`). Neither workflow reads the file; copy it into the GitHub release body.
+  `docs/release-notes-0.5.8.md`). Neither workflow reads the file; copy it into the GitHub release body.
 - The release workflow downloads the latest prior stable full nupkg before packing so a clean
   hosted runner can produce the delta package. `pack.ps1` requires the delta whenever a prior
   full package is present.
