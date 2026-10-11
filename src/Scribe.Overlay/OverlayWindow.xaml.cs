@@ -43,6 +43,11 @@ public sealed partial class OverlayWindow : Window
     private OverlayAnchor _anchor = OverlayAnchor.BottomCenter;
     private bool _shownOnce;
 
+    // WS_EX_LAYERED, or 0 under SCRIBE_OVERLAY_DIAG_NOLAYERED: put on before every show and taken off after every hide
+    // that follows one (SetLayered), unless SCRIBE_OVERLAY_DIAG_KEEPLAYERED keeps it on, as every earlier build did.
+    private long _layeredStyle;
+    private bool _keepLayeredWhileHidden;
+
     // Windows' "Animation effects" and contrast theme, read in this process at each show.
     private UISettings? _uiSettings;
     private AccessibilitySettings? _accessibility;
@@ -156,23 +161,36 @@ public sealed partial class OverlayWindow : Window
     {
         var ex = NativeMethods.GetWindowLongPtr(_hwnd, NativeMethods.GWL_EXSTYLE);
 
-        // Diagnostic rung. The bisection narrowed the Win+Shift+S failure to the moment this window
-        // is SHOWN: never created works, created-but-never-shown works, shown fails. The backdrop,
-        // HWND_TOPMOST and the keyboard hook are all already ruled out. WS_EX_LAYERED is the prime
-        // remaining suspect because it is the one style here that changes how the window is
-        // composed: a normal WinUI 3 window renders through the compositor and is NOT layered, and
-        // GetWindowDisplayAffinity is documented to succeed "only when the window is layered", so
-        // forcing it makes this the one WinUI window on the desktop that answers such a query.
-        var layered = Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_DIAG_NOLAYERED") == "1"
+        // WS_EX_LAYERED is what makes WS_EX_TRANSPARENT pass clicks through: "if the layered window has the
+        // WS_EX_TRANSPARENT extended window style, the shape of the layered window will be ignored and the mouse events
+        // will be passed to other windows underneath" (Window Features). Unlayered, WS_EX_TRANSPARENT only orders painting.
+        //
+        // Win+Shift+S (0.3.12 bisection, still open): never created works, created but never shown works, shown fails, with
+        // the screen snip starting two SnippingTool processes that both exit. The backdrop, HWND_TOPMOST, the process and
+        // the keyboard hook were ruled out; WS_EX_LAYERED was the remaining suspect and its rung was never reported. That
+        // run still activated the window at its first show, which 0.5.0 removed, and since 0.5.0 the helper stays running
+        // hidden all session, so a window shown once would keep screenshots broken until Scribe quits or dictation pauses.
+        // So the style is on only while the pill is on screen: SetLayered puts it on before every show and takes it off
+        // after every hide that follows one, which is "desired to let the system know that it can free up some memory
+        // associated with layering and redirection" (Using Windows, Using Layered Windows). A window that has never been
+        // shown keeps it, as the bisection's working case did. Unproven on a machine that shows the failure:
+        // SCRIBE_OVERLAY_DIAG_KEEPLAYERED=1 keeps it on while hidden, as before, for the comparison.
+        _layeredStyle = Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_DIAG_NOLAYERED") == "1"
             ? 0
             : NativeMethods.WS_EX_LAYERED;
-        if (layered == 0)
+        if (_layeredStyle == 0)
         {
             OverlayLog.Write("OverlayWindow.ApplyExtendedStyles DIAG: WS_EX_LAYERED omitted");
         }
 
+        _keepLayeredWhileHidden = Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_DIAG_KEEPLAYERED") == "1";
+        if (_keepLayeredWhileHidden)
+        {
+            OverlayLog.Write("OverlayWindow.ApplyExtendedStyles DIAG: WS_EX_LAYERED kept while hidden");
+        }
+
         var updated = ex
-            | layered
+            | _layeredStyle
             | NativeMethods.WS_EX_TRANSPARENT
             | NativeMethods.WS_EX_TOOLWINDOW
             | NativeMethods.WS_EX_NOACTIVATE;
@@ -542,6 +560,7 @@ public sealed partial class OverlayWindow : Window
         }
 
         _appWindow.Hide();
+        SetLayered(false);
         LogState("ShowState.hidden");
         OverlayLog.Write($"OverlayWindow.ShowState exit hidden (was {previous})");
     }
@@ -555,6 +574,7 @@ public sealed partial class OverlayWindow : Window
 
         _fadingOut = false;
         _appWindow.Hide();
+        SetLayered(false);
         StopStoryboard(FadeOutStoryboardKey); // full opacity again for the next show, while hidden
         LogState("FadeOut.completed");
         OverlayLog.Write("OverlayWindow.FadeOut completed; window hidden");
@@ -624,16 +644,17 @@ public sealed partial class OverlayWindow : Window
 
     private void EnsureShown()
     {
-        // Diagnostic rung. The bisection has shown Win+Shift+S works when the overlay window is
-        // never CREATED and fails once it has been SHOWN, with the backdrop and HWND_TOPMOST both
-        // ruled out. This switch separates the two remaining possibilities: whether the mere
-        // EXISTENCE of the layered/transparent window breaks the screen-snip capture, or whether it
-        // takes the act of showing it (AppWindow.Show).
+        // Diagnostic rung of the Win+Shift+S bisection (see ApplyExtendedStyles): with this switch the window exists but is
+        // never shown, which is the case the bisection found working.
         if (Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_DIAG_NEVERSHOW") == "1")
         {
             OverlayLog.Write("OverlayWindow.EnsureShown DIAG: show suppressed (window exists, stays hidden)");
             return;
         }
+
+        // Layered again before it is sized and shown, the order the constructor applies the styles in, so the pill on
+        // screen is the click-through window it always was.
+        SetLayered(true);
 
         // Re-assert size/position in case the monitor/DPI changed between shows.
         SizeAndPosition();
@@ -660,12 +681,9 @@ public sealed partial class OverlayWindow : Window
 
     private void AssertTopMost()
     {
-        // Diagnostic rung, same shape as SCRIBE_OVERLAY_DIAG_NOBACKDROP and _NOWINDOW. A live
-        // bisection showed Win+Shift+S fails whenever this window EXISTS (screen snip launches two
-        // SnippingTool processes and both exit) and succeeds when it does not (one process, and it
-        // survives). The process, the custom SystemBackdrop and the keyboard hook were each ruled
-        // out. This switch isolates the next candidate: whether holding HWND_TOPMOST is what makes
-        // the capture overlay abort.
+        // Diagnostic rung of the Win+Shift+S bisection (see ApplyExtendedStyles), same shape as
+        // SCRIBE_OVERLAY_DIAG_NOBACKDROP and _NOWINDOW: the window is shown without HWND_TOPMOST, which the bisection ruled
+        // out as the cause.
         if (Environment.GetEnvironmentVariable("SCRIBE_OVERLAY_DIAG_NOTOPMOST") == "1")
         {
             OverlayLog.Write("OverlayWindow.AssertTopMost DIAG: HWND_TOPMOST skipped");
@@ -676,6 +694,38 @@ public sealed partial class OverlayWindow : Window
             _hwnd, NativeMethods.HWND_TOPMOST, 0, 0, 0, 0,
             NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
         OverlayLog.Write($"OverlayWindow.AssertTopMost SetWindowPos(HWND_TOPMOST) ok={ok}");
+    }
+
+    // Puts WS_EX_LAYERED on (before a show) or takes it off (after a hide); see ApplyExtendedStyles. The window is hidden
+    // whenever the style comes off, so the repaint Using Layered Windows asks for after removing it has nothing to show.
+    // Best-effort: a failed change is logged and the pill keeps whatever style it has.
+    private void SetLayered(bool onScreen)
+    {
+        if (_layeredStyle == 0 || (!onScreen && (_keepLayeredWhileHidden || !_shownOnce)))
+        {
+            return;
+        }
+
+        var ex = NativeMethods.GetWindowLongPtr(_hwnd, NativeMethods.GWL_EXSTYLE);
+        var wanted = onScreen ? ex | _layeredStyle : ex & ~_layeredStyle;
+        if (wanted == ex)
+        {
+            return;
+        }
+
+        NativeMethods.SetWindowLongPtr(_hwnd, NativeMethods.GWL_EXSTYLE, wanted);
+        var now = NativeMethods.GetWindowLongPtr(_hwnd, NativeMethods.GWL_EXSTYLE);
+        if (now == wanted)
+        {
+            OverlayLog.Write(
+                $"OverlayWindow.SetLayered {(onScreen ? "on before show" : "off after hide")} ex=0x{ex:X}->0x{now:X}");
+        }
+        else
+        {
+            OverlayLog.Warn(
+                $"OverlayWindow.SetLayered {(onScreen ? "on before show" : "off after hide")} did not apply: " +
+                $"ex=0x{ex:X} wanted=0x{wanted:X} now=0x{now:X}");
+        }
     }
 
     private Storyboard? FindStoryboard(string key) =>

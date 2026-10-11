@@ -2539,6 +2539,29 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   since WinUI raises `VisibilityChanged` only on a window's first activation, that line no longer follows a launch, and
   the first-show line is now `OverlayWindow.EnsureShown first show AppWindow.Show(activate:false)`.
   `OverlayNeverActivatesTests` pins the overlay's source. Not yet seen on a live desktop: the first pill after a launch.
+- **The pill's window is layered only while it is on screen** (Win+Shift+S, open since 0.3.12). Screenshots stop working
+  while Scribe runs and come back when it quits. A bisection recorded in `OverlayWindow.xaml.cs` found the screen snip
+  works when the overlay window was never created or never shown, and fails once it has been shown (two SnippingTool
+  processes start and both exit). The backdrop, `HWND_TOPMOST`, the process and the keyboard hook were ruled out. The
+  `WS_EX_LAYERED` rung was never reported, and that run still activated the window at its first show. Since 0.5.0 the
+  helper stays running hidden all session, so a window shown once would break screenshots until Scribe quits or a pause
+  ends the helper. Click-through needs the style ("if the layered window has the WS_EX_TRANSPARENT extended window style
+  ... the mouse events will be passed to other windows underneath", Window Features), so `SetLayered` puts it on before
+  every show and takes it off after every hide that follows one. Removing it "is desired to let the system know that it
+  can free up some memory associated with layering and redirection" (Using Windows, Using Layered Windows). The
+  never-shown window keeps it, as the bisection's working case did, and the pill on screen is the window it always was.
+  This is unproven on a machine that shows the failure, and so is its own transition: the second and every later show
+  of a session re-adds the style to a window that has been on screen, which no earlier build did (the constructor adds
+  it only before the first show). The live-desktop gate is a second dictation whose pill draws as the first did, passes
+  a click to the window under it, and logs `layered=True`, then a screenshot once it has hidden. If the second pill does
+  not draw, `SCRIBE_OVERLAY_DIAG_KEEPLAYERED=1` brings the old behaviour back. That switch keeps the style on while
+  hidden, as before, for the comparison, beside the bisection's `NOWINDOW`, `NOBACKDROP`, `NEVERSHOW`, `NOTOPMOST` and
+  `NOLAYERED` switches. The helper inherits Scribe's environment, so set them before Scribe starts. The clipboard (typing
+  is the default and never opens it), the keyboard hook (it swallows only the bound keys and its own probe, so only a
+  shortcut that includes a Windows key, Print Screen, S or Shift could take Win+Shift+S) and every other process-wide call
+  were reviewed for 0.5.8 and found no other cause. `OverlayLayeredWhileShownSourceTests` pins the source. Whenever
+  the style changes the log shows `OverlayWindow.SetLayered on before show` or `off after hide`, and every state line
+  shows `layered=`.
 - **A new Windows App SDK feature needs its component package** in `Scribe.Overlay.csproj` (see the
   dependency rules above), or it is missing at runtime while the build stays clean.
 - If you change overlay behavior, verify with the live log: look for `installer layout`,
@@ -2962,7 +2985,7 @@ store, GitHub signing secrets, or a publisher trust bundle.
   different version, so a machine that already has the right vpk can pack offline. Never go back to an
   unpinned `dotnet tool install -g vpk`, which on a clean runner takes whatever is newest.
 - Each release's notes live in `docs/release-notes-<version>.md` (this release:
-  `docs/release-notes-0.5.6.md`). Neither workflow reads the file; copy it into the GitHub release body.
+  `docs/release-notes-0.5.8.md`). Neither workflow reads the file; copy it into the GitHub release body.
 - The release workflow downloads the latest prior stable full nupkg before packing so a clean
   hosted runner can produce the delta package. `pack.ps1` requires the delta whenever a prior
   full package is present.
