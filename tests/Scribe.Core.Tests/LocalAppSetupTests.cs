@@ -173,6 +173,48 @@ public sealed class LocalAppSetupTests
     }
 
     [Theory]
+    [InlineData(LocalServerApp.Ollama, false)]
+    [InlineData(LocalServerApp.Ollama, true)]
+    [InlineData(LocalServerApp.LmStudio, false)]
+    [InlineData(LocalServerApp.LmStudio, true)]
+    public void A_live_cleanup_failure_is_not_hidden_by_a_reachable_app_or_a_loaded_model(LocalServerApp app, bool loaded)
+    {
+        const string reason = "The model process crashed (500). Restart the app and try again.";
+        var state = new LocalServerState(
+            LocalServerReach.Reached, [Model("gemma4:e2b")],
+            loaded ? [new LocalServerLoadedModel("gemma4:e2b", 1_706_000_000)] : []);
+
+        var row = LocalAppSetup.Describe(app, state, "gemma4:e2b", 0, CleanupStatus.Unavailable, reason);
+
+        Assert.Equal(AiCleanupStatusKind.Error, row.Kind);
+        Assert.Equal(reason + " Scribe types what it hears until it's fixed.", row.Text);
+        Assert.Equal(AiCleanupActionId.OpenDiagnostics, row.Primary!.Id);
+        Assert.Equal("See what went wrong", row.Primary.Text);
+        Assert.DoesNotContain("loads when you dictate", row.Text, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(CleanupStatus.Disabled)]
+    [InlineData(CleanupStatus.Initializing)]
+    [InlineData(CleanupStatus.Downloading)]
+    [InlineData(CleanupStatus.Ready)]
+    public void A_stale_failure_reason_is_not_shown_as_a_current_diagnostics_problem(CleanupStatus status)
+    {
+        Assert.Null(AiCleanupPageState.CurrentProblem(status, "Old failure."));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    public void An_unavailable_service_without_a_reason_is_reported_as_a_failure_not_a_pending_start(string? reason)
+    {
+        var problem = AiCleanupPageState.CurrentProblem(CleanupStatus.Unavailable, reason);
+
+        Assert.Equal("AI cleanup couldn't start. Scribe types what it hears until it's fixed.", problem);
+    }
+
+    [Theory]
     [InlineData(1_706_000_000L, "1.6 GB")]
     [InlineData(1_073_741_824L, "1.0 GB")]
     [InlineData(891_289_600L, "850 MB")]

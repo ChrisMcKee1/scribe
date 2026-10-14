@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
+using Scribe.Core.Cleanup;
 using Scribe.Core.Diagnostics;
 using Scribe.Core.Infrastructure;
 using Scribe.Core.Libraries;
@@ -18,6 +19,58 @@ namespace Scribe.Core.Tests;
 
 public sealed class TryDictationWindowTests
 {
+    [Fact]
+    public void Diagnostics_shows_the_live_setup_failure_before_any_dictation_and_clears_it_after_recovery() =>
+        PrivateDesktopTest.Run(typeof(TryDictationWindowTests), () =>
+        {
+            using var rig = new WindowRig();
+            var cleanup = rig.Services.GetRequiredService<ITextCleanupService>();
+            cleanup.Configure(CleanupOptions.Disabled with { Enabled = true, Provider = CleanupProvider.OpenAiCompatible });
+            Assert.Equal(CleanupStatus.Unavailable, cleanup.Status);
+            rig.Open();
+            rig.Invoke("ShowPage", SettingsPage.Diagnostics, Type.Missing);
+
+            foreach (var scale in new[] { 1.0, 2.25 })
+            {
+                rig.SetTextScale(scale);
+                Assert.Equal(Visibility.Visible, rig.Control<FrameworkElement>("CleanupProblemCard").Visibility);
+                Assert.Contains(cleanup.StatusDetail!, rig.Control<TextBlock>("CleanupProblemText").Text, StringComparison.Ordinal);
+                Assert.Contains("Scribe types what it hears", rig.Control<TextBlock>("CleanupProblemText").Text, StringComparison.Ordinal);
+            }
+
+            var scroll = rig.Control<ScrollViewer>("DiagnosticsScrollViewer");
+            scroll.ScrollToEnd();
+            WindowRig.PumpUntil(() => scroll.VerticalOffset > 0);
+            rig.Invoke("ShowPage", SettingsPage.Diagnostics, Type.Missing);
+            WindowRig.PumpUntil(() => scroll.VerticalOffset == 0);
+            Assert.Equal(Visibility.Visible, rig.Control<FrameworkElement>("CleanupProblemCard").Visibility);
+
+            cleanup.Configure(CleanupOptions.Disabled);
+            WindowRig.PumpUntil(() => rig.Control<FrameworkElement>("CleanupProblemCard").Visibility == Visibility.Collapsed);
+            Assert.Empty(rig.Control<TextBlock>("CleanupProblemText").Text);
+        });
+
+    [Fact]
+    public void Opening_Diagnostics_again_refreshes_the_problem_list_in_the_existing_window() =>
+        PrivateDesktopTest.Run(typeof(TryDictationWindowTests), () =>
+        {
+            using var rig = new WindowRig();
+            rig.Open();
+            rig.Invoke("ShowPage", SettingsPage.Diagnostics, Type.Missing);
+            WindowRig.PumpUntil(() => rig.Control<TextBlock>("NoFailuresText").Text != "Loading...");
+            Assert.Empty(rig.Control<DataGrid>("FailuresGrid").Items);
+
+            const string reason = "Ollama's model process crashed (500). Restart Ollama and try again.";
+            rig.Services.GetRequiredService<ICleanupFailureLog>().Add(CleanupFailure.New(reason, model: "test-model"));
+            rig.Invoke("ShowPage", SettingsPage.Diagnostics, Type.Missing);
+            WindowRig.PumpUntil(() => rig.Control<DataGrid>("FailuresGrid").Items.Count == 1);
+            var row = rig.Control<DataGrid>("FailuresGrid").Items[0];
+            Assert.Equal(reason, row.GetType().GetProperty("Reason")!.GetValue(row));
+
+            rig.Invoke("TryDictationOpenDiagnostics_Click", rig.Control<Button>("TryDictationDiagnosticsButton"), new RoutedEventArgs());
+            Assert.Equal(Visibility.Visible, rig.Control<FrameworkElement>("SectionDiagnostics").Visibility);
+        });
+
     [Fact]
     public void AI_cleanup_and_Advanced_share_every_idle_choice_and_preserve_custom_values_and_Save() =>
         PrivateDesktopTest.Run(typeof(TryDictationWindowTests), () =>

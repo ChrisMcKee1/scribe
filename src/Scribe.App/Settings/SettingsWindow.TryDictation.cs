@@ -58,8 +58,8 @@ public partial class SettingsWindow
         ShowTryDictationEmptyResult();
     }
 
-    private void TryDictationOpenAiCleanup_Click(object sender, RoutedEventArgs e) =>
-        ShowPage(SettingsPage.AiCleanup);
+    private void TryDictationOpenDiagnostics_Click(object sender, RoutedEventArgs e) =>
+        ShowPage(SettingsPage.Diagnostics);
 
     private void UpdateTryDictationPage(SettingsChangeSet? currentChanges = null)
     {
@@ -192,7 +192,7 @@ UpdateTryDictationPage();
 
         TryDictationSummaryText.Text = TryDictationSummary.Describe(view.Summary);
         TryDictationSoundSettingsButton.Visibility = view.Action == TryDictationSummaryAction.OpenSoundSettings ? Visibility.Visible : Visibility.Collapsed;
-        TryDictationAiCleanupButton.Visibility = view.Action == TryDictationSummaryAction.OpenAiCleanup ? Visibility.Visible : Visibility.Collapsed;
+        TryDictationDiagnosticsButton.Visibility = view.Action == TryDictationSummaryAction.OpenDiagnostics ? Visibility.Visible : Visibility.Collapsed;
         SetTryDictationSummaryIcon(TryDictationSummary.ToneFor(view.Summary));
         AnnounceTryDictationSummary();
 

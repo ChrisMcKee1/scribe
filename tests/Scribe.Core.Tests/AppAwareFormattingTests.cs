@@ -278,6 +278,50 @@ public sealed class AppAwareFormattingTests
         Assert.False(settings.EnableAiCleanup);
     }
 
+    [Theory]
+    [InlineData("github")]
+    [InlineData("GITHUB.EXE")]
+    [InlineData("GitHubCopilot")]
+    [InlineData("copilotapp")]
+    [InlineData("claude")]
+    [InlineData("ChatGPT")]
+    [InlineData("M365Copilot")]
+    [InlineData("Microsoft Scout")]
+    [InlineData("Code")]
+    [InlineData("Code - Insiders.exe")]
+    [InlineData("Obsidian")]
+    [InlineData("Notion")]
+    [InlineData("Teams")]
+    public void Known_markdown_apps_default_to_markdown_source_and_clipboard_paste_when_enabled_without_a_profile(string process)
+    {
+        var settings = new AppSettings
+        {
+            AppAwareFormattingEnabled = true,
+            DefaultTextFormat = DictationTextFormat.Plain,
+            InjectionMethod = InjectionMethod.UnicodeType,
+            NewlineHandling = NewlineInjectionMode.SmartFlatten,
+            ShiftEnterLineBreaks = true,
+            Profiles = [],
+        };
+
+        var plan = DictationFormatPlan.Capture(settings, process);
+        Assert.Equal(DictationFormatDecision.MarkdownSource, plan.Decision);
+        Assert.Equal(DictationTextFormat.MarkdownSource, plan.TextFormat);
+        Assert.Equal(InjectionMethod.ClipboardPaste, plan.InjectionMethod);
+        Assert.True(plan.ShiftEnterLineBreaks);
+
+        var plainOnce = DictationFormatPlan.Capture(settings, process, plainOnce: true);
+        Assert.Equal(DictationFormatDecision.PlainOnce, plainOnce.Decision);
+        Assert.Equal(DictationTextFormat.Plain, plainOnce.TextFormat);
+        Assert.Equal(InjectionMethod.UnicodeType, plainOnce.InjectionMethod);
+
+        settings.NewlineHandling = NewlineInjectionMode.AlwaysFlatten;
+        var flattened = DictationFormatPlan.Capture(settings, process);
+        Assert.Equal(DictationFormatDecision.NoMatchingProfile, flattened.Decision);
+        Assert.Equal(DictationTextFormat.Plain, flattened.TextFormat);
+        Assert.Equal(InjectionMethod.UnicodeType, flattened.InjectionMethod);
+    }
+
     [Fact]
     public void Nullable_overrides_inherit_and_a_later_save_cannot_change_the_admitted_plan()
     {

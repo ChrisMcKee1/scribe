@@ -551,6 +551,42 @@ public sealed class CleanupAutoReconnectTests
     private static Exception HttpFailure(int status, string message = Canary) =>
         status == 0 ? ConnectionFailure() : new HttpRequestException(message, null, (HttpStatusCode)status);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_model_process_crash_from_the_actual_HTTP_route_does_not_buy_pointless_reconnects(bool nativeApi)
+    {
+        const string crash = "llama-server process has terminated: exit status 0xc0000005";
+        var body = nativeApi
+            ? """{"error":"llama-server process has terminated: exit status 0xc0000005"}"""
+            : """{"error":{"message":"llama-server process has terminated: exit status 0xc0000005"}}""";
+        var http = new ScriptedHttpHandler((_, _) =>
+            Task.FromResult(ScriptedHttpHandler.Json(HttpStatusCode.InternalServerError, body)));
+        await using var harness = new CleanupHarness(http: http);
+        var clock = new ManualTimeProvider();
+        var svc = harness.Service;
+        svc.AutomaticReconnectClock = clock;
+        svc.Configure(CleanupHarness.Custom(LocalAiServer.OllamaAddress) with
+        {
+            LocalContextTokens = nativeApi ? 8192 : null,
+        });
+        await FinishedAsync(svc, CleanupStatus.Unavailable);
+
+        clock.Advance(TimeSpan.FromDays(10));
+        foreach (var text in new[] { "first dictation", "second dictation" })
+        {
+            var admitted = svc.Admit(CleanupVocabulary.None);
+            admitted.Prewarm();
+            var result = await admitted.CleanAsync(text).WaitAsync(Bound);
+            Assert.Equal(CleanupOutcome.Failed, result.Outcome);
+            Assert.Contains("model process crashed (500)", result.FailureReason, StringComparison.Ordinal);
+            Assert.Contains(crash, result.DisplayDetail, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(1, http.Requests);
+        Assert.Equal(CleanupStatus.Unavailable, svc.Status);
+    }
+
     private static async Task AssertDoesNotReconnectAsync(Exception failure, CleanupOptions? options = null)
     {
         await using var harness = new CleanupHarness();

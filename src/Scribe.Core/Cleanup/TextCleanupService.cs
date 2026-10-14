@@ -190,9 +190,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     private const int MaxCleanupChunks = 20;
 
     /// <summary>
-    /// Cap on how much of an endpoint's error text is echoed into a status pill or log line. Long
-    /// enough for the sentence that names the fault, short enough that a response body cannot flood
-    /// the shared log.
+    /// Cap on the endpoint's error explanation kept for Settings. It may contain private configuration or request
+    /// details, so it is display-only, never logged.
     /// </summary>
     private const int MaxServerMessageChars = 2048;
     private const float CleanupTemperature = 0.1f;
@@ -3075,6 +3074,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             {
                 OperationCanceledException or TimeoutException => "timeout",
                 _ when IsModelNotLoaded(exception) => "model-not-loaded",
+                _ when IsLocalModelProcessCrash(exception) => "model-process-crashed",
+                _ when IsLocalModelLoadFailure(exception) => "model-load",
                 _ when IsGpuShaderIncompatibility(exception) => "gpu-shader",
                 _ when IsExecutionProviderUnavailable(exception) => "execution-provider-unavailable",
                 _ when IsModelBuildFailure(exception) => "model-build",
@@ -3704,8 +3705,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         if (LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) is var app and not LocalServerApp.None &&
             ExtractHttpStatus(ex) is >= 500 and var localStatus)
         {
-            var sentence = $"{app switch { LocalServerApp.Ollama => "Ollama", _ => "LM Studio" }} couldn't load or run the model ({localStatus}). " +
-                "Check the app and try again.";
+            var name = app switch { LocalServerApp.Ollama => "Ollama", _ => "LM Studio" };
+            var sentence = IsLocalModelProcessCrash(ex)
+                ? $"{name}'s model process crashed ({localStatus}). Restart {name} and try again."
+                : $"{name} couldn't load or run the model ({localStatus}). Check the app and try again.";
             var detail = DescribeServerMessage(ex);
             return new CleanupReason(sentence, string.IsNullOrEmpty(detail) ? sentence : sentence + " " + detail);
         }
@@ -3735,18 +3738,29 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         ExtractHttpStatus(exception) is >= 500 and <= 599;
 
     private static bool IsLocalModelLoadFailure(Exception? exception, CleanupOptions options) =>
-        IsLocalModelServerFailure(exception, options) &&
+        IsLocalModelServerFailure(exception, options) && IsLocalModelLoadFailure(exception);
+
+    private static bool IsLocalModelLoadFailure(Exception? exception) =>
         CleanupFailureShape.Walk(exception).Any(current =>
             MentionsLocalModelLoadFailure(CleanupFailureShape.MessageOf(current)) ||
             MentionsLocalModelLoadFailure(ReadResponseBody(current)));
 
-    private static bool MentionsLocalModelLoadFailure(string? text) =>
+    private static bool IsLocalModelProcessCrash(Exception? exception) =>
+        CleanupFailureShape.Walk(exception).Any(current =>
+            MentionsLocalModelProcessCrash(CleanupFailureShape.MessageOf(current)) ||
+            MentionsLocalModelProcessCrash(ReadResponseBody(current)));
+
+    private static bool MentionsLocalModelProcessCrash(string? text) =>
         !string.IsNullOrEmpty(text) &&
         (text.Contains("llama-server process has terminated", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("runner process exited", StringComparison.OrdinalIgnoreCase));
+
+    private static bool MentionsLocalModelLoadFailure(string? text) =>
+        !string.IsNullOrEmpty(text) &&
+        (MentionsLocalModelProcessCrash(text) ||
             text.Contains("failed to initialize the context", StringComparison.OrdinalIgnoreCase) ||
             text.Contains("error loading model", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("failed to load model", StringComparison.OrdinalIgnoreCase) ||
-            text.Contains("runner process exited", StringComparison.OrdinalIgnoreCase));
+            text.Contains("failed to load model", StringComparison.OrdinalIgnoreCase));
 
     /// <summary>
     /// The failure in both forms. The diagnostic form is the same fixed sentence without the
@@ -4034,8 +4048,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     }
 
     /// <summary>
-    /// The endpoint's own explanation, flattened to one short line so it fits a status pill and a log
-    /// entry. Trimmed hard because a client exception message can carry a whole response body.
+    /// The endpoint's own explanation, flattened to one bounded line for Settings, never for logs.
+    /// Trimmed hard because a client exception message can carry a whole response body.
     /// </summary>
     private static string DescribeServerMessage(Exception ex)
     {
@@ -4058,7 +4072,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return string.Empty;
         }
 
-        // One line: this text lands in a status pill and in a single shared-log entry.
+        // The display detail is kept separate from the fixed, diagnostics-safe reason.
         line = WhitespaceRun.Replace(line, " ").Trim();
         return line.Length <= MaxServerMessageChars ? line : line[..MaxServerMessageChars].TrimEnd() + "…";
     }
@@ -4075,11 +4089,19 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         try
         {
             using var document = JsonDocument.Parse(body);
-            if (document.RootElement.TryGetProperty("error", out var error) &&
-                error.TryGetProperty("message", out var message) &&
-                message.GetString() is { Length: > 0 } text)
+            if (document.RootElement.ValueKind == JsonValueKind.Object &&
+                document.RootElement.TryGetProperty("error", out var error))
             {
-                return text;
+                if (error.ValueKind == JsonValueKind.String && error.GetString() is { Length: > 0 } nativeText)
+                {
+                    return nativeText;
+                }
+
+                if (error.ValueKind == JsonValueKind.Object && error.TryGetProperty("message", out var message) &&
+                    message.ValueKind == JsonValueKind.String && message.GetString() is { Length: > 0 } text)
+                {
+                    return text;
+                }
             }
         }
         catch (Exception)
@@ -5136,7 +5158,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             PublishStatus(
                 generation,
                 CleanupStatus.Unavailable,
-                CleanupReason.Same("AI cleanup couldn't start."));
+                DescribeFailureReason(ex, options));
             lock (_gate)
             {
                 RememberAutomaticReconnectLocked(generation, options, ex);

@@ -573,7 +573,7 @@ public sealed class TextInjector : ITextInjector
                 buffer ??= new INPUT[Math.Min(total, MaxEventsPerBatch(pace.BatchUnits, shiftEnter))];
                 int events = WriteUnicodeChunk(buffer, text, start, count, shiftEnter, keys);
 
-                int delivered = SendWithRetry(buffer.AsSpan(0, events), timing);
+                int delivered = SendWithRetry(buffer.AsSpan(0, events), timing, expectedForegroundWindow);
                 sent += delivered;
                 batches++;
 
@@ -581,10 +581,10 @@ public sealed class TextInjector : ITextInjector
                 // report the partial send (the text.inject span is marked errored when sent != total).
                 if (delivered < events)
                 {
-                    // A truncated chunk can leave Shift logically down (the chord's release is its last
-                    // event), which would turn anything the user types next into a shortcut. Same reason
-                    // ReleaseCtrlV exists; a key-up for a key that was never down is harmless.
-                    if (shiftEnter)
+                    // A truncated chunk that stopped between Shift-down and Shift-up leaves Shift logically down,
+                    // which would turn anything the user types next into a shortcut. A chunk with no shifted line
+                    // break (or one that stopped before Shift-down or after Shift-up) never left Shift down.
+                    if (shiftEnter && LeavesShiftDown(buffer.AsSpan(0, delivered)))
                     {
                         ReleaseShift(keys, timing);
                     }
@@ -854,7 +854,8 @@ public sealed class TextInjector : ITextInjector
 
     // Sends a batch, resending only the unsent remainder when SendInput reports a short count (the
     // input stream was momentarily blocked by other input). Returns how many events were delivered.
-    private int SendWithRetry(ReadOnlySpan<INPUT> inputs, InjectionTimingMeasurement? timing)
+    private int SendWithRetry(
+        ReadOnlySpan<INPUT> inputs, InjectionTimingMeasurement? timing, nint expectedForegroundWindow = 0)
     {
         int offset = 0;
         int attempts = 0;
@@ -869,6 +870,14 @@ public sealed class TextInjector : ITextInjector
                 break;
             }
 
+            if (!IsExpectedForeground(expectedForegroundWindow))
+            {
+                _logger.LogWarning(
+                    "SendInput stopped at {Offset}/{Total} events because the focused window changed.",
+                    offset, inputs.Length);
+                break;
+            }
+
             if (++attempts > MaxChunkRetries)
             {
                 _logger.LogWarning("SendInput stalled at {Offset}/{Total} events after {Attempts} retries.",
@@ -880,6 +889,21 @@ public sealed class TextInjector : ITextInjector
         }
 
         return offset;
+    }
+
+    // True when a delivered prefix ended between a shifted line break's Shift-down and its Shift-up.
+    internal static bool LeavesShiftDown(ReadOnlySpan<INPUT> delivered)
+    {
+        for (int i = delivered.Length - 1; i >= 0; i--)
+        {
+            ref readonly var key = ref delivered[i].U.ki;
+            if (key.wVk == VK_SHIFT && (key.dwFlags & KEYEVENTF_UNICODE) == 0)
+            {
+                return (key.dwFlags & KEYEVENTF_KEYUP) == 0;
+            }
+        }
+
+        return false;
     }
 
     private uint SendInput(ReadOnlySpan<INPUT> inputs, InjectionTimingMeasurement? timing)

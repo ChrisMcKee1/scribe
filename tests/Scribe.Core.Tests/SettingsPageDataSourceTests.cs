@@ -23,13 +23,15 @@ public sealed class SettingsPageDataSourceTests
     }
 
     [Fact]
-    public void With_the_flag_on_the_Diagnostics_page_reads_once_when_it_first_shows_and_History_as_before()
+    public void Diagnostics_refreshes_failures_on_each_visit_and_defers_speed_until_its_first_visit()
     {
         var showPage = Slice(Window, "internal void ShowPage(SettingsPage page, string? focusName = null)", "private void ShowSection(Grid section)");
 
         Assert.Contains("if (page == SettingsPage.History)\r\n        {\r\n            LoadHistory();", showPage.ReplaceLineEndings("\r\n"), StringComparison.Ordinal);
-        var diagnostics = Slice(showPage, "else if (page == SettingsPage.Diagnostics && !_diagnosticsDataRequested && _perfFlags.IsOn(PerfFlags.DeferSettingsPageData))", "else if (page == SettingsPage.Usage)");
-        Assert.Equal("{ _diagnosticsDataRequested = true; LoadFailures(); LoadPerformanceStats(); }", Collapse(diagnostics[diagnostics.IndexOf('{', StringComparison.Ordinal)..]));
+        var diagnostics = Slice(showPage, "else if (page == SettingsPage.Diagnostics)", "else if (page == SettingsPage.Usage)");
+        Assert.Equal(
+            "{ ShowCurrentCleanupProblem(); if (string.IsNullOrWhiteSpace(focusName)) { DiagnosticsScrollViewer.ScrollToTop(); } LoadFailures(); if (!_diagnosticsDataRequested && _perfFlags.IsOn(PerfFlags.DeferSettingsPageData)) { _diagnosticsDataRequested = true; LoadPerformanceStats(); } }",
+            Collapse(diagnostics[diagnostics.IndexOf('{', StringComparison.Ordinal)..]));
 
         // Before any read the page says it is loading (InitializeReadOnlySections), so a late read shows nothing untrue.
         var sections = Slice(Window, "SetFailuresListState(\"Loading...\", showGrid: false);", "private void SetFailuresListState(");

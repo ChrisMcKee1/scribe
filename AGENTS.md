@@ -1721,8 +1721,11 @@ change the sums and needs a decision (and probably a flag) of its own.
 - **Opt-in plumbing, not semantic formatting.** `AppSettings.AppAwareFormattingEnabled` starts off, and
   `DefaultTextFormat` starts Plain. Off ignores all new format and delivery overrides and preserves the old profile
   writing-style and newline behavior. On uses `AppProfileMatcher`'s first match; `AppProfile.TextFormat` null inherits
-  the default, and nullable `InjectionMethod` and `ShiftEnterLineBreaks` inherit their legacy globals. Unmatched apps
-  stay Plain. This never enables AI cleanup or changes a prompt.
+  the default, and nullable `InjectionMethod` and `ShiftEnterLineBreaks` inherit their legacy globals. Without a
+  matching profile, known Markdown-aware desktop apps (`DictationFormatPlan.IsMarkdownProcess`, such as `github`,
+  `Code` and `Obsidian`) default to `MarkdownSource` and `ClipboardPaste` when line breaks are kept, so multi-line
+  bullet lists paste as a unit instead of triggering `Shift+Enter` list auto-continuation (`- - `); other unmatched
+  apps stay Plain. This never enables AI cleanup or changes a prompt.
 - **A preference is not editor certification.** No website, title, control or field snooping, no password or IME
   safety claim, and no same-window field/tab detection. Teams, Copilot and Scout composers still need manual delivery
   checks. Use `InjectionTextFormatter` for terminal decisions, not another process list. Save validation blocks known
@@ -2508,7 +2511,7 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   `OverlayTextScaleSourceTests` pins the rest from source.
 - **A finished dictation's outcome is decided in Core and only handed on.** `PillOutcome.Of` maps what the pipeline
   produced to Typed (a check, 400 ms), Typed without AI cleanup (a caution triangle and always the one fixed line
-  `PillOutcome.CleanupDidNotRun`, "See Settings, AI cleanup": never the cleanup's reason, which is a sentence the pill
+  `PillOutcome.CleanupDidNotRun`, "See Settings, Diagnostics": never the cleanup's reason, which is a sentence the pill
   cuts off, and never its display detail), or Nothing typed / Not all of it was typed (an error icon and the next
   step from `DictationProblemText.PillLine`: "Copy it from the tray menu" after an insertion that failed, otherwise the
   problem's own line, each measured to fit the pill);
@@ -2985,7 +2988,7 @@ store, GitHub signing secrets, or a publisher trust bundle.
   different version, so a machine that already has the right vpk can pack offline. Never go back to an
   unpinned `dotnet tool install -g vpk`, which on a clean runner takes whatever is newest.
 - Each release's notes live in `docs/release-notes-<version>.md` (this release:
-  `docs/release-notes-0.5.8.md`). Neither workflow reads the file; copy it into the GitHub release body.
+  `docs/release-notes-0.5.9.md`). Neither workflow reads the file; copy it into the GitHub release body.
 - The release workflow downloads the latest prior stable full nupkg before packing so a clean
   hosted runner can produce the delta package. `pack.ps1` requires the delta whenever a prior
   full package is present.
@@ -3698,7 +3701,14 @@ docs/local-model-benchmark.md (evidence `docs/benchmarks/context-window-2026-09-
   0.5.3 sent. Every request asks for the same size, because Ollama reloads a model whose size a request changes;
   another app asking for another size makes the two reload in turn, which Settings says. OllamaSharp reports Ollama's
   error answers as `HttpRequestException` with a status code, which `CleanupFailureShape.ExtractHttpStatus` reads, so a
-  missing model is a 404, not "Couldn't reach the AI service".
+  missing model is a 404, not "Couldn't reach the AI service". Its `EnsureSuccessStatusCode` drops the error body, so
+  `OllamaErrorHandler`, behind the same admission point, preserves a bounded prefix of a failed response and reads both
+  Ollama's string `error` and an OpenAI `error.message` envelope. Successful responses pass through untouched. The
+  explanation is display-only; logs keep the status and fixed `model-process-crashed` or `model-load` classification,
+  never that text. A known crashed process does not qualify for automatic reconnection, and subsequent dictations
+  keep its cause. `LocalContextServiceTests` and `CleanupAutoReconnectTests` pin the real SDK routes. Failure actions
+  point to Diagnostics, which shows the live setup problem even without a dictation and refreshes the failure list on
+  every visit; the local-app model list must not replace a live failure with "It loads when you dictate."
 - **LM Studio takes a size only when a model loads.** Its OpenAI-compatible request loads a model at LM Studio's own
   size, so with a size chosen `ReconcileLmStudioAsync` loads it first through `/api/v1/chat` with `context_length`,
   before the readiness check and when a recording finds no copy or one at another size, and requests by the model's

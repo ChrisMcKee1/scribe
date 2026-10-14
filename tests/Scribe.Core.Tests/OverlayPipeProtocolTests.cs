@@ -64,7 +64,7 @@ public sealed class OverlayPipeProtocolTests
     {
         Assert.Equal("TYPED", OverlayPipeProtocol.OutcomeLine(Outcome(PillOutcomeKind.Typed)));
         Assert.Equal(
-            "TYPEDWITHOUTCLEANUP See Settings, AI cleanup",
+            "TYPEDWITHOUTCLEANUP See Settings, Diagnostics",
             OverlayPipeProtocol.OutcomeLine(Outcome(PillOutcomeKind.TypedWithoutCleanup)));
         Assert.Equal(
             "NOTHINGTYPED Copy it from the tray menu",

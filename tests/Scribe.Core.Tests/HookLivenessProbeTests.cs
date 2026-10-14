@@ -225,4 +225,24 @@ public sealed class HookLivenessProbeTests
         Assert.True(HookLivenessProbe.ShouldWithholdProbe(TimeSpan.FromHours(8), Period));
         Assert.False(HookLivenessProbe.ShouldWithholdProbe(TimeSpan.FromSeconds(1), Period));
     }
+
+    [Fact]
+    public void Probe_is_withheld_when_foreground_window_is_higher_integrity()
+    {
+        Assert.True(HookLivenessProbe.ShouldWithholdProbe(TimeSpan.Zero, Period, foregroundHigherIntegrity: true));
+        Assert.True(HookLivenessProbe.ShouldWithholdProbe(null, Period, foregroundHigherIntegrity: true));
+        Assert.False(HookLivenessProbe.ShouldWithholdProbe(TimeSpan.Zero, Period, foregroundHigherIntegrity: false));
+    }
+
+    [Fact]
+    public void WindowOwners_reports_own_and_zero_process_as_not_higher_integrity_and_system_process_as_higher()
+    {
+        Assert.False(Scribe.Core.TextInjection.WindowOwners.IsHigherIntegrityProcess(0));
+        Assert.False(Scribe.Core.TextInjection.WindowOwners.IsHigherIntegrityProcessId(0));
+        Assert.False(Scribe.Core.TextInjection.WindowOwners.IsHigherIntegrityProcessId((uint)Environment.ProcessId));
+        var ownRid = Scribe.Core.TextInjection.WindowOwners.TryReadProcessIntegrityRid((uint)Environment.ProcessId);
+        Assert.NotNull(ownRid);
+        Assert.True(ownRid >= 0x1000u);
+        Assert.True(Scribe.Core.TextInjection.WindowOwners.IsHigherIntegrityProcessId(4));
+    }
 }

@@ -157,6 +157,37 @@ public sealed class LiteralFormattingDeliveryTests
     }
 
     [Fact]
+    public void GitHub_Copilot_bullet_list_pastes_via_clipboard_when_app_aware_formatting_is_on_without_a_profile()
+    {
+        const string bullets =
+            "- What's going on with my priority accounts?\n" +
+            "- What milestones do I have that are assigned to me?\n" +
+            "- What are the next options or steps I should take?";
+        var settings = new AppSettings
+        {
+            AppAwareFormattingEnabled = true,
+            DefaultTextFormat = DictationTextFormat.Plain,
+            InjectionMethod = InjectionMethod.UnicodeType,
+            NewlineHandling = NewlineInjectionMode.SmartFlatten,
+            ShiftEnterLineBreaks = true,
+            Profiles = [],
+        };
+
+        var rig = new DeliveryRig();
+        var plan = DictationFormatPlan.Capture(settings, "github");
+        var represented = plan.Represent(bullets);
+        var insertion = rig.Insert(represented, plan);
+
+        Assert.Equal(DictationFormatDecision.MarkdownSource, plan.Decision);
+        Assert.Equal(InjectionMethod.ClipboardPaste, plan.InjectionMethod);
+        Assert.True(insertion.Injection.Succeeded);
+        Assert.Equal("clipboard", insertion.Injection.Method);
+        Assert.Equal(bullets, insertion.Recorded);
+        Assert.Equal(bullets + " ", rig.Pasted);
+        Assert.DoesNotContain(rig.Platform.Batches.SelectMany(batch => batch), input => input.U.ki.wVk == VK_RETURN);
+    }
+
+    [Fact]
     public void Cancellation_and_focus_loss_keep_R_without_recording_transport_fallback_text()
     {
         var plan = DictationFormatPlan.Capture(Settings(DictationTextFormat.MarkdownSource, InjectionMethod.ClipboardPaste, false), "Code");

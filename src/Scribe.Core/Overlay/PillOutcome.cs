@@ -47,7 +47,7 @@ public sealed record PillOutcome
     public const string RecoveryStep = "Copy it from the tray menu";
 
     /// <summary>The fixed pill line shown when AI cleanup did not clean text that still got typed.</summary>
-    public const string CleanupDidNotRun = "See Settings, AI cleanup";
+    public const string CleanupDidNotRun = "See Settings, Diagnostics";
 
     private PillOutcome(PillOutcomeKind kind, string detail)
     {

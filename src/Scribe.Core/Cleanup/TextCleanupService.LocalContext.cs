@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -85,7 +86,8 @@ internal sealed partial class TextCleanupService
     // front of a handler that follows no redirect and uses no proxy, since it only ever reaches Ollama's own address on this
     // PC (as LocalServerClient's requests do).
     private static readonly Lazy<HttpMessageHandler> SharedOllamaHandler = new(() =>
-        new VocabularyHandOffHandler(new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false }));
+        new VocabularyHandOffHandler(new OllamaErrorHandler(
+            new HttpClientHandler { AllowAutoRedirect = false, UseProxy = false })));
 
     private HttpMessageHandler? _testOllamaHandler;
 
@@ -1579,7 +1581,55 @@ internal sealed partial class TextCleanupService
 
         lock (_gate)
         {
-            return _testOllamaHandler ??= new VocabularyHandOffHandler(network);
+            return _testOllamaHandler ??= new VocabularyHandOffHandler(new OllamaErrorHandler(network));
+        }
+    }
+
+    // OllamaSharp's EnsureSuccessStatusCode discards the error body. Keep a bounded explanation for the same
+    // failure classification and display-only detail the OpenAI route uses, without changing successful responses.
+    private sealed class OllamaErrorHandler(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var response = await base.SendAsync(request, ct).ConfigureAwait(false);
+            if (response.IsSuccessStatusCode)
+            {
+                return response;
+            }
+
+            using (response)
+            {
+                var message = $"Ollama returned {(int)response.StatusCode}.";
+                try
+                {
+                    var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                    using var reader = new StreamReader(stream, Encoding.UTF8, leaveOpen: true);
+                    var buffer = new char[MaxServerMessageChars];
+                    var length = 0;
+                    while (length < buffer.Length)
+                    {
+                        var read = await reader.ReadAsync(buffer.AsMemory(length), ct).ConfigureAwait(false);
+                        if (read == 0)
+                        {
+                            break;
+                        }
+
+                        length += read;
+                    }
+
+                    if (ExtractErrorMessage(new string(buffer, 0, length)) is { Length: > 0 } detail)
+                    {
+                        message = detail;
+                    }
+                }
+                catch (Exception ex) when ((ex is IOException or HttpRequestException) && !ct.IsCancellationRequested)
+                {
+                    throw new HttpRequestException(
+                        message + " Its error details couldn't be read.", ex, response.StatusCode);
+                }
+
+                throw new HttpRequestException(message, null, response.StatusCode);
+            }
         }
     }
 

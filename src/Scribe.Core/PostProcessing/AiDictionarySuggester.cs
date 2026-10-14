@@ -26,8 +26,13 @@ public static class AiDictionarySuggester
 
     // A single oversized term is data, not a rule; cap it so one bad row can't bloat the grid.
     private const int MaxTermChars = 80;
+    private const int MaxScanCandidates = 64;
 
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        AllowTrailingCommas = true,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+    };
 
     /// <summary>
     /// The system prompt that instructs the model to emit spoken/written pairs as JSON. Public so the
@@ -121,23 +126,8 @@ public static class AiDictionarySuggester
             }
         }
 
-        var json = ExtractJsonArray(response);
-        if (json is null)
-        {
-            return [];
-        }
-
-        List<RawSuggestion>? raw;
-        try
-        {
-            raw = JsonSerializer.Deserialize<List<RawSuggestion>>(json, JsonOptions);
-        }
-        catch (JsonException)
-        {
-            return [];
-        }
-
-        if (raw is null)
+        var raw = TryDeserializeSuggestions(response);
+        if (raw is null || raw.Count == 0)
         {
             return [];
         }
@@ -173,22 +163,93 @@ public static class AiDictionarySuggester
         return results;
     }
 
-    // Pulls the first JSON array out of the response, ignoring any prose, code fences, or think-block
-    // wrapping the model may add. Balanced-bracket scan (not just last ']') so trailing chatter after
-    // the array doesn't swallow unrelated brackets.
-    private static string? ExtractJsonArray(string? response)
+    // Pulls the first valid JSON array of suggestions out of the response, ignoring any prose, code
+    // fences, or think-block wrapping (including brackets like "[1]" inside preamble prose or before a
+    // bare "</think>"), and falls back to collecting individual {"spoken":...,"written":...} objects when
+    // a model emits objects without a complete outer array.
+    private static List<RawSuggestion>? TryDeserializeSuggestions(string? response)
     {
         if (string.IsNullOrWhiteSpace(response))
         {
             return null;
         }
 
-        var start = response.IndexOf('[');
-        if (start < 0)
+        var cleaned = StripThinking(response);
+        var candidatesChecked = 0;
+        for (var searchFrom = 0; searchFrom < cleaned.Length && candidatesChecked < MaxScanCandidates;)
         {
-            return null;
+            var start = cleaned.IndexOf('[', searchFrom);
+            if (start < 0)
+            {
+                break;
+            }
+
+            candidatesChecked++;
+            var candidate = ExtractBalancedSlice(cleaned, start, '[', ']');
+            if (candidate is not null)
+            {
+                try
+                {
+                    var list = JsonSerializer.Deserialize<List<RawSuggestion>>(candidate, JsonOptions);
+                    if (list is not null &&
+                        list.Any(item => item is not null && (item.Spoken is not null || item.Written is not null)))
+                    {
+                        return list;
+                    }
+                }
+                catch (JsonException)
+                {
+                    // A bracketed note in prose (e.g. "[1]"); keep scanning for the real JSON array.
+                }
+            }
+
+            searchFrom = start + 1;
         }
 
+        List<RawSuggestion>? collected = null;
+        candidatesChecked = 0;
+        for (var searchFrom = 0; searchFrom < cleaned.Length && candidatesChecked < MaxScanCandidates;)
+        {
+            var start = cleaned.IndexOf('{', searchFrom);
+            if (start < 0)
+            {
+                break;
+            }
+
+            candidatesChecked++;
+            var candidate = ExtractBalancedSlice(cleaned, start, '{', '}');
+            if (candidate is not null)
+            {
+                try
+                {
+                    if (JsonSerializer.Deserialize<RawSuggestion>(candidate, JsonOptions) is { } single &&
+                        (single.Spoken is not null || single.Written is not null))
+                    {
+                        collected ??= [];
+                        collected.Add(single);
+                        searchFrom = start + candidate.Length;
+                        continue;
+                    }
+                }
+                catch (JsonException)
+                {
+                }
+            }
+
+            searchFrom = start + 1;
+        }
+
+        return collected;
+    }
+
+    private static string StripThinking(string response)
+    {
+        var lastClose = response.LastIndexOf("</think>", StringComparison.OrdinalIgnoreCase);
+        return lastClose >= 0 ? response[(lastClose + "</think>".Length)..] : response;
+    }
+
+    private static string? ExtractBalancedSlice(string response, int start, char open, char close)
+    {
         var depth = 0;
         var inString = false;
         var escaped = false;
@@ -213,22 +274,21 @@ public static class AiDictionarySuggester
                 continue;
             }
 
-            switch (ch)
+            if (ch == '"')
             {
-                case '"':
-                    inString = true;
-                    break;
-                case '[':
-                    depth++;
-                    break;
-                case ']':
-                    depth--;
-                    if (depth == 0)
-                    {
-                        return response[start..(i + 1)];
-                    }
-
-                    break;
+                inString = true;
+            }
+            else if (ch == open)
+            {
+                depth++;
+            }
+            else if (ch == close)
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    return response[start..(i + 1)];
+                }
             }
         }
 

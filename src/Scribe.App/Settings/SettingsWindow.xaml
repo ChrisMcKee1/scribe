@@ -1004,7 +1004,7 @@
                                             <TextBlock x:Name="AppAwareFormattingTitle" Text="Use app-aware formatting" Style="{StaticResource CardTitle}"/>
                                         </CheckBox>
                                         <TextBlock x:Name="AppAwareFormattingHint" Margin="28,2,0,0" Style="{StaticResource CardDescription}"
-                                                   Text="Off by default. Lets app profiles choose a text format and typing method. When off, those new choices are ignored; existing writing styles and line-break rules still apply. This never turns AI cleanup on."/>
+                                                   Text="Off by default. Pastes literal Markdown in known Markdown apps (such as GitHub Copilot, Visual Studio Code and Obsidian) so bullet lists don't double up, and lets app profiles choose a text format and typing method. When off, those choices are ignored; existing writing styles and line-break rules still apply. This never turns AI cleanup on."/>
                                         <TextBlock x:Name="DefaultTextFormatTitle" Text="Default text format for app profiles" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
                                         <ComboBox x:Name="DefaultTextFormatCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=DefaultTextFormatTitle}"
@@ -2518,8 +2518,8 @@
                                                     <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="12,0,0,0">
                                                         <ui:Button x:Name="TryDictationSoundSettingsButton" Content="Open sound settings"
                                                                    MinWidth="140" Visibility="Collapsed" Click="SoundSettings_Click"/>
-                                                        <ui:Button x:Name="TryDictationAiCleanupButton" Content="Open AI cleanup"
-                                                                   MinWidth="130" Visibility="Collapsed" Click="TryDictationOpenAiCleanup_Click"/>
+                                                        <ui:Button x:Name="TryDictationDiagnosticsButton" Content="Open Diagnostics"
+                                                                   MinWidth="130" Visibility="Collapsed" Click="TryDictationOpenDiagnostics_Click"/>
                                                     </StackPanel>
                                                 </Grid>
 
@@ -3116,12 +3116,21 @@
                             <TextBlock Text="Diagnostics" Style="{StaticResource PageTitle}"/>
                             <TextBlock Style="{StaticResource PageSubtitle}" Text="Get help, see what went wrong, and check how fast dictation runs."/>
                         </StackPanel>
-                        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="2,0,14,4">
+                        <ScrollViewer x:Name="DiagnosticsScrollViewer" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Padding="2,0,14,4">
                             <Grid HorizontalAlignment="Stretch">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" MaxWidth="1000"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0">
+                                <ui:Card x:Name="CleanupProblemCard" Style="{StaticResource SettingsCard}" Visibility="Collapsed">
+                                    <StackPanel>
+                                        <TextBlock Text="Current AI cleanup problem" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock x:Name="CleanupProblemText" Style="{StaticResource CardDescription}" Margin="0,4,0,0"
+                                                   AutomationProperties.LiveSetting="Polite"/>
+                                        <ui:Button Content="Open AI cleanup" MinWidth="130" Margin="0,12,0,0"
+                                                   HorizontalAlignment="Left" Click="DiagnosticsOpenAiCleanup_Click"/>
+                                    </StackPanel>
+                                </ui:Card>
                                 <TextBlock Text="Get help" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>

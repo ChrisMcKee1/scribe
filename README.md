@@ -204,6 +204,11 @@ the text is typed. You choose where it runs:
     fresh cleanup request and retry behind the same failed load. The next recording checks again.
     Ollama or LM Studio server errors say to check that app; Scribe does not silently change the model,
     context size or GPU settings.
+  - A failed setup is a problem, not a model that is still starting. Scribe keeps Ollama's explanation,
+    including a model-process crash, and shows it in **Diagnostics** before you change settings. The
+    recording indicator's instruction, cleanup failure notification and Try dictation's problem action
+    lead there. Opening Diagnostics again refreshes the recorded problems; the current setup failure
+    appears even before a dictation has been attempted.
   - Preparation reads only a starting part of the whole vocabulary, at most **4,096 estimated vocabulary
     tokens**, even with a large context selected. Actual dictations still receive their full selected
     vocabulary in the original format. This bounds optional preparation work rather than changing
@@ -280,6 +285,9 @@ If Ollama can list models but AI cleanup can't start, check `%LOCALAPPDATA%\Olla
 GPU or driver crash can leave model listing working while model loading fails. Restarting Ollama may
 not reset the driver: save your work and restart Windows before retrying. If it still fails, follow
 [Ollama's GPU troubleshooting guidance](https://docs.ollama.com/troubleshooting).
+Restarting Scribe alone does not restart an Ollama instance running outside it. A failed model process
+is reported as a crash, with the server's explanation in Settings, Diagnostics; Scribe does not fix a
+driver crash by changing your model, context size, retention or GPU placement.
 
 Test connection checks Microsoft Foundry or another AI service before you save. If the model isn't ready
 or doesn't answer, Scribe types what it heard, and you can turn AI cleanup on or off from the tray at any

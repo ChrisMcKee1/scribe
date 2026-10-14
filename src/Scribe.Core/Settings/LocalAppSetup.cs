@@ -103,10 +103,17 @@ public static class LocalAppSetup
     /// The status line under the model: whether the app answered, whether it has models, and what the chosen model holds
     /// in memory, with the one action that fits. <paramref name="state"/> null means the app is being asked right now.
     /// </summary>
-    public static AiCleanupStatusRow Describe(LocalServerApp app, LocalServerState? state, string? model, int idleMinutes)
+    public static AiCleanupStatusRow Describe(
+        LocalServerApp app, LocalServerState? state, string? model, int idleMinutes,
+        CleanupStatus? cleanupStatus = null, string? failureReason = null)
     {
         var name = AiCleanupPageState.LocalAppName(app);
         var checkAgain = new AiCleanupAction(AiCleanupActionId.CheckAgain, "Check again");
+        if (AiCleanupPageState.CurrentProblem(cleanupStatus ?? CleanupStatus.Disabled, failureReason) is { } problem)
+        {
+            return new(AiCleanupStatusKind.Error, problem, new(AiCleanupActionId.OpenDiagnostics, "See what went wrong"));
+        }
+
         if (state is null)
         {
             return new(AiCleanupStatusKind.Busy, $"Checking {name}...");

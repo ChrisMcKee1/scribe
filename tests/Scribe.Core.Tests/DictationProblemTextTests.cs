@@ -106,7 +106,7 @@ public sealed class DictationProblemTextTests
     [Fact]
     public void Outcome_AI_cleanup_line_and_status_lines_fit_the_measured_pill_budgets()
     {
-        Assert.Equal("See Settings, AI cleanup", PillOutcome.CleanupDidNotRun);
+        Assert.Equal("See Settings, Diagnostics", PillOutcome.CleanupDidNotRun);
         Assert.Equal("Microphone muted", DictationProblemText.PillLine(DictationProblem.MicrophoneMuted));
         Assert.Equal("Using the default mic", DictationProblemText.PillLine(DictationProblem.FallbackMicrophone));
 

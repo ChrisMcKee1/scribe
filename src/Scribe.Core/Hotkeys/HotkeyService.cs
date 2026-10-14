@@ -30,6 +30,7 @@ public sealed class HotkeyService : IHotkeyService
     private readonly Func<bool?> _desktopReceivesInput;
     private readonly Func<nint> _foregroundWindow;
     private readonly Func<nint, string?> _processNameOfWindow;
+    private readonly Func<nint, bool> _isHigherIntegrityWindow;
     private readonly TimeProvider _time;
     private readonly Func<int> _keyRepeatWindowMs;
     private readonly Action<long>? _scheduleReconcilePass;
@@ -157,12 +158,14 @@ public sealed class HotkeyService : IHotkeyService
         TimeProvider? time = null,
         Func<int>? keyRepeatWindowMs = null,
         Action<long>? scheduleReconcilePass = null,
-        PerfFlags? perfFlags = null)
+        PerfFlags? perfFlags = null,
+        Func<nint, bool>? isHigherIntegrityWindow = null)
     {
         _logger = logger;
         _desktopReceivesInput = desktopReceivesInput;
         _foregroundWindow = foregroundWindow ?? WindowOwners.Foreground;
         _processNameOfWindow = processNameOfWindow ?? WindowOwners.ProcessNameOf;
+        _isHigherIntegrityWindow = isHigherIntegrityWindow ?? WindowOwners.IsHigherIntegrityProcess;
         _time = time ?? TimeProvider.System;
         _keyRepeatWindowMs = keyRepeatWindowMs ?? KeyRepeatTiming.ReadUncertaintyWindowMs;
         _scheduleReconcilePass = scheduleReconcilePass;
@@ -1067,11 +1070,13 @@ public sealed class HotkeyService : IHotkeyService
     // See HookLivenessProbe.ShouldWithholdProbe. Callers hold _sync.
     private void ProbeKeyboardHookLocked()
     {
-        // On the lock screen / secure desktop the probe cannot reach this desktop's hook,
-        // so every tick would look like a dead hook and churn a reinstall all night.
-        // Skip the cycle entirely (and forget any probe already in flight) until the
-        // interactive desktop is back.
-        if (!NativeMethods.CanAccessInputDesktop())
+        // On the lock screen / secure desktop, or while an elevated (higher-integrity) window is in front,
+        // UIPI prevents a lower-integrity probe from reaching this desktop's hook, so probing or judging
+        // an armed probe would look like a dead hook and churn a reinstall. Skip the cycle and disarm
+        // until a window at our integrity level or below is back in front.
+        var foreground = _foregroundWindow();
+        if (!NativeMethods.CanAccessInputDesktop() ||
+            HookLivenessProbe.ShouldWithholdProbe(null, WatchdogPeriod, _isHigherIntegrityWindow(foreground)))
         {
             _livenessProbe.Disarm();
             return;
@@ -1081,7 +1086,7 @@ public sealed class HotkeyService : IHotkeyService
         {
             // Two reasons, and the log cannot tell them apart: Windows removed the hook, or a hook registered after it keeps
             // the keys, as a Remote Desktop client's does once it registers on its window's activation and is called first.
-            var inFront = _processNameOfWindow(_foregroundWindow());
+            var inFront = _processNameOfWindow(foreground);
             _logger.LogWarning(
                 "The keyboard hook stopped receiving events: either Windows removed it (a callback that missed the " +
                 "deadline), or another program's keyboard hook, such as a Remote Desktop client's, now receives keys " +

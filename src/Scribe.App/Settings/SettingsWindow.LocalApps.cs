@@ -139,6 +139,9 @@ public partial class SettingsWindow
         {
             switch (action)
             {
+                case AiCleanupActionId.OpenDiagnostics:
+                    ShowPage(SettingsPage.Diagnostics);
+                    break;
                 case AiCleanupActionId.Unload:
                     await FreeLocalAppMemoryAsync();
                     break;
@@ -287,7 +290,10 @@ public partial class SettingsWindow
         }
 
         var state = _localAppStateFor == app ? _localAppState : null;
-        LocalAppStatusRow.Show(LocalAppSetup.Describe(app, state, SelectedLocalAppModel, CurrentIdleMinutes()));
+        var savedAndActive = RemoteActivityPolicy.IsSavedAndActive(_committedSettings, CurrentAiDraftSettings());
+        LocalAppStatusRow.Show(LocalAppSetup.Describe(
+            app, state, SelectedLocalAppModel, CurrentIdleMinutes(),
+            savedAndActive ? _cleanup.Status : null, savedAndActive ? _cleanup.StatusDetail : null));
     }
 
     private int CurrentIdleMinutes() =>

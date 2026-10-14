@@ -1038,11 +1038,20 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         {
             LoadHistory();
         }
-        else if (page == SettingsPage.Diagnostics && !_diagnosticsDataRequested && _perfFlags.IsOn(PerfFlags.DeferSettingsPageData))
+        else if (page == SettingsPage.Diagnostics)
         {
-            _diagnosticsDataRequested = true;
+            ShowCurrentCleanupProblem();
+            if (string.IsNullOrWhiteSpace(focusName))
+            {
+                DiagnosticsScrollViewer.ScrollToTop();
+            }
+
             LoadFailures();
-            LoadPerformanceStats();
+            if (!_diagnosticsDataRequested && _perfFlags.IsOn(PerfFlags.DeferSettingsPageData))
+            {
+                _diagnosticsDataRequested = true;
+                LoadPerformanceStats();
+            }
         }
         else if (page == SettingsPage.Usage)
         {
@@ -1929,6 +1938,16 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         NoFailuresText.Visibility = showGrid ? Visibility.Collapsed : Visibility.Visible;
         FailuresGrid.Visibility = showGrid ? Visibility.Visible : Visibility.Collapsed;
     }
+
+    private void ShowCurrentCleanupProblem()
+    {
+        var problem = AiCleanupPageState.CurrentProblem(_cleanup.Status, _cleanup.StatusDetail);
+        CleanupProblemText.Text = problem ?? string.Empty;
+        CleanupProblemCard.Visibility = problem is null ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void DiagnosticsOpenAiCleanup_Click(object sender, RoutedEventArgs e) =>
+        ShowPage(SettingsPage.AiCleanup);
 
     private async void LoadFailures()
     {
@@ -4782,6 +4801,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         CopilotStatusRow.Show(SelectedProvider == CleanupProvider.GitHubCopilot ? page.StatusRow : null);
         CustomStatusRow.Show(AiProviderCustomRadio?.IsChecked == true ? page.StatusRow : null);
         ShowLocalAppStatus();
+        ShowCurrentCleanupProblem();
     }
 
     private async void FoundryStatusRow_PrimaryActionInvoked(object? sender, AiCleanupActionId e) => await InvokeFoundryActionAsync(e);

@@ -38,6 +38,7 @@ public enum AiCleanupActionId
     CheckAgain,
     SignInCopilot,
     TestConnection,
+    OpenDiagnostics,
 }
 
 public sealed record AiCleanupAction(AiCleanupActionId Id, string Text, bool IsEnabled = true);
@@ -314,7 +315,7 @@ public static class AiCleanupPageState
             CleanupStatus.Ready => new(true, $"On. Using {model} on this PC.", null, new(AiCleanupStatusKind.Success, $"{model} is ready.", new(AiCleanupActionId.Unload, FoundryLocalSetup.FreeMemoryAction))),
             CleanupStatus.Unavailable => new(
                 true,
-                "On, but not ready. Until it's ready, Scribe types what it hears.",
+                UnavailableLine,
                 null,
                 new(AiCleanupStatusKind.Error, "Couldn't start the AI runtime for this PC. Try again, or choose another AI service.", new(AiCleanupActionId.TryAgain, "Try again"))),
             _ => new(true, "On. Getting ready...", null, null),
@@ -335,17 +336,27 @@ public static class AiCleanupPageState
             FoundryLocalSetupStage.Loaded => $"On. Using {model} on this PC.",
             FoundryLocalSetupStage.SettingUp or FoundryLocalSetupStage.RuntimeReady or FoundryLocalSetupStage.CachedUnloaded
                 or FoundryLocalSetupStage.Checking or FoundryLocalSetupStage.DownloadingOrLoading => "On. Getting ready...",
-            FoundryLocalSetupStage.Failed or FoundryLocalSetupStage.ModelFailed => NotReadyLine,
+            FoundryLocalSetupStage.Failed or FoundryLocalSetupStage.ModelFailed => UnavailableLine,
             _ => "On, but not set up yet. Until it's ready, Scribe types what it hears.",
         };
         return new(true, line, null, row);
     }
 
-    private const string NotReadyLine = "On, but not ready. Until it's ready, Scribe types what it hears.";
+    private const string UnavailableLine = "On, but AI cleanup isn't working. Scribe types what it hears until it's fixed.";
+
+    /// <summary>The current failure shown in Diagnostics, even before a failed dictation was recorded.</summary>
+    public static string? CurrentProblem(CleanupStatus status, string? reason) =>
+        status == CleanupStatus.Unavailable
+            ? Sentence(string.IsNullOrWhiteSpace(reason) ? "AI cleanup couldn't start." : reason) +
+                " Scribe types what it hears until it's fixed."
+            : null;
+
+    private static string UnavailableBecause(string reason) =>
+        $"On, but AI cleanup isn't working. {Sentence(reason)} Scribe types what it hears until it's fixed.";
 
     // The service's reasons are sentences ("Couldn't reach the AI service. Check your network..."), so the line ends the
     // reason's sentence once instead of adding a second period after it.
-    private static string NotReadyBecause(string reason)
+    private static string Sentence(string reason)
     {
         var sentence = reason.Trim();
         if (!sentence.EndsWith('.') && !sentence.EndsWith('!') && !sentence.EndsWith('?') && !sentence.EndsWith('\u2026'))
@@ -353,7 +364,7 @@ public static class AiCleanupPageState
             sentence += ".";
         }
 
-        return $"On, but not ready: {sentence} Until it's ready, Scribe types what it hears.";
+        return sentence;
     }
 
     // The saved, active remote provider's top card reports the running service (plan 6.2.1 "after Save: live status").
@@ -364,8 +375,8 @@ public static class AiCleanupPageState
         CleanupStatus.Ready => "On. AI cleanup is ready.",
         CleanupStatus.Initializing or CleanupStatus.Downloading => "On. Getting ready...",
         CleanupStatus.Unavailable when knownCause is not null => knownCause,
-        CleanupStatus.Unavailable when !string.IsNullOrWhiteSpace(safeReason) => NotReadyBecause(safeReason),
-        CleanupStatus.Unavailable => NotReadyLine,
+        CleanupStatus.Unavailable when !string.IsNullOrWhiteSpace(safeReason) => UnavailableBecause(safeReason),
+        CleanupStatus.Unavailable => UnavailableLine,
         _ => "On, but not set up yet. Until it's ready, Scribe types what it hears.",
     };
 
@@ -381,9 +392,9 @@ public static class AiCleanupPageState
             CleanupStatus.Initializing or CleanupStatus.Downloading => new(true, "On. Getting ready...", null, new(AiCleanupStatusKind.Busy, "Checking...")),
             CleanupStatus.Unavailable => new(
                 true,
-                string.IsNullOrWhiteSpace(safeReason) ? NotReadyLine : NotReadyBecause(safeReason),
+                string.IsNullOrWhiteSpace(safeReason) ? UnavailableLine : UnavailableBecause(safeReason),
                 null,
-                new(AiCleanupStatusKind.Error, safeReason ?? "AI cleanup isn't ready yet.", action is null ? null : ActionFor(action))),
+                new(AiCleanupStatusKind.Error, safeReason ?? "AI cleanup isn't working.", action is null ? null : ActionFor(action))),
             _ => new(true, notCheckedStatus, null, new(AiCleanupStatusKind.Info, "Not checked yet.", action is null ? null : ActionFor(action))),
         };
     }
@@ -409,10 +420,10 @@ public static class AiCleanupPageState
     {
         var knownCause = setup.Result switch
         {
-            AzureSetupResult.CliMissing => "On, but not ready: Azure CLI isn't installed.",
-            AzureSetupResult.NotSignedIn or AzureSetupResult.SigningIn => "On, but not ready: you're not signed in to Azure.",
-            AzureSetupResult.ServicePrincipalIncomplete => "On, but not ready: the app details aren't complete.",
-            AzureSetupResult.ApiKeyIncomplete => "On, but not ready: enter the endpoint, deployment name and key.",
+            AzureSetupResult.CliMissing => UnavailableBecause("Azure CLI isn't installed."),
+            AzureSetupResult.NotSignedIn or AzureSetupResult.SigningIn => UnavailableBecause("You're not signed in to Azure."),
+            AzureSetupResult.ServicePrincipalIncomplete => UnavailableBecause("The app details aren't complete."),
+            AzureSetupResult.ApiKeyIncomplete => UnavailableBecause("Enter the address, model name and key."),
             _ => null,
         };
         return new(true, LiveRemoteLine(liveStatus, knownCause, safeReason), null, AzureRow(setup));
@@ -439,7 +450,7 @@ public static class AiCleanupPageState
     private static AiCleanupPageDescription DescribeCopilot(CleanupStatus liveStatus, CopilotSetupState setup, string? safeReason)
     {
         var knownCause = setup.Result is CopilotSetupResult.ToolNotFound or CopilotSetupResult.Installing
-            ? "On, but not ready: GitHub Copilot isn't installed."
+            ? UnavailableBecause("GitHub Copilot isn't installed.")
             : null;
         return new(true, LiveRemoteLine(liveStatus, knownCause, safeReason), null, CopilotRow(setup));
     }

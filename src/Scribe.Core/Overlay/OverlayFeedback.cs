@@ -69,12 +69,11 @@ public sealed class OverlayOutcomeFeedback(long revision, PillOutcome outcome, b
         var body = recovery
             ? "Right-click the Scribe icon and choose Copy last dictation, then paste it."
             : outcome.Kind == PillOutcomeKind.TypedWithoutCleanup
-                ? "Your dictation was typed without AI cleanup. See Settings, AI cleanup."
+                ? "Your dictation was typed without AI cleanup. See Settings, Diagnostics to see what went wrong."
                 : outcome.Detail + ". If it keeps happening, save diagnostics in Settings, Diagnostics.";
         return new TrayNotice(title, body,
             outcome.Kind == PillOutcomeKind.TypedWithoutCleanup ? TrayNoticeKind.Warning : TrayNoticeKind.Error,
             recovery ? TrayNoticeAction.CopyLastDictation :
-            outcome.Kind == PillOutcomeKind.TypedWithoutCleanup ? TrayNoticeAction.OpenSettingsAiCleanup :
             TrayNoticeAction.OpenSettingsDiagnostics);
     }
 }

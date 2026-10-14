@@ -193,6 +193,7 @@ public sealed class ProfilePresetsTests
 
         Assert.Equal(NewlineInjectionMode.AlwaysFlatten, profile.NewlineHandling);
         Assert.Contains("github", profile.ProcessNames);
+        Assert.Contains("copilotapp", profile.ProcessNames);
         Assert.Contains("claude", profile.ProcessNames);
         Assert.Contains("ChatGPT", profile.ProcessNames);
     }
@@ -227,6 +228,7 @@ public sealed class ProfilePresetsTests
     [Theory]
     [InlineData("github")]
     [InlineData("GITHUB.EXE")]
+    [InlineData("copilotapp")]
     [InlineData("claude")]
     [InlineData(" ChatGPT ")]
     public void Ai_chat_preset_matches_its_processes_through_the_matcher(string focused)

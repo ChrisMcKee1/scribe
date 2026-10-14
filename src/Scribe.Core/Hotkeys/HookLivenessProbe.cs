@@ -79,6 +79,7 @@ internal sealed class HookLivenessProbe
     /// <paramref name="systemIdle"/> is null when the idle time could not be read. Probe in that
     /// case: an unreadable clock must not silently disable liveness detection.
     /// </summary>
-    public static bool ShouldWithholdProbe(TimeSpan? systemIdle, TimeSpan watchdogPeriod) =>
-        systemIdle is { } idle && idle >= watchdogPeriod;
+    public static bool ShouldWithholdProbe(
+        TimeSpan? systemIdle, TimeSpan watchdogPeriod, bool foregroundHigherIntegrity = false) =>
+        foregroundHigherIntegrity || (systemIdle is { } idle && idle >= watchdogPeriod);
 }

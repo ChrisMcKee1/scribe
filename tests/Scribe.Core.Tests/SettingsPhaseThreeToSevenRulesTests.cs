@@ -128,7 +128,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     [InlineData(CleanupStatus.Initializing, "On. Getting ready...", AiCleanupStatusKind.Busy, null)]
     [InlineData(CleanupStatus.Downloading, "On. Getting ready...", AiCleanupStatusKind.Busy, null)]
     [InlineData(CleanupStatus.Ready, "On. Using Qwen3 1.7B on this PC.", AiCleanupStatusKind.Success, "Free memory")]
-    [InlineData(CleanupStatus.Unavailable, "On, but not ready. Until it's ready, Scribe types what it hears.", AiCleanupStatusKind.Error, "Try again")]
+    [InlineData(CleanupStatus.Unavailable, "On, but AI cleanup isn't working. Scribe types what it hears until it's fixed.", AiCleanupStatusKind.Error, "Try again")]
     public void Ai_cleanup_foundry_state_table(CleanupStatus status, string line, AiCleanupStatusKind kind, string? action)
     {
         var saved = AppSettings.CreateDefault();
@@ -574,7 +574,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
             CleanupNotReady: true));
         Assert.True(notReady.ShowTyped);
         Assert.True(notReady.Summary.CleanupNotReady);
-        Assert.Equal(TryDictationSummaryAction.OpenAiCleanup, notReady.Action);
+        Assert.Equal(TryDictationSummaryAction.OpenDiagnostics, notReady.Action);
     }
 
     [Fact]
@@ -1299,22 +1299,22 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     {
         { CleanupProvider.AzureFoundry, CleanupStatus.Ready, null, "On. AI cleanup is ready." },
         { CleanupProvider.AzureFoundry, CleanupStatus.Initializing, null, "On. Getting ready..." },
-        { CleanupProvider.AzureFoundry, CleanupStatus.Unavailable, null, "On, but not ready. Until it's ready, Scribe types what it hears." },
-        { CleanupProvider.AzureFoundry, CleanupStatus.Unavailable, "Not signed in", "On, but not ready: Not signed in. Until it's ready, Scribe types what it hears." },
+        { CleanupProvider.AzureFoundry, CleanupStatus.Unavailable, null, "On, but AI cleanup isn't working. Scribe types what it hears until it's fixed." },
+        { CleanupProvider.AzureFoundry, CleanupStatus.Unavailable, "Not signed in", "On, but AI cleanup isn't working. Not signed in. Scribe types what it hears until it's fixed." },
         { CleanupProvider.AzureFoundry, CleanupStatus.Disabled, null, "On, but not set up yet. Until it's ready, Scribe types what it hears." },
         { CleanupProvider.GitHubCopilot, CleanupStatus.Ready, null, "On. AI cleanup is ready." },
         { CleanupProvider.GitHubCopilot, CleanupStatus.Initializing, null, "On. Getting ready..." },
-        { CleanupProvider.GitHubCopilot, CleanupStatus.Unavailable, null, "On, but not ready: GitHub Copilot isn't installed." },
+        { CleanupProvider.GitHubCopilot, CleanupStatus.Unavailable, null, "On, but AI cleanup isn't working. GitHub Copilot isn't installed. Scribe types what it hears until it's fixed." },
         { CleanupProvider.GitHubCopilot, CleanupStatus.Disabled, null, "On, but not set up yet. Until it's ready, Scribe types what it hears." },
-        { CleanupProvider.OpenAiCompatible, CleanupStatus.Unavailable, null, "On, but not ready. Until it's ready, Scribe types what it hears." },
+        { CleanupProvider.OpenAiCompatible, CleanupStatus.Unavailable, null, "On, but AI cleanup isn't working. Scribe types what it hears until it's fixed." },
         { CleanupProvider.OpenAiCompatible, CleanupStatus.Ready, null, "On. AI cleanup is ready." },
         { CleanupProvider.OpenAiCompatible, CleanupStatus.Initializing, null, "On. Getting ready..." },
-        { CleanupProvider.OpenAiCompatible, CleanupStatus.Unavailable, "Connection refused", "On, but not ready: Connection refused. Until it's ready, Scribe types what it hears." },
+        { CleanupProvider.OpenAiCompatible, CleanupStatus.Unavailable, "Connection refused", "On, but AI cleanup isn't working. Connection refused. Scribe types what it hears until it's fixed." },
 
         // The service's reasons end their own sentences, and the line must not add a second period after one.
-        { CleanupProvider.OpenAiCompatible, CleanupStatus.Unavailable, "Couldn't reach the AI service. Check your network and the service's address.", "On, but not ready: Couldn't reach the AI service. Check your network and the service's address. Until it's ready, Scribe types what it hears." },
-        { CleanupProvider.AzureFoundry, CleanupStatus.Unavailable, "AI cleanup couldn't start. ", "On, but not ready: AI cleanup couldn't start. Until it's ready, Scribe types what it hears." },
-        { CleanupProvider.AzureFoundry, CleanupStatus.Unavailable, "Is the deployment name right?", "On, but not ready: Is the deployment name right? Until it's ready, Scribe types what it hears." },
+        { CleanupProvider.OpenAiCompatible, CleanupStatus.Unavailable, "Couldn't reach the AI service. Check your network and the service's address.", "On, but AI cleanup isn't working. Couldn't reach the AI service. Check your network and the service's address. Scribe types what it hears until it's fixed." },
+        { CleanupProvider.AzureFoundry, CleanupStatus.Unavailable, "AI cleanup couldn't start. ", "On, but AI cleanup isn't working. AI cleanup couldn't start. Scribe types what it hears until it's fixed." },
+        { CleanupProvider.AzureFoundry, CleanupStatus.Unavailable, "Is the deployment name right?", "On, but AI cleanup isn't working. Is the deployment name right? Scribe types what it hears until it's fixed." },
         { CleanupProvider.OpenAiCompatible, CleanupStatus.Disabled, null, "On, but not set up yet. Until it's ready, Scribe types what it hears." },
     };
 
@@ -1466,7 +1466,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     {
         var page = ActiveFoundry(FoundryLocalSetup.Describe(FoundryLocalSetupStage.ModelFailed, "Qwen3 1.7B"), CleanupStatus.Unavailable);
 
-        Assert.Equal("On, but not ready. Until it's ready, Scribe types what it hears.", page.StatusLine);
+        Assert.Equal("On, but AI cleanup isn't working. Scribe types what it hears until it's fixed.", page.StatusLine);
         Assert.Equal("Couldn't download or load Qwen3 1.7B. Try again, or choose another model.", page.StatusRow!.Text);
         Assert.DoesNotContain("runtime", page.StatusRow.Text, StringComparison.OrdinalIgnoreCase);
     }
@@ -1485,16 +1485,16 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
     public void A_known_setup_problem_explains_an_unavailable_service_and_a_reason_explains_the_rest()
     {
         Assert.Equal(
-            "On, but not ready: Azure CLI isn't installed.",
+            "On, but AI cleanup isn't working. Azure CLI isn't installed. Scribe types what it hears until it's fixed.",
             ActiveAzure(new AzureAiSetupState(AzureSetupResult.CliMissing), CleanupStatus.Unavailable).StatusLine);
         Assert.Equal(
-            "On, but not ready: you're not signed in to Azure.",
+            "On, but AI cleanup isn't working. You're not signed in to Azure. Scribe types what it hears until it's fixed.",
             ActiveAzure(new AzureAiSetupState(AzureSetupResult.NotSignedIn), CleanupStatus.Unavailable, "ignored when the cause is known").StatusLine);
         Assert.Equal(
             "On. AI cleanup is ready.",
             ActiveAzure(new AzureAiSetupState(AzureSetupResult.CliMissing), CleanupStatus.Ready).StatusLine);
         Assert.Equal(
-            "On, but not ready: Copilot didn't answer. Until it's ready, Scribe types what it hears.",
+            "On, but AI cleanup isn't working. Copilot didn't answer. Scribe types what it hears until it's fixed.",
             ActiveCopilot(new CopilotSetupState(CopilotSetupResult.ModelsListed), CleanupStatus.Unavailable, "Copilot didn't answer").StatusLine);
         Assert.Equal(
             "On. AI cleanup is ready.",

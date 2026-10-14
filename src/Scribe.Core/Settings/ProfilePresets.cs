@@ -84,14 +84,14 @@ public static class ProfilePresets
     /// recognition never contains, and each one submitted a partial message.
     /// </summary>
     public static Preset AiChatAndAgents => new(
-        "Claude, ChatGPT, GitHub Copilot, Microsoft 365 Copilot and Scout. Keeps a multi-paragraph dictation in one message.",
+        "Claude, ChatGPT, GitHub Copilot, Microsoft Copilot, Microsoft 365 Copilot and Scout. Keeps a multi-paragraph dictation in one message.",
         new AppProfile
         {
             Name = "AI chat and agents",
             NewlineHandling = NewlineInjectionMode.AlwaysFlatten,
             ProcessNames =
             [
-                "claude", "ChatGPT", "github", "GitHubCopilot", "M365Copilot",
+                "claude", "ChatGPT", "github", "GitHubCopilot", "copilotapp", "M365Copilot",
                 "Microsoft Scout", "scout", "Discord", "slack", "Perplexity",
             ],
         });

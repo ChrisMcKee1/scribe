@@ -160,6 +160,10 @@ real Mac.
   for the actual cleanup service. Windows also keeps a dictation chunk as heard when the AI service
   reports a cut or filtered answer, before sanitizing it; that answer-end check is not mirrored here.
   These Windows fixes do not establish macOS parity.
+  Windows also preserves a bounded native Ollama error explanation before its SDK discards it, distinguishes a
+  crashed model process from a model still starting, and sends cleanup failure actions to Diagnostics. Its
+  Diagnostics page shows the current setup failure before any dictation and refreshes the problem list on every
+  visit. Those failure-reporting and navigation changes are not mirrored on macOS.
 - **Requests to a model on this PC** (0.5.2): short instructions, temperature 0.1, reasoning off, the output ceiling
   also as `max_tokens` with the one plain retry for a strict server, `keep_alive` and `ttl`, and the sanitizer that
   removes what small models wrap around an answer.

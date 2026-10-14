@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using Scribe.Core.Cleanup;
 using Scribe.Core.Libraries;
@@ -177,6 +178,104 @@ public sealed class LocalContextServiceTests
         Assert.Contains($"status={(int)status}", CleanupFailureShape.Describe(new HttpRequestException("x", null, status)), StringComparison.Ordinal);
         Assert.DoesNotContain("kind=connectivity", TextCleanupService.DescribeFailureShape(new HttpRequestException("x", null, status)), StringComparison.Ordinal);
         Assert.Contains("kind=connectivity", TextCleanupService.DescribeFailureShape(new HttpRequestException("refused")), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_native_Ollama_model_crash_keeps_the_server_s_explanation_for_every_failed_dictation(bool openAiEnvelope)
+    {
+        const string privateDetail = "private-model-path-and-request-canary";
+        const string crash = "llama-server process has terminated: exit status 0xc0000005";
+        var message = crash + ": " + privateDetail;
+        var body = openAiEnvelope
+            ? JsonSerializer.Serialize(new { error = new { message } })
+            : JsonSerializer.Serialize(new { error = message });
+        await using var harness = new CleanupHarness(http: new ScriptedHttpHandler((_, _) =>
+            Task.FromResult(ScriptedHttpHandler.Json(HttpStatusCode.InternalServerError, body))));
+        var svc = harness.Service;
+        svc.Configure(CleanupHarness.Custom(LocalAiServer.OllamaAddress, OllamaModel) with { LocalContextTokens = 8192 });
+        await harness.WaitForStatusAsync(CleanupStatus.Unavailable);
+
+        Assert.Contains(crash, svc.StatusDetail, StringComparison.Ordinal);
+        Assert.DoesNotContain(privateDetail, svc.StatusReason, StringComparison.Ordinal);
+        foreach (var text in new[] { "first dictation", "second dictation" })
+        {
+            var result = await svc.CleanAsync(text).WaitAsync(Bound);
+            Assert.Equal(CleanupOutcome.Failed, result.Outcome);
+            Assert.Equal(text, result.Text);
+            Assert.Equal(svc.StatusReason, result.FailureReason);
+            Assert.Equal(svc.StatusDetail, result.DisplayDetail);
+            Assert.Contains(crash, result.DisplayDetail, StringComparison.Ordinal);
+            Assert.DoesNotContain("not ready", result.FailureReason, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(privateDetail, result.FailureReason, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(harness.Log.Entries, entry => entry.Message.Contains("kind=model-process-crashed", StringComparison.Ordinal));
+        Assert.DoesNotContain(harness.Log.Entries, entry => entry.Message.Contains(privateDetail, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_native_Ollama_error_body_is_read_only_to_a_bounded_prefix_and_disposed()
+    {
+        const string lateCanary = "private-unread-tail-canary";
+        var body = JsonSerializer.Serialize(new { error = new string('x', 20_000) + lateCanary });
+        var stream = new ObservedErrorStream(Encoding.UTF8.GetBytes(body));
+        await using var harness = new CleanupHarness(http: new ScriptedHttpHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                Content = new StreamContent(stream),
+            })));
+        harness.Service.Configure(CleanupHarness.Custom(LocalAiServer.OllamaAddress, OllamaModel) with { LocalContextTokens = 8192 });
+        await harness.WaitForStatusAsync(CleanupStatus.Unavailable);
+
+        Assert.InRange(stream.BytesRead, 1, 4096);
+        Assert.True(stream.WasDisposed);
+        Assert.InRange(harness.Service.StatusDetail!.Length, 1, 2300);
+        Assert.DoesNotContain(lateCanary, harness.Service.StatusDetail, StringComparison.Ordinal);
+        Assert.DoesNotContain(harness.Log.Entries, entry => entry.Message.Contains(lateCanary, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_native_Ollama_error_whose_body_cannot_be_read_keeps_its_HTTP_failure()
+    {
+        var stream = new ObservedErrorStream([], failReads: true);
+        await using var harness = new CleanupHarness(http: new ScriptedHttpHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                Content = new StreamContent(stream),
+            })));
+        harness.Service.Configure(CleanupHarness.Custom(LocalAiServer.OllamaAddress, OllamaModel) with { LocalContextTokens = 8192 });
+        await harness.WaitForStatusAsync(CleanupStatus.Unavailable);
+
+        Assert.Contains("(500)", harness.Service.StatusReason, StringComparison.Ordinal);
+        Assert.Contains("error details couldn't be read", harness.Service.StatusDetail, StringComparison.Ordinal);
+        Assert.Contains(harness.Log.Entries, entry => entry.Message.Contains("status=500", StringComparison.Ordinal));
+        Assert.True(stream.WasDisposed);
+    }
+
+    private sealed class ObservedErrorStream(byte[] bytes, bool failReads = false) : MemoryStream(bytes)
+    {
+        public int BytesRead { get; private set; }
+        public bool WasDisposed { get; private set; }
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (failReads)
+            {
+                throw new IOException("private-body-read-failure-canary");
+            }
+
+            var read = await base.ReadAsync(buffer, cancellationToken);
+            BytesRead += read;
+            return read;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            WasDisposed = true;
+            base.Dispose(disposing);
+        }
     }
 
     [Fact]

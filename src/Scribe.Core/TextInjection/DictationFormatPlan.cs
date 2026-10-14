@@ -24,6 +24,65 @@ public sealed record DictationFormatPlan(
     string? TargetProcessName,
     DictationFormatDecision Decision)
 {
+    // Known Markdown-aware desktop apps (compared case-insensitively without .exe). When app-aware
+    // formatting is enabled and no explicit profile matches, these targets default to MarkdownSource
+    // with ClipboardPaste so multi-line lists and paragraphs are pasted as a unit rather than typed
+    // line-by-line (where Shift+Enter triggers the editor's list auto-continuation and duplicates
+    // bullet markers as "- - ").
+    private static readonly HashSet<string> MarkdownProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "github",
+        "GitHubCopilot",
+        "copilotapp",
+        "claude",
+        "ChatGPT",
+        "M365Copilot",
+        "Microsoft Scout",
+        "scout",
+        "Perplexity",
+        "slack",
+        "Discord",
+        "ms-teams",
+        "Teams",
+        "Code",
+        "Code - Insiders",
+        "VSCodium",
+        "cursor",
+        "windsurf",
+        "devenv",
+        "rider64",
+        "idea64",
+        "pycharm64",
+        "goland64",
+        "clion64",
+        "webstorm64",
+        "sublime_text",
+        "notepad++",
+        "zed",
+        "Obsidian",
+        "Notion",
+        "Linear",
+        "Typora",
+        "MarkText",
+        "Joplin",
+        "Logseq",
+    };
+
+    /// <summary>True when <paramref name="processName"/> is a known Markdown-aware desktop application.</summary>
+    public static bool IsMarkdownProcess(string? processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName))
+        {
+            return false;
+        }
+
+        var trimmed = processName.Trim();
+        var normalized = trimmed.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+            ? trimmed[..^4]
+            : trimmed;
+        return MarkdownProcesses.Contains(normalized);
+    }
+
     /// <summary>
     /// Binds the one-shot consumption to the plan inside the lifecycle's admitted capture factory.
     /// The caller publishes <paramref name="plainTextOnceChange"/> only after admission releases the lifecycle gate.
@@ -46,9 +105,25 @@ public sealed record DictationFormatPlan(
             DictationTextFormat.Plain, newline, settings.InjectionMethod, settings.ShiftEnterLineBreaks, targetProcessName,
             settings.AppAwareFormattingEnabled ? DictationFormatDecision.NoMatchingProfile : DictationFormatDecision.FormattingOff);
 
-        if (!settings.AppAwareFormattingEnabled || profile is null)
+        if (!settings.AppAwareFormattingEnabled)
         {
             return legacy;
+        }
+
+        if (profile is null)
+        {
+            if (!IsMarkdownProcess(targetProcessName) ||
+                InjectionTextFormatter.ShouldFlatten(newline, targetProcessName))
+            {
+                return legacy;
+            }
+
+            return legacy with
+            {
+                TextFormat = plainOnce ? DictationTextFormat.Plain : DictationTextFormat.MarkdownSource,
+                InjectionMethod = plainOnce ? settings.InjectionMethod : InjectionMethod.ClipboardPaste,
+                Decision = plainOnce ? DictationFormatDecision.PlainOnce : DictationFormatDecision.MarkdownSource,
+            };
         }
 
         var format = SafeFormat(profile.TextFormat ?? settings.DefaultTextFormat);

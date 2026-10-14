@@ -121,7 +121,8 @@ public sealed class OverlayFeedbackTests
 
         Assert.NotNull(notice);
         Assert.Equal("Typed without AI cleanup", notice.Title);
-        Assert.Equal(TrayNoticeAction.OpenSettingsAiCleanup, notice.Action);
+        Assert.Equal(TrayNoticeAction.OpenSettingsDiagnostics, notice.Action);
+        Assert.Contains("Diagnostics", notice.Body, StringComparison.Ordinal);
         Assert.Equal(TrayNoticeKind.Warning, notice.Kind);
     }
 

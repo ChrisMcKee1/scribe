@@ -45,7 +45,7 @@ public sealed class TrayAiCleanupTests
     }
 
     [Fact]
-    public void Unavailable_is_checked_not_ready()
+    public void Unavailable_is_checked_and_reports_a_problem_not_a_pending_start()
     {
         var settings = AppSettings.CreateDefault();
         settings.EnableAiCleanup = true;
@@ -53,7 +53,7 @@ public sealed class TrayAiCleanupTests
         var item = TrayAiCleanup.Describe(settings, setupComplete: true, CleanupStatus.Unavailable, settingsRecovered: false);
 
         Assert.Equal(TrayAiCleanupKind.Toggle, item.Kind);
-        Assert.Equal("AI cleanup (not ready)", item.Label);
+        Assert.Equal("AI cleanup (problem)", item.Label);
         Assert.True(item.Checked);
     }
 

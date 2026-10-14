@@ -41,6 +41,31 @@ public sealed class AiDictionarySuggesterTests
     }
 
     [Fact]
+    public void ParseSuggestions_ignores_brackets_in_thinking_or_preamble_and_accepts_object_envelopes_or_single_objects()
+    {
+        var withBracketInThink =
+            "<think>Checking [1] recent history sample [lines 1-10]</think>\n" +
+            """{"suggestions":[{"spoken":"a p i m","written":"APIM"}]}""";
+        var fromEnvelope = AiDictionarySuggester.ParseSuggestions(withBracketInThink, []);
+        Assert.Single(fromEnvelope);
+        Assert.Equal("a p i m", fromEnvelope[0].Pattern);
+        Assert.Equal("APIM", fromEnvelope[0].Replacement);
+
+        var singleObject = """{"spoken":"post gres","written":"PostgreSQL"}""";
+        var fromSingle = AiDictionarySuggester.ParseSuggestions(singleObject, []);
+        Assert.Single(fromSingle);
+        Assert.Equal("post gres", fromSingle[0].Pattern);
+        Assert.Equal("PostgreSQL", fromSingle[0].Replacement);
+
+        var bareCloseThinkAndTruncatedArray =
+            """[{"spoken":"wrong","written":"Wrong"}]</think>[{"spoken":"a p i m","written":"APIM"},{"spoken":"cosmos db","written":"Cosmos DB"},{"spoken":"cut""";
+        var fromTruncated = AiDictionarySuggester.ParseSuggestions(bareCloseThinkAndTruncatedArray, []);
+        Assert.Equal(2, fromTruncated.Count);
+        Assert.Equal("APIM", fromTruncated[0].Replacement);
+        Assert.Equal("Cosmos DB", fromTruncated[1].Replacement);
+    }
+
+    [Fact]
     public void ParseSuggestions_skips_terms_already_in_the_dictionary()
     {
         var json = """[{"spoken":"azure","written":"Azure"},{"spoken":"a k s","written":"AKS"}]""";

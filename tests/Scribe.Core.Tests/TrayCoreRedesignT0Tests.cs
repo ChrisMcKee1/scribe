@@ -41,7 +41,7 @@ public sealed class TrayCoreRedesignT0Tests
         Assert.Equal("AI cleanup", setup.Label);
         Assert.True(setup.IsCheckItem);
         Assert.True(setup.Checked);
-        Assert.Equal("AI cleanup (not ready)", unavailable.Label);
+        Assert.Equal("AI cleanup (problem)", unavailable.Label);
         Assert.True(unavailable.Checked);
     }
 

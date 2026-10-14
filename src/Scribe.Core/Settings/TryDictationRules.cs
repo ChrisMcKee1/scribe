@@ -118,7 +118,7 @@ public enum TryDictationSummaryAction
 {
     None,
     OpenSoundSettings,
-    OpenAiCleanup,
+    OpenDiagnostics,
 }
 
 public sealed record TryDictationResultView(
@@ -154,12 +154,12 @@ public sealed record TryDictationResultView(
 
         if (input.CleanupFailed)
         {
-            return new(new(false, CleanupFailed: true, Reason: input.CleanupReason), true, true, true, true, TryDictationSummaryAction.OpenAiCleanup);
+            return new(new(false, CleanupFailed: true, Reason: input.CleanupReason), true, true, true, true, TryDictationSummaryAction.OpenDiagnostics);
         }
 
         if (input.CleanupNotReady)
         {
-            return new(new(false, CleanupNotReady: true, Reason: input.CleanupReason), true, true, true, true, TryDictationSummaryAction.OpenAiCleanup);
+            return new(new(false, CleanupNotReady: true, Reason: input.CleanupReason), true, true, true, true, TryDictationSummaryAction.OpenDiagnostics);
         }
 
         return new(

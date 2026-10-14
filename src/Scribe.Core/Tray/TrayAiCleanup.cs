@@ -37,7 +37,7 @@ public static class TrayAiCleanup
         }
 
         var label = settings.EnableAiCleanup && status == CleanupStatus.Unavailable
-            ? "AI cleanup (not ready)"
+            ? "AI cleanup (problem)"
             : "AI cleanup";
         return new TrayAiCleanupItem(TrayAiCleanupKind.Toggle, label, settings.EnableAiCleanup, true);
     }
