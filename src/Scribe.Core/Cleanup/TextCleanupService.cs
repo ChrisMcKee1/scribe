@@ -824,7 +824,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                         context = Math.Min(context, allowance.ContextTokens);
                     }
 
-                    var reserve = localReasoning.Value?.Tokens ?? 0;
+                    var reserve = localReasoning.Value?.Tokens ?? LocalReasoningReserve(options);
                     if (!LeavesRoomForDictation(options, style: null, context, reasoningReserve: reserve))
                     {
                         return CleanupTestResult.Failed(recipient, NoRoomReason(options, context, reserve));
@@ -1669,7 +1669,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 state = await LocalServers.ReadAsync(endpoint, options.CustomApiKey, cts.Token).ConfigureAwait(false);
                 var held = state.LoadedFor(model);
                 coldStart = state.Reach == LocalServerReach.Reached &&
-                    (held is null || LmStudioWouldReload(options, state) || OllamaWouldReload(options, held));
+                    (held is null || LmStudioWouldReload(options, state) || OllamaWouldReload(options, held) || TensorSharpWouldReload(options, state));
                 if (held is not null && !coldStart && held.ContextTokens > 0)
                 {
                     NoteObservedContext(options, held.ContextTokens, afterOwnRequest: false);
@@ -1685,10 +1685,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             Volatile.Write(ref _readyingState, coldStart ? ReadyingLoading : ReadyingNone);
 
-            // LM Studio with a size chosen loads the model at it first, which its OpenAI-compatible request cannot ask for.
+            // LM Studio with a size chosen loads the model at it first, which its OpenAI-compatible request cannot ask for;
+            // TensorSharp loads the model on the chosen compute backend when needed.
             if (state is not null)
             {
                 await ReconcileLmStudioAsync(options, state, cts.Token).ConfigureAwait(false);
+                await ReconcileTensorSharpAsync(options, state, cts.Token).ConfigureAwait(false);
             }
 
             // Held at the right size and answered within PrewarmAfterIdle: loaded, with the instructions cached.
@@ -2181,7 +2183,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             }
 
             if (options.Enabled &&
-                LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) != LocalServerApp.None &&
+                LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) is LocalServerApp.Ollama or LocalServerApp.LmStudio &&
                 options.CustomEndpoint is { } endpoint &&
                 !string.IsNullOrWhiteSpace(options.CustomModel))
             {
@@ -2218,7 +2220,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     public async Task<bool> FreeLocalAppModelAsync(string endpoint, string modelId, CancellationToken cancellationToken = default)
     {
         using var lease = _operations.TryEnter();
-        if (lease is null || LocalAiServer.AppAt(endpoint) == LocalServerApp.None || string.IsNullOrWhiteSpace(modelId))
+        if (lease is null || LocalAiServer.AppAt(endpoint) is LocalServerApp.None or LocalServerApp.TensorSharp ||
+            string.IsNullOrWhiteSpace(modelId))
         {
             return false;
         }
@@ -2283,7 +2286,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         }
 
         var app = LocalAiServer.AppServing(previous.Provider, endpoint);
-        if (app == LocalServerApp.None)
+        if (app is not (LocalServerApp.Ollama or LocalServerApp.LmStudio))
         {
             return null;
         }
@@ -2447,6 +2450,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         CleanupOptions options;
         List<string>? plannedChunks = null;
         LocalRequestBudget? localBudget = null;
+        string? userTurnGlossary = null;
         var doesNotFit = false;
         lock (_gate)
         {
@@ -2507,7 +2511,20 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             }
             else if (vocabulary is not null && _agentFactory is { } admittedFactory)
             {
-                agent = AdmittedAgentLocked(admittedFactory, options, style, vocabulary, text, vocabularyTokens: vocabularyTokens);
+                // TensorSharp checkpoints the end of the system message (SharedPrefixTokens) in its Radix prefix cache, and
+                // recurrent GatedDeltaNet models (Qwen 3.5/3.8, Bonsai 2) can only materialize that checkpoint at its exact
+                // length. In Mentioned mode without whole vocabulary, keeping the system message to the unchanging
+                // instructions + writing style and placing the per-dictation mentioned glossary in the user turn gives 100%
+                // Radix prefix cache reuse across prewarm and every dictation.
+                if (UsesUserTurnGlossary(options))
+                {
+                    userTurnGlossary = GlossaryForLocked(options, style, vocabulary, text, readying: false, vocabularyTokens);
+                    agent = AdmittedAgentLocked(admittedFactory, options, style, vocabulary, dictation: null, readying: false, vocabularyTokens: 0);
+                }
+                else
+                {
+                    agent = AdmittedAgentLocked(admittedFactory, options, style, vocabulary, text, vocabularyTokens: vocabularyTokens);
+                }
             }
             else if (style is not null &&
                 !string.Equals(style, CleanupPrompt.ResolveWritingStyle(options.WritingStyle), StringComparison.Ordinal) &&
@@ -2577,7 +2594,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             bool refused;
             try
             {
-                (cleanedChunk, error, refused) = await CleanChunkAsync(agent, options, chunks[i], reloadBudget, totalCts.Token, localBudget)
+                (cleanedChunk, error, refused) = await CleanChunkAsync(agent, options, chunks[i], reloadBudget, totalCts.Token, localBudget, userTurnGlossary)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -3115,7 +3132,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     // comes back with no error, and nothing is retried, since a retry would be judged by the same scope.
     private async Task<(string Text, CleanupReason? Error, bool Refused)> CleanChunkAsync(
         AIAgent agent, CleanupOptions options, string chunk, ReloadBudget reload, CancellationToken cancellationToken,
-        LocalRequestBudget? localBudget)
+        LocalRequestBudget? localBudget, string? userTurnGlossary = null)
     {
         // Azure and BYO endpoints share the longer budget: both may be a cloud round-trip to a
         // reasoning model whose hidden thinking precedes the visible rewrite. GitHub Copilot is
@@ -3142,7 +3159,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         var (budget, firstAttempt, retryOnStall) = CallBudget(options.Provider, CleanupTimeoutOverride);
 
         var attempt = await RunChunkAttemptAsync(
-            agent, options, chunk, firstAttempt, cancellationToken, localBudget).ConfigureAwait(false);
+            agent, options, chunk, firstAttempt, cancellationToken, localBudget, userTurnGlossary).ConfigureAwait(false);
         if (attempt.Refused)
         {
             return (attempt.Text, null, true);
@@ -3166,7 +3183,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             {
                 case ReloadOutcome.Reloaded:
                     attempt = await RunChunkAttemptAsync(
-                        agent, options, chunk, budget, cancellationToken, localBudget).ConfigureAwait(false);
+                        agent, options, chunk, budget, cancellationToken, localBudget, userTurnGlossary).ConfigureAwait(false);
                     break;
 
                 // Loading a 12B model takes minutes, far longer than one dictation may wait, so this
@@ -3202,7 +3219,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         var remaining = budget - firstAttempt;
         var retry = await RunChunkAttemptAsync(
-            agent, options, chunk, remaining, cancellationToken, localBudget).ConfigureAwait(false);
+            agent, options, chunk, remaining, cancellationToken, localBudget, userTurnGlossary).ConfigureAwait(false);
         reload.LocalServerFailed |= retry.LocalServerFailed;
         return (retry.Text, retry.Refused ? null : retry.Error, retry.Refused);
     }
@@ -3300,7 +3317,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         string chunk,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        LocalRequestBudget? localBudget)
+        LocalRequestBudget? localBudget,
+        string? userTurnGlossary = null)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(timeout);
@@ -3319,7 +3337,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // history to grow.
             var chatOptions = BuildChatOptions(options, chunk, localBudget);
             var runOptions = new ChatClientAgentRunOptions(chatOptions);
-            var result = await agent.RunAsync(BuildUserMessage(chunk), options: runOptions, cancellationToken: cts.Token)
+            var result = await agent.RunAsync(BuildUserMessage(chunk, userTurnGlossary), options: runOptions, cancellationToken: cts.Token)
                 .ConfigureAwait(false);
             NoteModelAnswered(options);
             NoteLocalModelUse(options);
@@ -3705,7 +3723,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         if (LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) is var app and not LocalServerApp.None &&
             ExtractHttpStatus(ex) is >= 500 and var localStatus)
         {
-            var name = app switch { LocalServerApp.Ollama => "Ollama", _ => "LM Studio" };
+            var name = Settings.AiCleanupPageState.LocalAppName(app);
             var sentence = IsLocalModelProcessCrash(ex)
                 ? $"{name}'s model process crashed ({localStatus}). Restart {name} and try again."
                 : $"{name} couldn't load or run the model ({localStatus}). Check the app and try again.";
@@ -4970,7 +4988,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             AgentProbeFailure? probeFailure = null;
             var localReasoning = new StrongBox<LocalReasoningAllowance?>();
             var lmStudioUnloading = Task.CompletedTask;
-            using var lmStudioUse = LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) == LocalServerApp.LmStudio
+            using var lmStudioUse = LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) is
+                LocalServerApp.LmStudio or LocalServerApp.TensorSharp
                 ? BeginModelUse(out lmStudioUnloading)
                 : default(ModelUse?);
             if (!lmStudioUnloading.IsCompleted)
@@ -4988,6 +5007,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             if (probeFailure is null)
             {
                 await ReconcileLmStudioAsync(options, state: null, ct).ConfigureAwait(false);
+                await ReconcileTensorSharpAsync(options, state: null, ct).ConfigureAwait(false);
                 await LearnOllamaModelMaxAsync(options, ct).ConfigureAwait(false);
 
                 // A context already known that leaves the instructions no room for a dictation fails setup without loading
@@ -5713,7 +5733,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 MaxOutputTokens = options.Provider is CleanupProvider.AzureFoundry
                     or CleanupProvider.GitHubCopilot
                     ? CloudInitProbeMaxOutputTokens
-                    : InitProbeMaxOutputTokens,
+                    : LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) == LocalServerApp.TensorSharp &&
+                      LocalModelTuning.SanitizeTensorSharpReasoningEffort(options.TensorSharpReasoningEffort).Length > 0
+                        ? LocalReasoningHeadroomTokens
+                        : InitProbeMaxOutputTokens,
             };
 
             /*
@@ -7412,15 +7435,27 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     {
         CleanupProvider.FoundryLocal =>
             options.FoundryModelAlias.StartsWith("qwen3", StringComparison.OrdinalIgnoreCase),
+        CleanupProvider.OpenAiCompatible when
+            LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) == LocalServerApp.TensorSharp &&
+            LocalModelTuning.SanitizeTensorSharpReasoningEffort(options.TensorSharpReasoningEffort).Length > 0 =>
+            false,
         CleanupProvider.OpenAiCompatible =>
             options.CustomModel?.StartsWith("qwen3", StringComparison.OrdinalIgnoreCase) == true,
         _ => false,
     };
 
-    // The per-call user message: just the delimited transcript, nothing else. ASR output never
-    // contains angle-bracket tags, so the delimiters cannot be spoofed by speech.
-    internal static string BuildUserMessage(string chunk) =>
-        $"{TranscriptOpenTag}\n{chunk}\n{TranscriptCloseTag}";
+    private static bool UsesUserTurnGlossary(CleanupOptions options) =>
+        LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) == LocalServerApp.TensorSharp &&
+        !options.SendWholeVocabulary &&
+        options.VocabularyMode == CleanupVocabularyMode.Mentioned;
+
+    // The per-call user message: just the delimited transcript, plus any per-dictation vocabulary placed in the user turn
+    // so the system prompt remains constant for TensorSharp's Radix prefix cache. ASR output never contains angle-bracket
+    // tags, so the delimiters cannot be spoofed by speech.
+    internal static string BuildUserMessage(string chunk, string? glossary = null) =>
+        string.IsNullOrWhiteSpace(glossary)
+            ? $"{TranscriptOpenTag}\n{chunk}\n{TranscriptCloseTag}"
+            : $"{glossary.Trim()}\n\n{TranscriptOpenTag}\n{chunk}\n{TranscriptCloseTag}";
 
     private static CleanupReason ReadyReason(CleanupOptions options) => options.Provider switch
     {
@@ -7516,11 +7551,14 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return;
         }
 
+        var localApp = LocalAiServer.AppServing(options.Provider, options.CustomEndpoint);
+
         // Plain requests leave out the generation fields a strict server refused (reasoning_effort, the max_tokens copy),
         // but never how long Ollama or LM Studio keeps the model: that is what gives its memory back after the idle time,
-        // and both apps take it.
+        // and both apps take it. TensorSharp's /v1/chat/completions only accepts low, medium or high for reasoning_effort
+        // and turns thinking off with think: false instead, so it never sends reasoning_effort: none.
         var plain = plainRequests ?? SendsPlainRequests(options);
-        if (!plain && chatOptions.Reasoning is null)
+        if (!plain && localApp != LocalServerApp.TensorSharp && chatOptions.Reasoning is null)
         {
             chatOptions.Reasoning = new ReasoningOptions
             {
@@ -7531,10 +7569,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         var maxTokens = plain ? null : chatOptions.MaxOutputTokens;
         var keepMinutes = LocalServerKeepAliveMinutes(options);
-        if (maxTokens is int || keepMinutes is not null)
+        var tensorSharpThinking = !plain && localApp == LocalServerApp.TensorSharp
+            ? LocalModelTuning.SanitizeTensorSharpReasoningEffort(options.TensorSharpReasoningEffort)
+            : null;
+        if (maxTokens is int || keepMinutes is not null || tensorSharpThinking is not null)
         {
             chatOptions.RawRepresentationFactory = WithLocalServerFields(
-                chatOptions.RawRepresentationFactory, maxTokens, keepMinutes);
+                chatOptions.RawRepresentationFactory, maxTokens, keepMinutes, tensorSharpThinking);
         }
     }
 
@@ -7543,7 +7584,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     // unrecognized servers keep their own policy when no idle time is requested.
     private static (LocalServerApp App, int Minutes)? LocalServerKeepAliveMinutes(CleanupOptions options) =>
         options.LocalModelKeepAliveMinutes is >= 0 and var minutes &&
-        LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) is var app and not LocalServerApp.None &&
+        LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) is
+            (LocalServerApp.Ollama or LocalServerApp.LmStudio) and var app &&
         (minutes > 0 || app == LocalServerApp.Ollama)
             ? (app, minutes == 0 ? -1 : minutes)
             : null;
@@ -7552,7 +7594,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         minutes.ToString(System.Globalization.CultureInfo.InvariantCulture) + "m";
 
     /*
-     * The output ceiling under the name local servers read, and how long the model stays loaded.
+     * The output ceiling under the name local servers read, how long the model stays loaded, and TensorSharp's thinking
+     * and skill-isolation fields.
      *
      * The OpenAI SDK sends the ceiling as max_completion_tokens. Ollama documents only max_tokens and ignored the other:
      * measured on this machine, qwen3:0.6b fell into a repetition loop on one dictation and Ollama generated 19,711 tokens
@@ -7562,10 +7605,15 @@ internal sealed partial class TextCleanupService : ITextCleanupService
      *
      * Ollama's OpenAI-compatible address honors keep_alive (measured on 0.34.4: "30m" kept the model loaded past its
      * five-minute default, and 0 unloaded it as the answer came back); LM Studio reads ttl, in seconds, for a model it
-     * loaded on demand. Each is sent only to its own app.
+     * loaded on demand. Each is sent only to its own app. TensorSharp accepts think: false (or think: true with
+     * reasoning_effort: low/medium/high) and skills_discovery: false so built-in agent skills are never injected into
+     * dictation cleanup.
      */
     private static Func<IChatClient, object?> WithLocalServerFields(
-        Func<IChatClient, object?>? inner, int? maxTokens, (LocalServerApp App, int Minutes)? keepAlive) =>
+        Func<IChatClient, object?>? inner,
+        int? maxTokens,
+        (LocalServerApp App, int Minutes)? keepAlive,
+        string? tensorSharpThinking = null) =>
         client =>
         {
             var raw = inner?.Invoke(client) as OpenAI.Chat.ChatCompletionOptions ?? new OpenAI.Chat.ChatCompletionOptions();
@@ -7583,6 +7631,22 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 case { App: LocalServerApp.LmStudio, Minutes: var minutes }:
                     raw.Patch.Set("$.ttl"u8, minutes * 60);
                     break;
+            }
+
+            if (tensorSharpThinking is not null)
+            {
+                raw.Patch.Set("$.skills_discovery"u8, false);
+                raw.Patch.Set("$.multi_agent"u8, false);
+                raw.Patch.Set("$.tool_choice"u8, "none");
+                if (tensorSharpThinking.Length > 0)
+                {
+                    raw.Patch.Set("$.think"u8, true);
+                    raw.Patch.Set("$.reasoning_effort"u8, tensorSharpThinking);
+                }
+                else
+                {
+                    raw.Patch.Set("$.think"u8, false);
+                }
             }
 #pragma warning restore SCME0001
             return raw;

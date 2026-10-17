@@ -266,7 +266,58 @@ internal sealed class FakeLocalServerClient : ILocalServerClient
         }
     }
 
+    private readonly List<(string Endpoint, string Model, string? Backend)> _tensorSharpLoads = [];
+
+    /// <summary>Every TensorSharp model/backend load asked for, in order.</summary>
+    public IReadOnlyList<(string Endpoint, string Model, string? Backend)> TensorSharpLoads
+    {
+        get
+        {
+            lock (_unloads)
+            {
+                return [.. _tensorSharpLoads];
+            }
+        }
+    }
+
+    /// <summary>Whether TensorSharp accepts a <see cref="LoadTensorSharpAsync"/> request; true by default.</summary>
+    public Func<string, string?, bool> TensorSharpLoadAnswer { get; set; } = (_, _) => true;
+
     public Task<int> ReadMaxContextAsync(
         string endpoint, string modelId, string? apiKey = null, CancellationToken cancellationToken = default) =>
         Task.FromResult(MaxContextTokens);
+
+    public Task<bool> LoadTensorSharpAsync(
+        string endpoint, string modelId, string? backend = null, string? apiKey = null, CancellationToken cancellationToken = default)
+    {
+        lock (_unloads)
+        {
+            _tensorSharpLoads.Add((endpoint, modelId, backend));
+            _operations.Add($"load-tensorsharp {modelId} {backend ?? "(default)"}");
+            _keys.Add(apiKey);
+            if (!KeyAccepted(apiKey) || !TensorSharpLoadAnswer(modelId, backend))
+            {
+                return Task.FromResult(false);
+            }
+
+            var existing = State.LoadedFor(modelId);
+            var effectiveBackend = string.IsNullOrWhiteSpace(backend)
+                ? existing?.Backend ?? State.DefaultBackend ?? "ggml_cuda"
+                : backend.Trim();
+            var contextTokens = existing?.ContextTokens is > 0 and var ctx ? ctx : 16384;
+            var sizeBytes = existing?.MemoryBytes ?? State.Models.FirstOrDefault(m => LocalServerClient.SameModel(m.Id, modelId))?.SizeBytes ?? 0;
+            State = State with
+            {
+                Loaded =
+                [
+                    new LocalServerLoadedModel(modelId.Trim(), sizeBytes)
+                    {
+                        ContextTokens = contextTokens,
+                        Backend = effectiveBackend,
+                    },
+                ],
+            };
+            return Task.FromResult(true);
+        }
+    }
 }

@@ -563,6 +563,10 @@ public sealed class CleanupPromptRebuildTests
             [nameof(CleanupOptions.SendWholeVocabulary)] = baseline with { SendWholeVocabulary = true },
             // The API another AI service is reached through: changes what the agent is connected to.
             [nameof(CleanupOptions.CustomApiStyle)] = baseline with { CustomApiStyle = CustomApiStyle.Responses },
+            // The compute backend TensorSharp loads the model on: changes what the agent is connected to.
+            [nameof(CleanupOptions.TensorSharpBackend)] = baseline with { TensorSharpBackend = "ggml_vulkan" },
+            // The thinking effort TensorSharp runs with: changes what the agent is probed and run with.
+            [nameof(CleanupOptions.TensorSharpReasoningEffort)] = baseline with { TensorSharpReasoningEffort = "low" },
         };
         string[] promptFields =
         [

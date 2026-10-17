@@ -20,6 +20,9 @@ public sealed class LocalServerClientTests
     [InlineData(" http://LOCALHOST:11434/v1 ", LocalServerApp.Ollama)]
     [InlineData("http://localhost:1234/v1", LocalServerApp.LmStudio)]
     [InlineData("http://127.0.0.1:1234/v1", LocalServerApp.LmStudio)]
+    [InlineData("http://localhost:5000/v1", LocalServerApp.TensorSharp)]
+    [InlineData("http://127.0.0.1:5000/v1", LocalServerApp.TensorSharp)]
+    [InlineData("http://[::1]:5000/v1", LocalServerApp.TensorSharp)]
     // A port alone does not prove the app: anything but its exact default address is another AI service.
     [InlineData("http://localhost:11434", LocalServerApp.None)]
     [InlineData("http://localhost:11434/v1/chat", LocalServerApp.None)]
@@ -47,6 +50,7 @@ public sealed class LocalServerClientTests
     {
         Assert.Equal(LocalServerApp.Ollama, LocalAiServer.AppAt(LocalAiServer.AddressOf(LocalServerApp.Ollama)));
         Assert.Equal(LocalServerApp.LmStudio, LocalAiServer.AppAt(LocalAiServer.AddressOf(LocalServerApp.LmStudio)));
+        Assert.Equal(LocalServerApp.TensorSharp, LocalAiServer.AppAt(LocalAiServer.AddressOf(LocalServerApp.TensorSharp)));
         Assert.Null(LocalAiServer.AddressOf(LocalServerApp.None));
     }
 
@@ -56,6 +60,7 @@ public sealed class LocalServerClientTests
     [InlineData("GEMMA3:LATEST", "gemma3", true)]
     [InlineData("library/gemma3", "library/gemma3:latest", true)]
     [InlineData("google/gemma-3-4b", "google/gemma-3-4b", true)]
+    [InlineData("gemma-4-26B-A4B-it-UD-IQ3_S.gguf", "gemma-4-26B-A4B-it-UD-IQ3_S", true)]
     [InlineData("gemma3:4b", "gemma3:1b", false)]
     [InlineData("gemma3", "gemma3:4b", false)]
     [InlineData("", "gemma3", false)]
@@ -374,5 +379,81 @@ public sealed class LocalServerClientTests
         Assert.Equal(LocalServerReach.Failed, (await client.ReadAsync("http://localhost:1234/v1", "key")).Reach);
         Assert.False(await client.UnloadAsync("http://localhost:1234/v1", "google/gemma-4-e2b", "key"));
         Assert.All(hosts, host => Assert.Equal("localhost", host));
+    }
+
+    [Fact]
+    public async Task TensorSharp_lists_its_hosted_model_loaded_backend_context_and_loads_a_chosen_backend()
+    {
+        var requests = new List<(string Path, string? Body)>();
+        using var client = new LocalServerClient(new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var body = request.Content is not null ? await request.Content.ReadAsStringAsync(ct) : null;
+            lock (requests)
+            {
+                requests.Add(($"{request.Method} {request.RequestUri!.AbsolutePath}", body));
+            }
+
+            return request.RequestUri.AbsolutePath switch
+            {
+                "/api/models" => ScriptedHttpHandler.Json(HttpStatusCode.OK, """
+                    {
+                      "models": ["gemma-4-26B-A4B-it-UD-IQ3_S.gguf"],
+                      "loaded": "gemma-4-26B-A4B-it-UD-IQ3_S.gguf",
+                      "loadedBackend": "ggml_cuda",
+                      "defaultBackend": "ggml_cuda",
+                      "supportedBackends": [
+                        {"value": "ggml_cuda", "label": "GGML CUDA"},
+                        {"value": "ggml_vulkan", "label": "GGML Vulkan"},
+                        {"value": "ggml_cpu", "label": "GGML CPU"}
+                      ],
+                      "architecture": "gemma4",
+                      "contextTokens": 16384,
+                      "modelContextTokens": 262144
+                    }
+                    """),
+                "/api/tags" => ScriptedHttpHandler.Json(HttpStatusCode.OK, """
+                    {"models":[{"name":"gemma-4-26B-A4B-it-UD-IQ3_S","model":"gemma-4-26B-A4B-it-UD-IQ3_S.gguf","size":11289671136}]}
+                    """),
+                "/api/models/load" => ScriptedHttpHandler.Json(HttpStatusCode.OK, """
+                    {"ok":true,"model":"gemma-4-26B-A4B-it-UD-IQ3_S.gguf","architecture":"gemma4"}
+                    """),
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+            };
+        }));
+
+        var state = await client.ReadAsync(LocalAiServer.TensorSharpAddress);
+
+        Assert.Equal(LocalServerReach.Reached, state.Reach);
+        var model = Assert.Single(state.Models);
+        Assert.Equal("gemma-4-26B-A4B-it-UD-IQ3_S.gguf", model.Id);
+        Assert.Equal(11289671136, model.SizeBytes);
+        Assert.Equal(262144, model.MaxContextTokens);
+        Assert.Equal("ggml_cuda", state.DefaultBackend);
+        Assert.Equal(["ggml_cuda", "ggml_vulkan", "ggml_cpu"], state.SupportedBackends.Select(b => b.Id));
+        var loaded = state.LoadedFor("gemma-4-26B-A4B-it-UD-IQ3_S.gguf");
+        Assert.NotNull(loaded);
+        Assert.Equal(16384, loaded.ContextTokens);
+        Assert.Equal("ggml_cuda", loaded.Backend);
+        Assert.Equal(11289671136, loaded.MemoryBytes);
+
+        Assert.True(await client.LoadTensorSharpAsync(
+            LocalAiServer.TensorSharpAddress, "gemma-4-26B-A4B-it-UD-IQ3_S.gguf", "ggml_vulkan"));
+        using var loadDoc = JsonDocument.Parse(requests[^1].Body!);
+        Assert.Equal("gemma-4-26B-A4B-it-UD-IQ3_S.gguf", loadDoc.RootElement.GetProperty("model").GetString());
+        Assert.Equal("ggml_vulkan", loadDoc.RootElement.GetProperty("backend").GetString());
+
+        var countBeforeUnload = requests.Count;
+        Assert.False(await client.UnloadAsync(LocalAiServer.TensorSharpAddress, "gemma-4-26B-A4B-it-UD-IQ3_S.gguf"));
+        Assert.Equal(countBeforeUnload, requests.Count);
+    }
+
+    [Fact]
+    public async Task Another_server_on_port_5000_without_TensorSharp_fields_reads_as_failed()
+    {
+        using var client = new LocalServerClient(new ScriptedHttpHandler((_, _) =>
+            Task.FromResult(ScriptedHttpHandler.Json(HttpStatusCode.OK, """{"object":"list","data":[{"id":"some-model"}]}"""))));
+
+        var state = await client.ReadAsync(LocalAiServer.TensorSharpAddress);
+        Assert.Equal(LocalServerReach.Failed, state.Reach);
     }
 }

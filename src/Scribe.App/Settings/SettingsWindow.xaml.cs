@@ -2550,8 +2550,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         draft.AiCleanupPromptCaching = AiPromptCachingCheck?.IsChecked != false;
         draft.AiCleanupOllamaContextTokens = SelectedOllamaContextTokens;
         draft.AiCleanupLmStudioContextTokens = SelectedLmStudioContextTokens;
+        draft.AiCleanupTensorSharpContextTokens = SelectedTensorSharpContextTokens;
         draft.AiCleanupOllamaSendWholeVocabulary = OllamaWholeVocabularyCheck?.IsChecked == true;
         draft.AiCleanupLmStudioSendWholeVocabulary = LmStudioWholeVocabularyCheck?.IsChecked == true;
+        draft.AiCleanupTensorSharpSendWholeVocabulary = TensorSharpWholeVocabularyCheck?.IsChecked == true;
+        draft.AiCleanupTensorSharpBackend = SelectedTensorSharpBackend;
+        draft.AiCleanupTensorSharpReasoningEffort = SelectedTensorSharpReasoningEffort;
         draft.AiCleanupFoundryLocalSendWholeVocabulary = FoundryWholeVocabularyCheck?.IsChecked == true;
 
         var writingStyle = NormalizePrompt(AiWritingStyleBox?.Text);
@@ -4779,7 +4783,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         var ready = _cleanup.Status == CleanupStatus.Ready;
         var becameReady = ready && !_cleanupWasReady;
         _cleanupWasReady = ready;
-        if (becameReady && SelectedLocalApp == LocalServerApp.LmStudio)
+        if (becameReady && SelectedLocalApp is LocalServerApp.LmStudio or LocalServerApp.TensorSharp)
         {
             _ = RefreshLocalAppAsync();
         }
@@ -5381,8 +5385,12 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             // Each app's own tuning, from its own controls (LocalModelTuning).
             _settings.AiCleanupOllamaContextTokens = SelectedOllamaContextTokens;
             _settings.AiCleanupLmStudioContextTokens = SelectedLmStudioContextTokens;
+            _settings.AiCleanupTensorSharpContextTokens = SelectedTensorSharpContextTokens;
             _settings.AiCleanupOllamaSendWholeVocabulary = OllamaWholeVocabularyCheck.IsChecked == true;
             _settings.AiCleanupLmStudioSendWholeVocabulary = LmStudioWholeVocabularyCheck.IsChecked == true;
+            _settings.AiCleanupTensorSharpSendWholeVocabulary = TensorSharpWholeVocabularyCheck.IsChecked == true;
+            _settings.AiCleanupTensorSharpBackend = SelectedTensorSharpBackend;
+            _settings.AiCleanupTensorSharpReasoningEffort = SelectedTensorSharpReasoningEffort;
             _settings.AiCleanupFoundryLocalSendWholeVocabulary = FoundryWholeVocabularyCheck.IsChecked == true;
 
             // Persist the writing style only when it differs from the default; storing blank for the

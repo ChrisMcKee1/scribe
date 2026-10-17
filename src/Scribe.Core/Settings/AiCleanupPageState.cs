@@ -263,6 +263,7 @@ public static class AiCleanupPageState
     {
         LocalServerApp.Ollama => "Ollama",
         LocalServerApp.LmStudio => "LM Studio",
+        LocalServerApp.TensorSharp => "TensorSharp",
         _ => "Scribe",
     };
 

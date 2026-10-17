@@ -35,6 +35,7 @@ public partial class SettingsWindow
         AiProviderLocalRadio?.IsChecked != true ? LocalServerApp.None :
         LocalAppOllamaRadio?.IsChecked == true ? LocalServerApp.Ollama :
         LocalAppLmStudioRadio?.IsChecked == true ? LocalServerApp.LmStudio :
+        LocalAppTensorSharpRadio?.IsChecked == true ? LocalServerApp.TensorSharp :
         LocalServerApp.None;
 
     // The model chosen in the selected app's list. The list always belongs to the selected app (ResetLocalAppModels), so a
@@ -86,6 +87,7 @@ public partial class SettingsWindow
         LocalAppScribeRadio.IsChecked = app == LocalServerApp.None;
         LocalAppOllamaRadio.IsChecked = app == LocalServerApp.Ollama;
         LocalAppLmStudioRadio.IsChecked = app == LocalServerApp.LmStudio;
+        LocalAppTensorSharpRadio.IsChecked = app == LocalServerApp.TensorSharp;
         if (app != LocalServerApp.None)
         {
             AiProviderLocalRadio.IsChecked = true;
@@ -210,6 +212,10 @@ public partial class SettingsWindow
         {
             SetLocalAppModelItems(app, state.Models, SelectedLocalAppModel,
                 preserveEmptySelection || (app == LocalServerApp.Ollama && _ollamaDownload is not null));
+            if (app == LocalServerApp.TensorSharp)
+            {
+                FillTensorSharpBackends(state.SupportedBackends, SelectedTensorSharpBackend);
+            }
         }
 
         ShowLocalAppStatus();
@@ -259,7 +265,8 @@ public partial class SettingsWindow
     private void SetLocalAppModelItems(
         LocalServerApp app, IReadOnlyList<LocalServerModel> models, string? chosen, bool preserveEmptySelection = false)
     {
-        var (listed, selected) = LocalAppSetup.ModelChoices(models, chosen, RoomyGraphicsCard, preserveEmptySelection);
+        var (listed, selected) = LocalAppSetup.ModelChoices(
+            models, chosen, RoomyGraphicsCard, preserveEmptySelection, VeryRoomyGraphicsCard);
         var items = listed.Select(model => new LocalAppModelItem(
                 model.Id,
                 string.Equals(model.DisplayName, model.Id, StringComparison.Ordinal) ? model.Id : $"{model.DisplayName} ({model.Id})"))
@@ -305,8 +312,9 @@ public partial class SettingsWindow
 
     private IReadOnlyList<Scribe.Core.Diagnostics.GraphicsAdapter>? _adapters;
 
-    // A graphics card with room for the larger local models (Gemma 4 E4B loads in about 3 GB).
+    // A graphics card with room for the larger local models (Gemma 4 E4B loads in about 3 GB; 12B and 26B-A4B need 12 GB+).
     private bool RoomyGraphicsCard => Adapters.Any(adapter => adapter.HasAtLeast(6));
+    private bool VeryRoomyGraphicsCard => Adapters.Any(adapter => adapter.HasAtLeast(12));
 
     // The first time AI cleanup is turned on here, Scribe's own model starts from the one that suits this PC's hardware
     // (CleanupModelCatalog.DefaultAliasFor) rather than the smallest, unless the user already picked another.

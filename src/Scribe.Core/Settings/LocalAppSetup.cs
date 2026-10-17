@@ -20,7 +20,9 @@ public static class LocalAppSetup
     [
         ["gemma4e2b"],
         ["gemma4e4b"],
-        ["qwen34binstruct", "qwen34b2507"],
+        ["gemma426b"],
+        ["gemma412b"],
+        ["qwen34binstruct", "qwen34b2507", "qwen3827b"],
         ["granite43b", "granite4micro"],
         ["gemma34b"],
         ["phi4mini"],
@@ -28,14 +30,19 @@ public static class LocalAppSetup
         ["qwen2515b"],
     ];
 
-    private static readonly string[][] PreferenceWithRoomyGraphicsCard = [Preference[1], Preference[0], .. Preference[2..]];
+    private static readonly string[][] PreferenceWithRoomyGraphicsCard =
+        [Preference[1], Preference[0], Preference[2], Preference[3], .. Preference[4..]];
+
+    private static readonly string[][] PreferenceWithVeryRoomyGraphicsCard =
+        [Preference[2], Preference[3], Preference[1], Preference[0], .. Preference[4..]];
 
     /// <summary>
     /// The model to preselect when the user has not chosen one: the first of <paramref name="models"/> in the benchmark's
-    /// order for this PC (<paramref name="roomyGraphicsCard"/>: a graphics card with 6 GB or more of its own memory), else
-    /// the first model the app lists. Null when it lists none.
+    /// order for this PC (<paramref name="roomyGraphicsCard"/>: a graphics card with 6 GB or more of its own memory;
+    /// <paramref name="veryRoomyGraphicsCard"/>: 12 GB or more), else the first model the app lists. Null when it lists none.
     /// </summary>
-    public static string? PickModel(IReadOnlyList<LocalServerModel> models, bool roomyGraphicsCard = false)
+    public static string? PickModel(
+        IReadOnlyList<LocalServerModel> models, bool roomyGraphicsCard = false, bool veryRoomyGraphicsCard = false)
     {
         ArgumentNullException.ThrowIfNull(models);
         if (models.Count == 0)
@@ -43,7 +50,12 @@ public static class LocalAppSetup
             return null;
         }
 
-        foreach (var spellings in roomyGraphicsCard ? PreferenceWithRoomyGraphicsCard : Preference)
+        var order = veryRoomyGraphicsCard
+            ? PreferenceWithVeryRoomyGraphicsCard
+            : roomyGraphicsCard
+                ? PreferenceWithRoomyGraphicsCard
+                : Preference;
+        foreach (var spellings in order)
         {
             foreach (var model in models)
             {
@@ -66,7 +78,11 @@ public static class LocalAppSetup
     /// (<see cref="PickModel"/>).
     /// </summary>
     public static (IReadOnlyList<LocalServerModel> Models, string? Selected) ModelChoices(
-        IReadOnlyList<LocalServerModel> listed, string? chosen, bool roomyGraphicsCard = false, bool preserveEmptySelection = false)
+        IReadOnlyList<LocalServerModel> listed,
+        string? chosen,
+        bool roomyGraphicsCard = false,
+        bool preserveEmptySelection = false,
+        bool veryRoomyGraphicsCard = false)
     {
         ArgumentNullException.ThrowIfNull(listed);
         var models = listed.ToList();
@@ -75,7 +91,9 @@ public static class LocalAppSetup
             return (models, null);
         }
 
-        var selected = string.IsNullOrWhiteSpace(chosen) ? PickModel(listed, roomyGraphicsCard) : chosen.Trim();
+        var selected = string.IsNullOrWhiteSpace(chosen)
+            ? PickModel(listed, roomyGraphicsCard, veryRoomyGraphicsCard)
+            : chosen.Trim();
         if (selected is null)
         {
             return (models, null);
@@ -134,9 +152,12 @@ public static class LocalAppSetup
 
         if (state.Models.Count == 0)
         {
-            var download = app == LocalServerApp.Ollama
-                ? "Use Download another model below."
-                : $"Download one in {name}, then choose Check again.";
+            var download = app switch
+            {
+                LocalServerApp.Ollama => "Use Download another model below.",
+                LocalServerApp.TensorSharp => "Start TensorSharp with a GGUF model, then choose Check again.",
+                _ => $"Download one in {name}, then choose Check again.",
+            };
             return new(AiCleanupStatusKind.Info, $"{name} has no models yet. {download}", checkAgain);
         }
 
@@ -147,9 +168,20 @@ public static class LocalAppSetup
 
         if (state.LoadedFor(model) is { } loaded)
         {
+            var memory = loaded.MemoryBytes > 0 ? $"{FormatSize(loaded.MemoryBytes)} of memory" : "memory";
+            if (app == LocalServerApp.TensorSharp)
+            {
+                var backend = !string.IsNullOrWhiteSpace(loaded.Backend)
+                    ? $" on {LocalModelTuningText.BackendDisplayName(loaded.Backend)}"
+                    : string.Empty;
+                return new(
+                    AiCleanupStatusKind.Success,
+                    $"{model} is using {memory}{backend}. Stop TensorSharp when you want to free its memory.",
+                    checkAgain);
+            }
+
             // Every request asks the app to keep the model only this long (keep_alive, ttl), so the app frees it on its own.
             // Free memory, like a pause or turning AI cleanup off, unloads it from the app, so for any other app using it too.
-            var memory = loaded.MemoryBytes > 0 ? $"{FormatSize(loaded.MemoryBytes)} of memory" : "memory";
             var freed = idleMinutes > 0
                 ? $" Scribe asks {name} to free it after {idleMinutes} {(idleMinutes == 1 ? "minute" : "minutes")} without a dictation."
                 : string.Empty;
@@ -163,9 +195,12 @@ public static class LocalAppSetup
         {
             return new(
                 AiCleanupStatusKind.Warning,
-                app == LocalServerApp.Ollama
-                    ? $"{name} doesn't list {model}. Choose another model, or use Download another model below."
-                    : $"{name} doesn't list {model}. Choose another model, or download it in {name}.",
+                app switch
+                {
+                    LocalServerApp.Ollama => $"{name} doesn't list {model}. Choose another model, or use Download another model below.",
+                    LocalServerApp.TensorSharp => $"{name} doesn't list {model}. Choose the model TensorSharp is serving, or start TensorSharp with {model}.",
+                    _ => $"{name} doesn't list {model}. Choose another model, or download it in {name}.",
+                },
                 checkAgain);
         }
 

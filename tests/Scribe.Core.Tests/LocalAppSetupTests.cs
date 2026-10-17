@@ -67,6 +67,17 @@ public sealed class LocalAppSetupTests
         Assert.Equal("gemma4:e2b", LocalAppSetup.PickModel(models, roomyGraphicsCard: false));
         Assert.Equal("gemma4:e2b", LocalAppSetup.ModelChoices(models, "gemma4:e2b", roomyGraphicsCard: true).Selected);
         Assert.Equal("qwen3:4b-instruct", LocalAppSetup.PickModel([Model("qwen3:4b-instruct")], roomyGraphicsCard: true));
+
+        LocalServerModel[] with26BAnd12B =
+        [
+            Model("gemma4:e4b"),
+            Model("gemma4:12b"),
+            Model("gemma4:26b-a4b-iq3s"),
+        ];
+        // A 6 GB card (roomyGraphicsCard) keeps E4B first; a 12 GB+ card (veryRoomyGraphicsCard) picks 26B then 12B.
+        Assert.Equal("gemma4:e4b", LocalAppSetup.PickModel(with26BAnd12B, roomyGraphicsCard: true, veryRoomyGraphicsCard: false));
+        Assert.Equal("gemma4:26b-a4b-iq3s", LocalAppSetup.PickModel(with26BAnd12B, roomyGraphicsCard: true, veryRoomyGraphicsCard: true));
+        Assert.Equal("gemma4:e4b", LocalAppSetup.PickModel(with26BAnd12B, roomyGraphicsCard: false));
     }
 
     [Fact]
@@ -177,6 +188,8 @@ public sealed class LocalAppSetupTests
     [InlineData(LocalServerApp.Ollama, true)]
     [InlineData(LocalServerApp.LmStudio, false)]
     [InlineData(LocalServerApp.LmStudio, true)]
+    [InlineData(LocalServerApp.TensorSharp, false)]
+    [InlineData(LocalServerApp.TensorSharp, true)]
     public void A_live_cleanup_failure_is_not_hidden_by_a_reachable_app_or_a_loaded_model(LocalServerApp app, bool loaded)
     {
         const string reason = "The model process crashed (500). Restart the app and try again.";
@@ -221,6 +234,22 @@ public sealed class LocalAppSetupTests
     [InlineData(10L, "1 MB")]
     public void Sizes_read_as_Task_Manager_counts_them(long bytes, string expected) =>
         InvariantCulture(() => Assert.Equal(expected, LocalAppSetup.FormatSize(bytes)));
+
+    [Fact]
+    public void TensorSharp_status_describes_its_loaded_model_and_backend() => InvariantCulture(() =>
+    {
+        var state = new LocalServerState(
+            LocalServerReach.Reached,
+            [new LocalServerModel("gemma-4-26B-A4B-it-UD-IQ3_S.gguf", "gemma-4-26B-A4B-it-UD-IQ3_S.gguf", 11_289_671_136)],
+            [new LocalServerLoadedModel("gemma-4-26B-A4B-it-UD-IQ3_S.gguf", 11_289_671_136) { ContextTokens = 16384, Backend = "ggml_cuda" }]);
+
+        var row = LocalAppSetup.Describe(LocalServerApp.TensorSharp, state, "gemma-4-26B-A4B-it-UD-IQ3_S.gguf", 10);
+        Assert.Equal(AiCleanupStatusKind.Success, row.Kind);
+        Assert.Equal(
+            "gemma-4-26B-A4B-it-UD-IQ3_S.gguf is using 10.5 GB of memory on GGML CUDA. Stop TensorSharp when you want to free its memory.",
+            row.Text);
+        Assert.Equal(AiCleanupActionId.CheckAgain, row.Primary!.Id);
+    });
 
     private static void InvariantCulture(Action test)
     {

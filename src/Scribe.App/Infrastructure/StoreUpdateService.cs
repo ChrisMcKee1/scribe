@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Scribe.Core.Diagnostics;
+using Scribe.Core.Infrastructure;
 using Windows.ApplicationModel;
 using Windows.Services.Store;
 
@@ -98,6 +99,7 @@ public sealed class StoreUpdateService
 
         try
         {
+            ApplicationRestartRegistration.TryRegisterForUpdateRestart(log: _log);
             _log.LogInformation("Installing {Count} Microsoft Store package update(s).", updates.Count);
             var result = await context.RequestDownloadAndInstallStorePackageUpdatesAsync(updates);
             return result.OverallState switch

@@ -29,7 +29,7 @@ public static class CustomApiStyleText
         var app = LocalAiServer.AppAt(address?.Trim());
         if (app != LocalServerApp.None)
         {
-            return $"{(app == LocalServerApp.Ollama ? "Ollama" : "LM Studio")} at its own address uses Chat Completions.";
+            return $"{AiCleanupPageState.LocalAppName(app)} at its own address uses Chat Completions.";
         }
 
         return CustomServiceAddress.NamedStyle(address) switch
@@ -43,5 +43,5 @@ public static class CustomApiStyleText
     /// <summary>The line under the server address box.</summary>
     public const string AddressHint =
         "The service's OpenAI-compatible address, usually ending in /v1. An address that ends in /chat/completions or " +
-        "/responses is used as it is. For Ollama or LM Studio on this PC, choose On this PC instead.";
+        "/responses is used as it is. For Ollama, LM Studio or TensorSharp on this PC, choose On this PC instead.";
 }

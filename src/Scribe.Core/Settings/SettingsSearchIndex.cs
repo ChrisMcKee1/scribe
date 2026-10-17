@@ -61,6 +61,8 @@ public static class SettingsSearchIndex
         new("LocalAppOllamaRadio", "Ollama", SettingsSearchRequirementKind.Radio);
     private static readonly SettingsSearchRequirement RequiresLmStudio =
         new("LocalAppLmStudioRadio", "LM Studio", SettingsSearchRequirementKind.Radio);
+    private static readonly SettingsSearchRequirement RequiresTensorSharp =
+        new("LocalAppTensorSharpRadio", "TensorSharp", SettingsSearchRequirementKind.Radio);
     private static readonly SettingsSearchRequirement RequiresAzureCli =
         new("AzureCliRadio", "Your Azure account (Azure CLI) (recommended)", SettingsSearchRequirementKind.Radio);
     private static readonly SettingsSearchRequirement RequiresAzureServicePrincipal =
@@ -94,6 +96,7 @@ public static class SettingsSearchIndex
         Entry("ai.local.scribe", SettingsPage.AiCleanup, "LocalAppScribeRadio", "Let Scribe manage it", ["foundry local", "download", "local model", "scribe"], "On this PC", [RequiresAi, RequiresLocal]),
         Entry("ai.local.ollama", SettingsPage.AiCleanup, "LocalAppOllamaRadio", "Ollama", ["local model", "gemma", "llama", "free memory"], "On this PC", [RequiresAi, RequiresLocal]),
         Entry("ai.local.lmstudio", SettingsPage.AiCleanup, "LocalAppLmStudioRadio", "LM Studio", ["lm studio", "lmstudio", "local model", "free memory"], "On this PC", [RequiresAi, RequiresLocal]),
+        Entry("ai.local.tensorsharp", SettingsPage.AiCleanup, "LocalAppTensorSharpRadio", "TensorSharp", ["tensorsharp", "tensor sharp", "gguf", "local model"], "On this PC", [RequiresAi, RequiresLocal]),
         Entry("ai.local.idle", SettingsPage.AiCleanup, "AiIdleReleaseCombo", LocalModelTuningText.IdleReleaseTitle, ["idle", "unload", "release", "memory", "minutes", "never"], "On this PC", [RequiresAi, RequiresLocal]),
         Entry("ai.model", SettingsPage.AiCleanup, "AiModelBox", "Model", ["foundry local", "download", "load", "free memory"], "On this PC", [RequiresAi, RequiresLocal, RequiresScribeModel]),
         Entry("ai.local.scribe.vocabulary", SettingsPage.AiCleanup, "FoundryWholeVocabularyCheck", LocalModelTuningText.WholeVocabularyTitle, ["vocabulary", "dictionary", "word packs", "context", "foundry local"], "On this PC", [RequiresAi, RequiresLocal, RequiresScribeModel]),
@@ -103,6 +106,10 @@ public static class SettingsSearchIndex
         Entry("ai.local.ollama.vocabulary", SettingsPage.AiCleanup, "OllamaWholeVocabularyCheck", LocalModelTuningText.WholeVocabularyTitle, ["vocabulary", "dictionary", "word packs", "context"], "Ollama", [RequiresAi, RequiresLocal, RequiresOllama]),
         Entry("ai.local.lmstudio.context", SettingsPage.AiCleanup, "LmStudioContextSizeCombo", LocalModelTuningText.ContextSizeTitle, ["context", "context window", "context length", "tokens", "memory"], "LM Studio", [RequiresAi, RequiresLocal, RequiresLmStudio]),
         Entry("ai.local.lmstudio.vocabulary", SettingsPage.AiCleanup, "LmStudioWholeVocabularyCheck", LocalModelTuningText.WholeVocabularyTitle, ["vocabulary", "dictionary", "word packs", "context"], "LM Studio", [RequiresAi, RequiresLocal, RequiresLmStudio]),
+        Entry("ai.local.tensorsharp.backend", SettingsPage.AiCleanup, "TensorSharpBackendCombo", LocalModelTuningText.TensorSharpBackendTitle, ["tensorsharp", "backend", "cuda", "vulkan", "cpu", "gpu", "graphics card", "hardware"], "TensorSharp", [RequiresAi, RequiresLocal, RequiresTensorSharp]),
+        Entry("ai.local.tensorsharp.context", SettingsPage.AiCleanup, "TensorSharpContextSizeCombo", LocalModelTuningText.ContextSizeTitle, ["context", "context window", "context length", "tokens", "memory"], "TensorSharp", [RequiresAi, RequiresLocal, RequiresTensorSharp]),
+        Entry("ai.local.tensorsharp.thinking", SettingsPage.AiCleanup, "TensorSharpReasoningEffortCombo", LocalModelTuningText.TensorSharpReasoningEffortTitle, ["thinking", "reasoning", "effort", "think"], "TensorSharp", [RequiresAi, RequiresLocal, RequiresTensorSharp]),
+        Entry("ai.local.tensorsharp.vocabulary", SettingsPage.AiCleanup, "TensorSharpWholeVocabularyCheck", LocalModelTuningText.WholeVocabularyTitle, ["vocabulary", "dictionary", "word packs", "context"], "TensorSharp", [RequiresAi, RequiresLocal, RequiresTensorSharp]),
         Entry("ai.azure.auth.cli", SettingsPage.AiCleanup, "AzureCliRadio", "Your Azure account (Azure CLI) (recommended)", ["sign in", "browser", "tenant"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
         Entry("ai.azure.auth.sp", SettingsPage.AiCleanup, "AzureServicePrincipalRadio", "An app registration (service principal)", ["sign in", "entra", "client"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),
         Entry("ai.azure.auth.key", SettingsPage.AiCleanup, "AzureApiKeyRadio", "An API key", ["sign in", "resource key"], "Microsoft Foundry", [RequiresAi, RequiresFoundry]),

@@ -623,6 +623,7 @@ public partial class SettingsWindow
         {
             Scribe.Core.Cleanup.LocalServerApp.Ollama => OllamaWholeVocabularyCheck?.IsChecked == true,
             Scribe.Core.Cleanup.LocalServerApp.LmStudio => LmStudioWholeVocabularyCheck?.IsChecked == true,
+            Scribe.Core.Cleanup.LocalServerApp.TensorSharp => TensorSharpWholeVocabularyCheck?.IsChecked == true,
             _ => false,
         },
     };

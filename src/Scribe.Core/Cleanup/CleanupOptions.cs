@@ -103,7 +103,9 @@ public sealed record CleanupOptions(
     int? LocalModelKeepAliveMinutes = null,
     int? LocalContextTokens = null,
     bool SendWholeVocabulary = false,
-    CustomApiStyle CustomApiStyle = CustomApiStyle.ChatCompletions)
+    CustomApiStyle CustomApiStyle = CustomApiStyle.ChatCompletions,
+    string? TensorSharpBackend = null,
+    string? TensorSharpReasoningEffort = null)
 {
     /// <summary>A disabled configuration (cleanup off, defaults elsewhere).</summary>
     public static CleanupOptions Disabled { get; } =

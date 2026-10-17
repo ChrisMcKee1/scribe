@@ -44,12 +44,15 @@ public static class LocalAiServer
     /// <summary>LM Studio's OpenAI-compatible address as it installs, the one Settings saves for LM Studio.</summary>
     public const string LmStudioAddress = "http://localhost:1234/v1";
 
+    /// <summary>TensorSharp's OpenAI-compatible address as it starts by default, the one Settings saves for TensorSharp.</summary>
+    public const string TensorSharpAddress = "http://localhost:5000/v1";
+
     /// <summary>
     /// Which app answers at <paramref name="endpoint"/>, judged only from the exact address each installs with: http, this
-    /// PC's own name (<c>localhost</c>, <c>127.0.0.1</c> or <c>::1</c>), Ollama's port 11434 or LM Studio's 1234, and the
-    /// path <c>/v1</c>. Anything else, another port, a path, a query, https or a name on the network, is
-    /// <see cref="LocalServerApp.None"/>: a port alone does not prove which app is listening, so a server the user set up
-    /// by hand stays "another AI service" and Scribe never manages its models.
+    /// PC's own name (<c>localhost</c>, <c>127.0.0.1</c> or <c>::1</c>), Ollama's port 11434, LM Studio's 1234 or
+    /// TensorSharp's 5000, and the path <c>/v1</c>. Anything else, another port, a path, a query, https or a name on the
+    /// network, is <see cref="LocalServerApp.None"/>: a port alone does not prove which app is listening, so a server the
+    /// user set up by hand stays "another AI service" and Scribe never manages its models.
     /// </summary>
     public static LocalServerApp AppAt(string? endpoint)
     {
@@ -77,6 +80,7 @@ public static class LocalAiServer
         {
             11434 => LocalServerApp.Ollama,
             1234 => LocalServerApp.LmStudio,
+            5000 => LocalServerApp.TensorSharp,
             _ => LocalServerApp.None,
         };
     }
@@ -86,10 +90,11 @@ public static class LocalAiServer
     {
         LocalServerApp.Ollama => OllamaAddress,
         LocalServerApp.LmStudio => LmStudioAddress,
+        LocalServerApp.TensorSharp => TensorSharpAddress,
         _ => null,
     };
 
-    /// <summary>The app that serves cleanup when it runs on Ollama or LM Studio at its own address (<see cref="AppAt"/>).</summary>
+    /// <summary>The app that serves cleanup when it runs on Ollama, LM Studio or TensorSharp at its own address (<see cref="AppAt"/>).</summary>
     public static LocalServerApp AppServing(CleanupProvider provider, string? customEndpoint) =>
         provider == CleanupProvider.OpenAiCompatible ? AppAt(customEndpoint) : LocalServerApp.None;
 
@@ -101,7 +106,7 @@ public static class LocalAiServer
     /// is given back on the same clock.
     /// </summary>
     public static int? KeepAliveMinutes(CleanupProvider provider, string? customEndpoint, int idleMinutes) =>
-        AppServing(provider, customEndpoint) == LocalServerApp.None ? null : idleMinutes;
+        AppServing(provider, customEndpoint) is LocalServerApp.Ollama or LocalServerApp.LmStudio ? idleMinutes : null;
 }
 
 /// <summary>An app on this PC that serves AI models and that Scribe knows how to ask about, and free, its models.</summary>
@@ -115,4 +120,7 @@ public enum LocalServerApp
 
     /// <summary>LM Studio, at <see cref="LocalAiServer.LmStudioAddress"/>.</summary>
     LmStudio = 2,
+
+    /// <summary>TensorSharp, at <see cref="LocalAiServer.TensorSharpAddress"/>.</summary>
+    TensorSharp = 3,
 }

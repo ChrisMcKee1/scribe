@@ -253,8 +253,12 @@ public partial class SettingsWindow
         draft.AiCleanupPromptCaching = AiPromptCachingCheck.IsChecked != false;
         draft.AiCleanupOllamaContextTokens = SelectedOllamaContextTokens;
         draft.AiCleanupLmStudioContextTokens = SelectedLmStudioContextTokens;
+        draft.AiCleanupTensorSharpContextTokens = SelectedTensorSharpContextTokens;
         draft.AiCleanupOllamaSendWholeVocabulary = OllamaWholeVocabularyCheck.IsChecked == true;
         draft.AiCleanupLmStudioSendWholeVocabulary = LmStudioWholeVocabularyCheck.IsChecked == true;
+        draft.AiCleanupTensorSharpSendWholeVocabulary = TensorSharpWholeVocabularyCheck.IsChecked == true;
+        draft.AiCleanupTensorSharpBackend = SelectedTensorSharpBackend;
+        draft.AiCleanupTensorSharpReasoningEffort = SelectedTensorSharpReasoningEffort;
         draft.AiCleanupFoundryLocalSendWholeVocabulary = FoundryWholeVocabularyCheck.IsChecked == true;
         draft.AiCleanupCustomApiKey = customService.ApiKey;
         var writingStyle = AiWritingStyleBox.Text?.Trim() ?? string.Empty;

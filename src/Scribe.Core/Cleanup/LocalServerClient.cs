@@ -52,6 +52,9 @@ public sealed record LocalServerLoadedModel(string Id, long MemoryBytes)
     /// says none, as for a model loaded by hand, which stays until it is unloaded.
     /// </summary>
     public long? RemainingTtlSeconds { get; init; }
+
+    /// <summary>TensorSharp: the compute backend the model is currently loaded on (<c>loadedBackend</c>); null for other apps.</summary>
+    public string? Backend { get; init; }
 }
 
 /// <summary>What an app on this PC has downloaded and what it holds in memory, read at one moment.</summary>
@@ -65,6 +68,12 @@ public sealed record LocalServerState(
     /// types and codes, never a message), for the log; null otherwise.
     /// </summary>
     public string? FailureDetail { get; init; }
+
+    /// <summary>TensorSharp: the compute backends the server reports in <c>/api/models</c>.</summary>
+    public IReadOnlyList<(string Id, string Name)> SupportedBackends { get; init; } = [];
+
+    /// <summary>TensorSharp: the server's default compute backend (<c>defaultBackend</c>).</summary>
+    public string? DefaultBackend { get; init; }
 
     public static LocalServerState NotRunning { get; } = new(LocalServerReach.NotRunning, [], []);
 
@@ -118,6 +127,13 @@ public interface ILocalServerClient
     /// </summary>
     Task<int> ReadMaxContextAsync(
         string endpoint, string modelId, string? apiKey = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// TensorSharp only: loads or reloads <paramref name="modelId"/> on <paramref name="backend"/> through
+    /// <c>POST /api/models/load</c>. True when TensorSharp accepted the load. Never throws.
+    /// </summary>
+    Task<bool> LoadTensorSharpAsync(
+        string endpoint, string modelId, string? backend = null, string? apiKey = null, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -280,6 +296,7 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
             return root.App switch
             {
                 LocalServerApp.Ollama => await ReadOllamaAsync(root.Uri, apiKey, cancellationToken).ConfigureAwait(false),
+                LocalServerApp.TensorSharp => await ReadTensorSharpAsync(root.Uri, apiKey, cancellationToken).ConfigureAwait(false),
                 _ => await ReadLmStudioAsync(root.Uri, apiKey, cancellationToken).ConfigureAwait(false),
             };
         }
@@ -309,7 +326,7 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
     public async Task<bool> UnloadAsync(
         string endpoint, string modelId, string? apiKey = null, CancellationToken cancellationToken = default)
     {
-        if (Root(endpoint) is not { } root || string.IsNullOrWhiteSpace(modelId))
+        if (Root(endpoint) is not { } root || root.App == LocalServerApp.TensorSharp || string.IsNullOrWhiteSpace(modelId))
         {
             return false;
         }
@@ -476,9 +493,34 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
         }
     }
 
+    public async Task<bool> LoadTensorSharpAsync(
+        string endpoint, string modelId, string? backend = null, string? apiKey = null, CancellationToken cancellationToken = default)
+    {
+        if (Root(endpoint) is not { App: LocalServerApp.TensorSharp } root || string.IsNullOrWhiteSpace(modelId))
+        {
+            return false;
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(LoadTimeout);
+        try
+        {
+            object payload = string.IsNullOrWhiteSpace(backend)
+                ? new { model = modelId.Trim() }
+                : new { model = modelId.Trim(), backend = backend.Trim() };
+            using var load = Request(HttpMethod.Post, new Uri(root.Uri, "/api/models/load"), apiKey, payload);
+            using var response = await _http.SendAsync(load, timeout.Token).ConfigureAwait(false);
+            return response.IsSuccessStatusCode;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
     /// <summary>
-    /// True when two names are the same model to its app: equal ignoring case, or equal once Ollama's implicit
-    /// <c>:latest</c> tag is added to a name without a tag.
+    /// True when two names are the same model to its app: equal ignoring case, equal once Ollama's implicit
+    /// <c>:latest</c> tag is added to a name without a tag, or equal once a <c>.gguf</c> file extension is stripped.
     /// </summary>
     public static bool SameModel(string? first, string? second)
     {
@@ -494,8 +536,17 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
             return lastSegment.Contains(':', StringComparison.Ordinal) ? trimmed : trimmed + ":latest";
         }
 
+        static string WithoutGguf(string name)
+        {
+            var trimmed = name.Trim();
+            return trimmed.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase)
+                ? trimmed[..^5]
+                : trimmed;
+        }
+
         return string.Equals(first.Trim(), second.Trim(), StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(Tagged(first), Tagged(second), StringComparison.OrdinalIgnoreCase);
+            string.Equals(Tagged(first), Tagged(second), StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(WithoutGguf(first), WithoutGguf(second), StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<LocalServerState> ReadOllamaAsync(Uri root, string? apiKey, CancellationToken ct)
@@ -608,6 +659,116 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
 
         return new LocalServerState(LocalServerReach.Reached, Sorted(models), loaded);
     }
+
+    private async Task<LocalServerState> ReadTensorSharpAsync(Uri root, string? apiKey, CancellationToken ct)
+    {
+        using var timeout = Bounded(ListTimeout, ct);
+        using var request = Request(HttpMethod.Get, new Uri(root, "/api/models"), apiKey);
+        using var response = await _http.SendAsync(request, timeout.Token).ConfigureAwait(false);
+        if (Refused(response))
+        {
+            return LocalServerState.NeedsKey;
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            return LocalServerState.Failed with { FailureDetail = $"HTTP {(int)response.StatusCode} from the model list" };
+        }
+
+        using var document = await ReadJsonAsync(response, timeout.Token).ConfigureAwait(false);
+        var rootEl = document.RootElement;
+        if (rootEl.ValueKind != JsonValueKind.Object || !IsTensorSharpModelsPayload(rootEl))
+        {
+            return LocalServerState.Failed;
+        }
+
+        var sizes = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            using var tagsTimeout = Bounded(LoadedTimeout, ct);
+            using var tagsRequest = Request(HttpMethod.Get, new Uri(root, "/api/tags"), apiKey);
+            using var tags = await _http.SendAsync(tagsRequest, tagsTimeout.Token).ConfigureAwait(false);
+            if (tags.IsSuccessStatusCode)
+            {
+                using var tagsDoc = await ReadJsonAsync(tags, tagsTimeout.Token).ConfigureAwait(false);
+                foreach (var tagModel in Array(tagsDoc.RootElement, "models"))
+                {
+                    if (Number(tagModel, "size") is > 0 and var tagSize)
+                    {
+                        if (Text(tagModel, "model") is { } file)
+                        {
+                            sizes[file] = tagSize;
+                        }
+
+                        if (Text(tagModel, "name") is { } stem)
+                        {
+                            sizes[stem] = tagSize;
+                            if (!stem.EndsWith(".gguf", StringComparison.OrdinalIgnoreCase))
+                            {
+                                sizes[stem + ".gguf"] = tagSize;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            sizes.Clear();
+        }
+
+        var modelContextTokens = Int(rootEl, "modelContextTokens");
+        var contextTokens = Int(rootEl, "contextTokens");
+        var loadedName = Text(rootEl, "loaded");
+        var loadedBackend = Text(rootEl, "loadedBackend");
+        var defaultBackend = Text(rootEl, "defaultBackend");
+        var supportedBackends = new List<(string Id, string Name)>();
+        foreach (var backendEl in Array(rootEl, "supportedBackends"))
+        {
+            if ((Text(backendEl, "value") ?? Text(backendEl, "id")) is { } id)
+            {
+                var label = Text(backendEl, "label") ?? Text(backendEl, "name") ?? id;
+                supportedBackends.Add((id, label));
+            }
+        }
+
+        var models = new List<LocalServerModel>();
+        foreach (var item in Array(rootEl, "models"))
+        {
+            if (item.ValueKind == JsonValueKind.String && item.GetString() is { } file && !string.IsNullOrWhiteSpace(file))
+            {
+                var trimmed = file.Trim();
+                sizes.TryGetValue(trimmed, out var bytes);
+                models.Add(new LocalServerModel(trimmed, trimmed, bytes)
+                {
+                    MaxContextTokens = modelContextTokens,
+                });
+            }
+        }
+
+        var loaded = new List<LocalServerLoadedModel>();
+        if (loadedName is not null)
+        {
+            sizes.TryGetValue(loadedName, out var loadedBytes);
+            loaded.Add(new LocalServerLoadedModel(loadedName, loadedBytes)
+            {
+                ContextTokens = contextTokens,
+                Backend = loadedBackend,
+            });
+        }
+
+        return new LocalServerState(LocalServerReach.Reached, Sorted(models), loaded)
+        {
+            SupportedBackends = supportedBackends,
+            DefaultBackend = defaultBackend,
+        };
+    }
+
+    // Verifies the /api/models response carries TensorSharp's own capability fields rather than another server's list on port 5000.
+    private static bool IsTensorSharpModelsPayload(JsonElement rootEl) =>
+        (rootEl.TryGetProperty("supportedBackends", out var backends) && backends.ValueKind == JsonValueKind.Array) ||
+        rootEl.TryGetProperty("defaultBackend", out _) ||
+        rootEl.TryGetProperty("modelContextTokens", out _);
 
     // One LM Studio instance as a loaded model: its context, its id and the time LM Studio still keeps it.
     private static LocalServerLoadedModel Instance(string name, long size, JsonElement instance) =>

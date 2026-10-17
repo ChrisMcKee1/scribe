@@ -22,6 +22,8 @@ public static class LocalModelTuning
             {
                 LocalContextTokens = null,
                 SendWholeVocabulary = settings.AiCleanupFoundryLocalSendWholeVocabulary,
+                TensorSharpBackend = null,
+                TensorSharpReasoningEffort = null,
             };
         }
 
@@ -31,15 +33,68 @@ public static class LocalModelTuning
             {
                 LocalContextTokens = Size(settings.AiCleanupOllamaContextTokens),
                 SendWholeVocabulary = settings.AiCleanupOllamaSendWholeVocabulary,
+                TensorSharpBackend = null,
+                TensorSharpReasoningEffort = null,
             },
             LocalServerApp.LmStudio => options with
             {
                 LocalContextTokens = Size(settings.AiCleanupLmStudioContextTokens),
                 SendWholeVocabulary = settings.AiCleanupLmStudioSendWholeVocabulary,
+                TensorSharpBackend = null,
+                TensorSharpReasoningEffort = null,
             },
-            _ => options with { LocalContextTokens = null, SendWholeVocabulary = false },
+            LocalServerApp.TensorSharp => options with
+            {
+                LocalContextTokens = Size(settings.AiCleanupTensorSharpContextTokens),
+                SendWholeVocabulary = settings.AiCleanupTensorSharpSendWholeVocabulary,
+                TensorSharpBackend = NullIfEmpty(SanitizeTensorSharpBackend(settings.AiCleanupTensorSharpBackend)),
+                TensorSharpReasoningEffort = NullIfEmpty(SanitizeTensorSharpReasoningEffort(settings.AiCleanupTensorSharpReasoningEffort)),
+            },
+            _ => options with
+            {
+                LocalContextTokens = null,
+                SendWholeVocabulary = false,
+                TensorSharpBackend = null,
+                TensorSharpReasoningEffort = null,
+            },
         };
     }
+
+    /// <summary>Known TensorSharp compute backends in the order Settings offers them.</summary>
+    public static IReadOnlyList<string> KnownTensorSharpBackends { get; } =
+        ["ggml_cuda", "cuda", "ggml_vulkan", "ggml_cpu", "cpu"];
+
+    /// <summary>Known TensorSharp thinking effort levels (<c>low</c>, <c>medium</c>, <c>high</c>).</summary>
+    public static IReadOnlyList<string> KnownTensorSharpReasoningEfforts { get; } =
+        ["low", "medium", "high"];
+
+    /// <summary>Normalizes a stored TensorSharp backend id; unknown or blank values become <see cref="string.Empty"/> (TensorSharp's setting).</summary>
+    public static string SanitizeTensorSharpBackend(string? backend)
+    {
+        if (string.IsNullOrWhiteSpace(backend))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = backend.Trim();
+        return KnownTensorSharpBackends.FirstOrDefault(known =>
+            string.Equals(known, trimmed, StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
+    }
+
+    /// <summary>Normalizes a stored TensorSharp thinking effort; unknown or blank values become <see cref="string.Empty"/> (thinking off).</summary>
+    public static string SanitizeTensorSharpReasoningEffort(string? effort)
+    {
+        if (string.IsNullOrWhiteSpace(effort))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = effort.Trim();
+        return KnownTensorSharpReasoningEfforts.FirstOrDefault(known =>
+            string.Equals(known, trimmed, StringComparison.OrdinalIgnoreCase)) ?? string.Empty;
+    }
+
+    private static string? NullIfEmpty(string value) => value.Length == 0 ? null : value;
 
     private static int? Size(int tokens) => ContextBudget.Sanitize(tokens) is > 0 and var size ? size : null;
 }

@@ -343,6 +343,27 @@ public sealed class AppSettings
     public bool AiCleanupFoundryLocalSendWholeVocabulary { get; set; }
 
     /// <summary>
+    /// The context size cap, in tokens, Scribe fits prompts and vocabulary into when AI cleanup runs on TensorSharp;
+    /// 0 leaves it to the context window TensorSharp loaded the model with.
+    /// </summary>
+    public int AiCleanupTensorSharpContextTokens { get; set; }
+
+    /// <summary>The same as <see cref="AiCleanupOllamaSendWholeVocabulary"/>, for TensorSharp.</summary>
+    public bool AiCleanupTensorSharpSendWholeVocabulary { get; set; }
+
+    /// <summary>
+    /// The compute backend Scribe asks TensorSharp to load the model on (<c>ggml_cuda</c>, <c>cuda</c>, <c>ggml_vulkan</c>,
+    /// <c>ggml_cpu</c>, <c>cpu</c>); empty leaves it to TensorSharp's own default backend.
+    /// </summary>
+    public string AiCleanupTensorSharpBackend { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The thinking effort Scribe sends to TensorSharp (<c>low</c>, <c>medium</c>, <c>high</c>); empty turns thinking off
+    /// (<c>think: false</c>) for the fastest dictation cleanup.
+    /// </summary>
+    public string AiCleanupTensorSharpReasoningEffort { get; set; } = string.Empty;
+
+    /// <summary>
     /// How decoded text is placed into the focused app. Unicode typing is the default because it
     /// works in the widest range of apps (including paste-blocking fields) and never touches the
     /// clipboard.

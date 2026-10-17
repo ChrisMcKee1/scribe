@@ -7,12 +7,13 @@ namespace Scribe.Evals.Benchmark;
 /// Where the local servers a roster entry can name are listening. The defaults are the ports Ollama
 /// and LM Studio use out of the box, the same addresses Settings suggests.
 /// </summary>
-internal sealed record LocalEndpoints(string Ollama, string LmStudio)
+internal sealed record LocalEndpoints(string Ollama, string LmStudio, string TensorSharp = LocalEndpoints.DefaultTensorSharp)
 {
     public const string DefaultOllama = "http://127.0.0.1:11434/v1";
     public const string DefaultLmStudio = "http://127.0.0.1:1234/v1";
+    public const string DefaultTensorSharp = "http://127.0.0.1:5000/v1";
 
-    public static LocalEndpoints Default { get; } = new(DefaultOllama, DefaultLmStudio);
+    public static LocalEndpoints Default { get; } = new(DefaultOllama, DefaultLmStudio, DefaultTensorSharp);
 }
 
 /// <summary>Builds the model roster: cloud via live Azure discovery, local via a curated alias set.</summary>
@@ -221,6 +222,12 @@ internal static class BenchmarkModels
         {
             return new BenchModel(
                 BenchGroup.Local, trimmed, CleanupProvider.OpenAiCompatible, endpoints.LmStudio, lmStudioModel, lmStudioModel, note);
+        }
+
+        if (TryStripPrefix(trimmed, "tensorsharp:", out var tensorSharpModel))
+        {
+            return new BenchModel(
+                BenchGroup.Local, trimmed, CleanupProvider.OpenAiCompatible, endpoints.TensorSharp, tensorSharpModel, tensorSharpModel, note);
         }
 
         if (TryStripPrefix(trimmed, "openai:", out var rest))

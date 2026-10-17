@@ -1424,12 +1424,20 @@
                                                         <TextBlock x:Name="LocalAppOllamaDescription" Text="Uses a model you downloaded in Ollama." Style="{StaticResource CardDescription}"/>
                                                     </StackPanel>
                                                 </RadioButton>
-                                                <RadioButton x:Name="LocalAppLmStudioRadio" GroupName="LocalApp" Checked="LocalAppRadio_Checked"
+                                                <RadioButton x:Name="LocalAppLmStudioRadio" GroupName="LocalApp" Margin="0,0,0,8" Checked="LocalAppRadio_Checked"
                                                              AutomationProperties.LabeledBy="{Binding ElementName=LocalAppLmStudioTitle}"
                                                              AutomationProperties.HelpText="{Binding Text, ElementName=LocalAppLmStudioDescription}">
                                                     <StackPanel>
                                                         <TextBlock x:Name="LocalAppLmStudioTitle" Text="LM Studio" Style="{StaticResource CardTitle}"/>
                                                         <TextBlock x:Name="LocalAppLmStudioDescription" Text="Uses a model you downloaded in LM Studio." Style="{StaticResource CardDescription}"/>
+                                                    </StackPanel>
+                                                </RadioButton>
+                                                <RadioButton x:Name="LocalAppTensorSharpRadio" GroupName="LocalApp" Checked="LocalAppRadio_Checked"
+                                                             AutomationProperties.LabeledBy="{Binding ElementName=LocalAppTensorSharpTitle}"
+                                                             AutomationProperties.HelpText="{Binding Text, ElementName=LocalAppTensorSharpDescription}">
+                                                    <StackPanel>
+                                                        <TextBlock x:Name="LocalAppTensorSharpTitle" Text="TensorSharp" Style="{StaticResource CardTitle}"/>
+                                                        <TextBlock x:Name="LocalAppTensorSharpDescription" Text="Uses a GGUF model served by TensorSharp on this PC." Style="{StaticResource CardDescription}"/>
                                                     </StackPanel>
                                                 </RadioButton>
                                             </StackPanel>
@@ -1601,6 +1609,53 @@
                                                         <TextBlock Margin="28,2,0,0" x:Name="LmStudioWholeVocabularyHint" Style="{StaticResource CardDescription}"
                                                                    Text="{x:Static coresettings:LocalModelTuningText.AppWholeVocabularyHint}"/>
                                                         <TextBlock x:Name="LmStudioContextStatusText" Style="{StaticResource CardDescription}" Margin="0,12,0,0"/>
+                                                    </StackPanel>
+                                                </ui:CardExpander>
+
+                                                <!-- TensorSharp's tuning (LocalModelTuning): hardware backend, context size, thinking and vocabulary. -->
+                                                <ui:CardExpander x:Name="TensorSharpTuningExpander" Margin="0,12,0,0" IsExpanded="False"
+                                                                 AutomationProperties.Name="TensorSharp settings">
+                                                    <ui:CardExpander.Header>
+                                                        <StackPanel>
+                                                            <TextBlock Text="TensorSharp settings" Style="{StaticResource CardTitle}"/>
+                                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0"
+                                                                       Text="{x:Static coresettings:LocalModelTuningText.TuningSummary}"/>
+                                                        </StackPanel>
+                                                    </ui:CardExpander.Header>
+                                                    <StackPanel Margin="0,4,0,0">
+                                                        <TextBlock x:Name="TensorSharpBackendTitle" Text="How TensorSharp runs the model" Style="{StaticResource CardTitle}"/>
+                                                        <ComboBox x:Name="TensorSharpBackendCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                                  AutomationProperties.LabeledBy="{Binding ElementName=TensorSharpBackendTitle}"
+                                                                  AutomationProperties.HelpText="{Binding Text, ElementName=TensorSharpBackendHint}"
+                                                                  SelectionChanged="LocalModelTuning_Changed"/>
+                                                        <TextBlock x:Name="TensorSharpBackendHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                                   Text="{x:Static coresettings:LocalModelTuningText.TensorSharpBackendHint}"/>
+
+                                                        <TextBlock x:Name="TensorSharpContextSizeTitle" Text="Context size" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                                        <ComboBox x:Name="TensorSharpContextSizeCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                                  AutomationProperties.LabeledBy="{Binding ElementName=TensorSharpContextSizeTitle}"
+                                                                  AutomationProperties.HelpText="{Binding Text, ElementName=TensorSharpContextSizeHint}"
+                                                                  SelectionChanged="LocalModelTuning_Changed"/>
+                                                        <TextBlock x:Name="TensorSharpContextSizeHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                                   Text="{x:Static coresettings:LocalModelTuningText.TensorSharpContextSizeHint}"/>
+
+                                                        <TextBlock x:Name="TensorSharpReasoningEffortTitle" Text="Thinking before answering" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
+                                                        <ComboBox x:Name="TensorSharpReasoningEffortCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                                  AutomationProperties.LabeledBy="{Binding ElementName=TensorSharpReasoningEffortTitle}"
+                                                                  AutomationProperties.HelpText="{Binding Text, ElementName=TensorSharpReasoningEffortHint}"
+                                                                  SelectionChanged="LocalModelTuning_Changed"/>
+                                                        <TextBlock x:Name="TensorSharpReasoningEffortHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                                   Text="{x:Static coresettings:LocalModelTuningText.TensorSharpReasoningEffortHint}"/>
+
+                                                        <CheckBox x:Name="TensorSharpWholeVocabularyCheck" Style="{StaticResource SettingCheckBox}" Margin="0,16,0,0"
+                                                                  AutomationProperties.LabeledBy="{Binding ElementName=TensorSharpWholeVocabularyTitle}"
+                                                                  AutomationProperties.HelpText="{Binding Text, ElementName=TensorSharpWholeVocabularyHint}"
+                                                                  Checked="LocalModelTuning_Changed" Unchecked="LocalModelTuning_Changed">
+                                                            <TextBlock x:Name="TensorSharpWholeVocabularyTitle" Text="Send your whole vocabulary when it fits" Style="{StaticResource CardTitle}"/>
+                                                        </CheckBox>
+                                                        <TextBlock Margin="28,2,0,0" x:Name="TensorSharpWholeVocabularyHint" Style="{StaticResource CardDescription}"
+                                                                   Text="{x:Static coresettings:LocalModelTuningText.AppWholeVocabularyHint}"/>
+                                                        <TextBlock x:Name="TensorSharpContextStatusText" Style="{StaticResource CardDescription}" Margin="0,12,0,0"/>
                                                     </StackPanel>
                                                 </ui:CardExpander>
                                             </StackPanel>

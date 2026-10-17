@@ -25,7 +25,9 @@ public static class LocalModelTuningText
                 "Another app or an Ollama restart can still free it."
             : app == LocalServerApp.LmStudio
                 ? "LM Studio may still free a model according to its own settings, including with Never."
-                : "The next dictation may take longer after memory is freed.");
+                : app == LocalServerApp.TensorSharp
+                    ? "TensorSharp keeps its hosted model in memory while its server runs."
+                    : "The next dictation may take longer after memory is freed.");
 
     /// <summary>The line under each app's settings expander.</summary>
     public const string TuningSummary =
@@ -64,6 +66,108 @@ public static class LocalModelTuningText
     public const string LmStudioContextSizeHint =
         "How much the model reads at once, in tokens of about 3 or 4 characters. With a size chosen, Scribe loads the model " +
         "at it and frees it after the idle time. A model you loaded yourself in LM Studio keeps its own size.";
+
+    /// <summary>Under TensorSharp's context size.</summary>
+    public const string TensorSharpContextSizeHint =
+        "How much the model reads at once, in tokens of about 3 or 4 characters. Scribe keeps each request within this size " +
+        "and within the window TensorSharp loaded the model with. TensorSharp's setting uses the window TensorSharp started with.";
+
+    /// <summary>TensorSharp's compute backend choice.</summary>
+    public const string TensorSharpBackendTitle = "How TensorSharp runs the model";
+
+    /// <summary>Under TensorSharp's compute backend choice.</summary>
+    public const string TensorSharpBackendHint =
+        "Which hardware TensorSharp uses when it loads the model. GGML CUDA is fastest on NVIDIA graphics cards; GGML Vulkan " +
+        "works across graphics cards; GGML CPU runs on the processor.";
+
+    /// <summary>TensorSharp's thinking effort choice.</summary>
+    public const string TensorSharpReasoningEffortTitle = "Thinking before answering";
+
+    /// <summary>Under TensorSharp's thinking effort choice.</summary>
+    public const string TensorSharpReasoningEffortHint =
+        "Off asks TensorSharp not to think before answering, which is fastest for dictation. Choose Low, Medium or High " +
+        "only for a thinking model that needs extra steps.";
+
+    private static readonly (string Id, string Label)[] DefaultTensorSharpBackends =
+    [
+        ("ggml_cuda", "GGML CUDA (NVIDIA graphics card)"),
+        ("cuda", "Direct CUDA (NVIDIA graphics card)"),
+        ("ggml_vulkan", "GGML Vulkan (graphics card)"),
+        ("ggml_cpu", "GGML CPU (processor)"),
+        ("cpu", "Pure C# CPU (processor)"),
+    ];
+
+    /// <summary>
+    /// The compute backend choices for TensorSharp: TensorSharp's own setting (<c>""</c>), then the backends TensorSharp
+    /// supports (or the known Windows backends before TensorSharp answers). A stored backend is always kept in the list.
+    /// </summary>
+    public static IReadOnlyList<(string Id, string Label)> TensorSharpBackends(
+        IReadOnlyList<(string Id, string Name)>? supported = null, string? stored = null)
+    {
+        var choices = new List<(string Id, string Label)> { (string.Empty, "TensorSharp's setting") };
+        if (supported is { Count: > 0 })
+        {
+            foreach (var (id, _) in supported)
+            {
+                if (!string.IsNullOrWhiteSpace(id))
+                {
+                    choices.Add((id.Trim(), BackendOptionLabel(id.Trim())));
+                }
+            }
+        }
+        else
+        {
+            choices.AddRange(DefaultTensorSharpBackends);
+        }
+
+        var sanitizedStored = LocalModelTuning.SanitizeTensorSharpBackend(stored);
+        if (sanitizedStored.Length > 0 &&
+            !choices.Any(choice => string.Equals(choice.Id, sanitizedStored, StringComparison.OrdinalIgnoreCase)))
+        {
+            choices.Add((sanitizedStored, BackendOptionLabel(sanitizedStored)));
+        }
+
+        return choices;
+    }
+
+    /// <summary>The thinking effort choices for TensorSharp.</summary>
+    public static IReadOnlyList<(string Id, string Label)> TensorSharpReasoningEfforts(string? stored = null)
+    {
+        var choices = new List<(string Id, string Label)>
+        {
+            (string.Empty, "Off (fastest)"),
+            ("low", "Low"),
+            ("medium", "Medium"),
+            ("high", "High"),
+        };
+
+        var sanitizedStored = LocalModelTuning.SanitizeTensorSharpReasoningEffort(stored);
+        if (sanitizedStored.Length > 0 &&
+            !choices.Any(choice => string.Equals(choice.Id, sanitizedStored, StringComparison.OrdinalIgnoreCase)))
+        {
+            choices.Add((sanitizedStored, sanitizedStored));
+        }
+
+        return choices;
+    }
+
+    /// <summary>What Settings calls a TensorSharp backend id in a status line.</summary>
+    public static string BackendDisplayName(string? backendId) => backendId?.Trim().ToLowerInvariant() switch
+    {
+        "ggml_cuda" => "GGML CUDA",
+        "cuda" => "Direct CUDA",
+        "ggml_vulkan" => "GGML Vulkan",
+        "ggml_metal" => "GGML Metal",
+        "ggml_cpu" => "GGML CPU",
+        "cpu" => "Pure C# CPU",
+        { Length: > 0 } other => other,
+        _ => "TensorSharp's default",
+    };
+
+    private static string BackendOptionLabel(string backendId) =>
+        DefaultTensorSharpBackends.FirstOrDefault(known =>
+            string.Equals(known.Id, backendId, StringComparison.OrdinalIgnoreCase)).Label
+        ?? BackendDisplayName(backendId);
 
     /// <summary>
     /// The context size choices: the app's own setting (0), then <see cref="ContextBudget.OfferedSizes"/>. A stored size
@@ -106,7 +210,9 @@ public static class LocalModelTuningText
         var context = inUse > 0
             ? $"The model is reading up to {Count(inUse)} tokens."
             : asked > 0
-                ? $"Scribe asks for {Count(asked)} tokens when the model loads."
+                ? string.Equals(appName, "TensorSharp", StringComparison.Ordinal)
+                    ? $"Scribe keeps requests within {Count(asked)} tokens."
+                    : $"Scribe asks for {Count(asked)} tokens when the model loads."
                 : $"{appName} sets the size when it loads the model.";
         if (vocabularyTokens <= 0)
         {

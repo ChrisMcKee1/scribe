@@ -162,8 +162,12 @@ public static class SettingsChangeTracker
             baseline.AiCleanupPromptCaching != draft.AiCleanupPromptCaching ||
             baseline.AiCleanupOllamaContextTokens != draft.AiCleanupOllamaContextTokens ||
             baseline.AiCleanupLmStudioContextTokens != draft.AiCleanupLmStudioContextTokens ||
+            baseline.AiCleanupTensorSharpContextTokens != draft.AiCleanupTensorSharpContextTokens ||
             baseline.AiCleanupOllamaSendWholeVocabulary != draft.AiCleanupOllamaSendWholeVocabulary ||
             baseline.AiCleanupLmStudioSendWholeVocabulary != draft.AiCleanupLmStudioSendWholeVocabulary ||
+            baseline.AiCleanupTensorSharpSendWholeVocabulary != draft.AiCleanupTensorSharpSendWholeVocabulary ||
+            !Same(baseline.AiCleanupTensorSharpBackend, draft.AiCleanupTensorSharpBackend) ||
+            !Same(baseline.AiCleanupTensorSharpReasoningEffort, draft.AiCleanupTensorSharpReasoningEffort) ||
             baseline.AiCleanupFoundryLocalSendWholeVocabulary != draft.AiCleanupFoundryLocalSendWholeVocabulary ||
             !Same(baseline.AiCleanupWritingStyle, draft.AiCleanupWritingStyle) ||
             baseline.AiCleanupPromptStyle != draft.AiCleanupPromptStyle ||

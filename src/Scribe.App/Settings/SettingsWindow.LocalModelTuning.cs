@@ -23,15 +23,69 @@ public partial class SettingsWindow
     private int SelectedLmStudioContextTokens =>
         (LmStudioContextSizeCombo?.SelectedItem as ComboBoxItem)?.Tag is int tokens ? tokens : 0;
 
+    private int SelectedTensorSharpContextTokens =>
+        (TensorSharpContextSizeCombo?.SelectedItem as ComboBoxItem)?.Tag is int tokens ? tokens : 0;
+
+    private string SelectedTensorSharpBackend =>
+        (TensorSharpBackendCombo?.SelectedItem as ComboBoxItem)?.Tag is string backend ? backend : string.Empty;
+
+    private string SelectedTensorSharpReasoningEffort =>
+        (TensorSharpReasoningEffortCombo?.SelectedItem as ComboBoxItem)?.Tag is string effort ? effort : string.Empty;
+
     // Shows the saved tuning of every app; each app's controls are its own.
     private void LoadLocalModelTuning()
     {
         FillContextSizes(OllamaContextSizeCombo, "Ollama", _settings.AiCleanupOllamaContextTokens);
         FillContextSizes(LmStudioContextSizeCombo, "LM Studio", _settings.AiCleanupLmStudioContextTokens);
+        FillContextSizes(TensorSharpContextSizeCombo, "TensorSharp", _settings.AiCleanupTensorSharpContextTokens);
+        FillTensorSharpBackends(null, _settings.AiCleanupTensorSharpBackend);
+        FillTensorSharpReasoningEfforts(_settings.AiCleanupTensorSharpReasoningEffort);
         OllamaWholeVocabularyCheck.IsChecked = _settings.AiCleanupOllamaSendWholeVocabulary;
         LmStudioWholeVocabularyCheck.IsChecked = _settings.AiCleanupLmStudioSendWholeVocabulary;
+        TensorSharpWholeVocabularyCheck.IsChecked = _settings.AiCleanupTensorSharpSendWholeVocabulary;
         FoundryWholeVocabularyCheck.IsChecked = _settings.AiCleanupFoundryLocalSendWholeVocabulary;
         UpdateLocalModelTuning();
+    }
+
+    private void FillTensorSharpBackends(IReadOnlyList<(string Id, string Name)>? supported, string? stored)
+    {
+        if (TensorSharpBackendCombo is null)
+        {
+            return;
+        }
+
+        var wasLoading = _loadingUi;
+        _loadingUi = true;
+        try
+        {
+            var sanitized = LocalModelTuning.SanitizeTensorSharpBackend(stored);
+            TensorSharpBackendCombo.ItemsSource = LocalModelTuningText.TensorSharpBackends(supported, sanitized)
+                .Select(choice => new ComboBoxItem { Content = choice.Label, Tag = choice.Id })
+                .ToList();
+            TensorSharpBackendCombo.SelectedItem = (TensorSharpBackendCombo.ItemsSource as IEnumerable<ComboBoxItem>)?
+                .FirstOrDefault(item => item.Tag is string id && string.Equals(id, sanitized, StringComparison.OrdinalIgnoreCase))
+                ?? (TensorSharpBackendCombo.ItemsSource as IEnumerable<ComboBoxItem>)?.FirstOrDefault();
+        }
+        finally
+        {
+            _loadingUi = wasLoading;
+        }
+    }
+
+    private void FillTensorSharpReasoningEfforts(string? stored)
+    {
+        if (TensorSharpReasoningEffortCombo is null)
+        {
+            return;
+        }
+
+        var sanitized = LocalModelTuning.SanitizeTensorSharpReasoningEffort(stored);
+        TensorSharpReasoningEffortCombo.ItemsSource = LocalModelTuningText.TensorSharpReasoningEfforts(sanitized)
+            .Select(choice => new ComboBoxItem { Content = choice.Label, Tag = choice.Id })
+            .ToList();
+        TensorSharpReasoningEffortCombo.SelectedItem = (TensorSharpReasoningEffortCombo.ItemsSource as IEnumerable<ComboBoxItem>)?
+            .FirstOrDefault(item => item.Tag is string id && string.Equals(id, sanitized, StringComparison.OrdinalIgnoreCase))
+            ?? (TensorSharpReasoningEffortCombo.ItemsSource as IEnumerable<ComboBoxItem>)?.FirstOrDefault();
     }
 
     private static void FillContextSizes(ComboBox combo, string appName, int stored)
@@ -60,7 +114,8 @@ public partial class SettingsWindow
     // Which app's settings show, and each status line.
     private void UpdateLocalModelTuning()
     {
-        if (OllamaTuningExpander is null || LmStudioTuningExpander is null || FoundryContextStatusText is null)
+        if (OllamaTuningExpander is null || LmStudioTuningExpander is null || TensorSharpTuningExpander is null ||
+            FoundryContextStatusText is null)
         {
             return;
         }
@@ -69,6 +124,7 @@ public partial class SettingsWindow
         AiIdleReleaseHintText.Text = LocalModelTuningText.IdleReleaseHint(app);
         OllamaTuningExpander.Visibility = app == LocalServerApp.Ollama ? Visibility.Visible : Visibility.Collapsed;
         LmStudioTuningExpander.Visibility = app == LocalServerApp.LmStudio ? Visibility.Visible : Visibility.Collapsed;
+        TensorSharpTuningExpander.Visibility = app == LocalServerApp.TensorSharp ? Visibility.Visible : Visibility.Collapsed;
 
         var model = SelectedLocalAppModel;
         var state = _localAppStateFor == app ? _localAppState : null;
@@ -101,6 +157,24 @@ public partial class SettingsWindow
             _wholeVocabularyTokens,
             VocabularyRoomAt(lmStudioInUse > 0 ? lmStudioInUse : lmStudioAsked));
 
+        // TensorSharp: Scribe fits requests to the smaller of any chosen context size and the window TensorSharp loaded the
+        // model with.
+        var tensorSharpAsked = SelectedTensorSharpContextTokens;
+        var tensorSharpLive = app != LocalServerApp.TensorSharp
+            ? 0
+            : state is { Reach: LocalServerReach.Reached } && loaded > 0
+                ? loaded
+                : ServedLocalContext(LocalServerApp.TensorSharp, model, tensorSharpAsked);
+        var tensorSharpInUse = tensorSharpLive > 0 && tensorSharpAsked > 0
+            ? Math.Min(tensorSharpLive, tensorSharpAsked)
+            : tensorSharpLive;
+        TensorSharpContextStatusText.Text = LocalModelTuningText.ContextStatus(
+            "TensorSharp",
+            tensorSharpInUse,
+            tensorSharpAsked,
+            _wholeVocabularyTokens,
+            VocabularyRoomAt(tensorSharpInUse > 0 ? tensorSharpInUse : tensorSharpAsked));
+
         // Foundry Local says what its model reads only once it serves the saved model.
         var foundryInUse = SavedActiveFoundryModelMatches(SelectedFoundryModelAlias) && _cleanup.Status == CleanupStatus.Ready
             ? _cleanup.LocalContextTokens
@@ -114,14 +188,23 @@ public partial class SettingsWindow
     private int ServedLocalContext(LocalServerApp app, string? model, int asked)
     {
         var committed = _committedSettings;
-        var committedSize = app == LocalServerApp.Ollama
-            ? committed.AiCleanupOllamaContextTokens
-            : committed.AiCleanupLmStudioContextTokens;
+        var committedSize = app switch
+        {
+            LocalServerApp.Ollama => committed.AiCleanupOllamaContextTokens,
+            LocalServerApp.TensorSharp => committed.AiCleanupTensorSharpContextTokens,
+            _ => committed.AiCleanupLmStudioContextTokens,
+        };
+        var backendMatches = app != LocalServerApp.TensorSharp ||
+            string.Equals(
+                LocalModelTuning.SanitizeTensorSharpBackend(committed.AiCleanupTensorSharpBackend),
+                LocalModelTuning.SanitizeTensorSharpBackend(SelectedTensorSharpBackend),
+                StringComparison.OrdinalIgnoreCase);
         return committed.EnableAiCleanup &&
             committed.AiCleanupProvider == CleanupProvider.OpenAiCompatible &&
             LocalAiServer.AppAt(committed.AiCleanupCustomEndpoint) == app &&
             LocalServerClient.SameModel(committed.AiCleanupCustomModel, model) &&
             ContextBudget.Sanitize(committedSize) == ContextBudget.Sanitize(asked) &&
+            backendMatches &&
             _cleanup.Status == CleanupStatus.Ready
                 ? _cleanup.LocalContextTokens
                 : 0;

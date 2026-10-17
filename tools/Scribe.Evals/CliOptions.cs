@@ -63,6 +63,7 @@ internal sealed class CliOptions
     public string? BenchCasesFrom { get; private set; }
     public string OllamaEndpoint { get; private set; } = BenchEndpoints.DefaultOllama;
     public string LmStudioEndpoint { get; private set; } = BenchEndpoints.DefaultLmStudio;
+    public string TensorSharpEndpoint { get; private set; } = BenchEndpoints.DefaultTensorSharp;
     public bool KeepServerModelsLoaded { get; private set; }
 
     // Blind judging of retained outputs (see Benchmark.BlindJudge).
@@ -144,7 +145,7 @@ internal sealed class CliOptions
             SendWholeVocabulary = BenchWholeVocabulary,
             AdmitRequests = BenchAdmitted,
             PaceMs = BenchPaceMs,
-            LocalEndpoints = new BenchEndpoints(OllamaEndpoint, LmStudioEndpoint),
+            LocalEndpoints = new BenchEndpoints(OllamaEndpoint, LmStudioEndpoint, TensorSharpEndpoint),
             KeepServerModelsLoaded = KeepServerModelsLoaded,
             CasesFrom = BenchCasesFrom,
             ReasoningEffort = BenchReasoningEffort,
@@ -231,7 +232,7 @@ internal sealed class CliOptions
                     {
                         "azure" or "azurefoundry" or "cloud" => CleanupProvider.AzureFoundry,
                         "copilot" or "githubcopilot" or "github" => CleanupProvider.GitHubCopilot,
-                        "openai" or "openaicompatible" or "custom" or "ollama" or "lmstudio" => CleanupProvider.OpenAiCompatible,
+                        "openai" or "openaicompatible" or "custom" or "ollama" or "lmstudio" or "tensorsharp" => CleanupProvider.OpenAiCompatible,
                         _ => CleanupProvider.FoundryLocal,
                     };
                     break;
@@ -403,6 +404,9 @@ internal sealed class CliOptions
                     break;
                 case "--lmstudio-endpoint":
                     o.LmStudioEndpoint = RequireValue(Next(), "--lmstudio-endpoint");
+                    break;
+                case "--tensorsharp-endpoint":
+                    o.TensorSharpEndpoint = RequireValue(Next(), "--tensorsharp-endpoint");
                     break;
                 case "--keep-loaded":
                     o.KeepServerModelsLoaded = true;

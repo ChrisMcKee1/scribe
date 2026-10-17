@@ -322,6 +322,8 @@ public sealed class LocalAiServerTests
         Assert.Contains("loaded indefinitely with each new request", CleanupDisclosure.ManagesALocalApp, StringComparison.Ordinal);
         Assert.Contains("indefinitely with each new request", policy, StringComparison.Ordinal);
         Assert.Contains("LM Studio keeps its own policy with Never", policy, StringComparison.Ordinal);
+        Assert.Contains("TensorSharp keeps its hosted model in memory while its server runs.", CleanupDisclosure.ManagesALocalApp, StringComparison.Ordinal);
+        Assert.Contains("TensorSharp keeps its hosted model in memory while its server runs.", policy, StringComparison.Ordinal);
     }
 
     private static ScriptedHttpHandler Capturing(List<JsonElement> bodies) => new(async (request, ct) =>

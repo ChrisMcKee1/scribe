@@ -60,14 +60,14 @@ public static class CleanupDisclosure
     /// </summary>
     public static string WholeVocabularyOnThisPc { get; } =
         "With \"" + Settings.LocalModelTuningText.WholeVocabularyTitle + "\" on for a model on this PC (Foundry Local, " +
-        "Ollama or LM Studio), each request carries all of that vocabulary when it fits in the model's context with the " +
+        "Ollama, LM Studio or TensorSharp), each request carries all of that vocabulary when it fits in the model's context with the " +
         "dictation, and otherwise the words the dictation appears to mention first, then as many others as fit. None of " +
         "it leaves this PC. Experimental vocabulary compaction can group different things Scribe hears for the same " +
         "spelling on one line, without removing any of them.";
 
     /// <summary>
-    /// What Scribe asks Ollama or LM Studio itself (<see cref="LocalServerClient"/>): the models it has and holds, and to
-    /// free one. Declared before the card that quotes it.
+    /// What Scribe asks Ollama, LM Studio or TensorSharp itself (<see cref="LocalServerClient"/>): the models it has and holds,
+    /// and to free or load one. Declared before the card that quotes it.
     /// </summary>
     public static string ManagesALocalApp { get; } =
         "With Ollama or LM Studio at its own address on this PC, Scribe also asks that app, including as each dictation " +
@@ -75,7 +75,10 @@ public static class CleanupDisclosure
         "memory when AI cleanup stops using it, and, with a context size chosen for LM Studio, to load the model at that " +
         "size with a request holding the word \"ok\"; these requests stay on this PC and carry nothing you said, only an " +
         "API key you saved for that address, if any. With Never selected for idle memory, Scribe asks Ollama to keep its " +
-        "model loaded indefinitely with each new request. LM Studio keeps its own policy with Never.";
+        "model loaded indefinitely with each new request. LM Studio keeps its own policy with Never. With TensorSharp at its " +
+        "own address on this PC, Scribe asks which models and hardware options it has, which model is loaded and how much it " +
+        "reads at once, and, when nothing is loaded or a hardware option is chosen in TensorSharp settings, asks it to load " +
+        "the model on that hardware; TensorSharp keeps its hosted model in memory while its server runs.";
 
     /// <summary>The same card's second paragraph: the connection check, the readying request, and what is never sent.</summary>
     public static string WhatCleanupNeverSends { get; } =

@@ -60,6 +60,11 @@ internal sealed partial class TextCleanupService
     private CleanupOptions? _lmStudioRefusedFor;
     private int _lmStudioRefusedTarget;
 
+    // TensorSharp: the backend it refused to load the model on, and the configuration it refused it for, so Scribe does not
+    // ask for the refused backend again on every recording. Guarded by _gate.
+    private CleanupOptions? _tensorSharpRefusedFor;
+    private string? _tensorSharpRefusedBackend;
+
     /*
      * One LM Studio load at a time, with what follows it: the read it decides by, unloading a copy at another size, the
      * load, and settling the copy it made (SettleLoadedCopyAsync). A load Scribe stopped waiting for (its configuration was
@@ -69,6 +74,7 @@ internal sealed partial class TextCleanupService
      * waiting for the model uses in flight, so a release (which waits for them) and the lane cannot wait on each other.
      */
     private readonly SemaphoreSlim _lmStudioLane = new(1, 1);
+    private readonly SemaphoreSlim _tensorSharpLane = new(1, 1);
 
     /*
      * LM Studio copies Scribe loaded that no configuration owns: one Test connection loaded, one whose settings were replaced
@@ -116,10 +122,11 @@ internal sealed partial class TextCleanupService
         options.Provider == CleanupProvider.FoundryLocal ||
         LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) != LocalServerApp.None;
 
-    // The size Scribe asks Ollama or LM Studio for; null leaves the context to the app's own setting.
+    // The size Scribe asks Ollama, LM Studio or TensorSharp for; null leaves the context to the app's own setting.
     private static int? AskedContextTokens(CleanupOptions options) =>
         options.LocalContextTokens is > 0 and var tokens &&
-        LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) is LocalServerApp.Ollama or LocalServerApp.LmStudio
+        LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) is
+            LocalServerApp.Ollama or LocalServerApp.LmStudio or LocalServerApp.TensorSharp
             ? ContextBudget.Sanitize(tokens)
             : null;
 
@@ -139,9 +146,16 @@ internal sealed partial class TextCleanupService
                 : asked;
         }
 
-        return _localContextTokens > 0 && _localContextFor is { } learnedFor && learnedFor.MatchesIgnoringPrompt(options)
+        var observed = _localContextTokens > 0 && _localContextFor is { } learnedFor && learnedFor.MatchesIgnoringPrompt(options)
             ? _localContextTokens
-            : null;
+            : (int?)null;
+        if (LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) == LocalServerApp.TensorSharp &&
+            AskedContextTokens(options) is { } tensorSharpAsked)
+        {
+            return observed is { } live ? Math.Min(tensorSharpAsked, live) : tensorSharpAsked;
+        }
+
+        return observed;
     }
 
     // Must be called under _gate. The context a request for this configuration fits into: what is known, or the assumed size.
@@ -171,7 +185,8 @@ internal sealed partial class TextCleanupService
             }
 
             var settled = afterOwnRequest ||
-                LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) == LocalServerApp.LmStudio;
+                LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) is
+                    LocalServerApp.LmStudio or LocalServerApp.TensorSharp;
             _localContextTokens = settled ? tokens : Math.Min(tokens, ContextTokensLocked(options));
             _localContextFor = options;
         }
@@ -390,6 +405,171 @@ internal sealed partial class TextCleanupService
         }
 
         return target > 0 && LmStudioCopyIsOtherSize(held, target) && !LmStudioRefusedSize(options, target);
+    }
+
+    private bool TensorSharpRefusedBackend(CleanupOptions options, string targetBackend)
+    {
+        lock (_gate)
+        {
+            return _tensorSharpRefusedFor is { } refusedFor &&
+                refusedFor.MatchesIgnoringPrompt(options) &&
+                string.Equals(_tensorSharpRefusedBackend, targetBackend, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private void NoteTensorSharpRefusedBackend(CleanupOptions options, string targetBackend)
+    {
+        lock (_gate)
+        {
+            if (_options.MatchesIgnoringPrompt(options))
+            {
+                _tensorSharpRefusedFor = options;
+                _tensorSharpRefusedBackend = targetBackend;
+            }
+        }
+    }
+
+    private void ForgetTensorSharpRefusal(CleanupOptions options, string? heldBackend = null)
+    {
+        lock (_gate)
+        {
+            if (!_options.MatchesIgnoringPrompt(options))
+            {
+                return;
+            }
+
+            if (_tensorSharpRefusedFor is { } refusedFor &&
+                (!refusedFor.MatchesIgnoringPrompt(options) ||
+                 string.Equals(heldBackend, _tensorSharpRefusedBackend, StringComparison.OrdinalIgnoreCase)))
+            {
+                _tensorSharpRefusedFor = null;
+                _tensorSharpRefusedBackend = null;
+            }
+        }
+    }
+
+    // True when ReconcileTensorSharpAsync will load or reload the model on TensorSharp (either nothing is loaded, or a
+    // different compute backend was chosen and not yet refused).
+    private bool TensorSharpWouldReload(CleanupOptions options, LocalServerState state)
+    {
+        if (LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) != LocalServerApp.TensorSharp ||
+            options.CustomModel is not { } model || state.Reach != LocalServerReach.Reached)
+        {
+            return false;
+        }
+
+        var requestedBackend = LocalModelTuning.SanitizeTensorSharpBackend(options.TensorSharpBackend);
+        if (requestedBackend.Length > 0 && TensorSharpRefusedBackend(options, requestedBackend))
+        {
+            return false;
+        }
+
+        if (state.LoadedFor(model) is not { } held)
+        {
+            return state.Loaded.Count == 0 && state.Models.Any(listed => LocalServerClient.SameModel(listed.Id, model));
+        }
+
+        return requestedBackend.Length > 0 &&
+            !string.Equals(held.Backend, requestedBackend, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<bool> ReconcileTensorSharpAsync(CleanupOptions options, LocalServerState? state, CancellationToken ct)
+    {
+        if (LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) != LocalServerApp.TensorSharp ||
+            options.CustomEndpoint is not { } endpoint || options.CustomModel is not { } model)
+        {
+            return false;
+        }
+
+        if (!_tensorSharpLane.Wait(0))
+        {
+            await _tensorSharpLane.WaitAsync(ct).ConfigureAwait(false);
+            state = null;
+        }
+
+        try
+        {
+            try
+            {
+                using var readBound = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                readBound.CancelAfter(LocalContextReadBound);
+                state ??= await LocalServers.ReadAsync(endpoint, options.CustomApiKey, readBound.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return false;
+            }
+
+            if (state.Reach != LocalServerReach.Reached)
+            {
+                ForgetObservedContext(options);
+                return false;
+            }
+
+            var held = state.LoadedFor(model);
+            var requestedBackend = LocalModelTuning.SanitizeTensorSharpBackend(options.TensorSharpBackend);
+            ForgetTensorSharpRefusal(options, held?.Backend);
+
+            if ((requestedBackend.Length > 0 && TensorSharpRefusedBackend(options, requestedBackend)) ||
+                (held is null && (state.Loaded.Count > 0 || !state.Models.Any(listed => LocalServerClient.SameModel(listed.Id, model)))) ||
+                (held is not null && (requestedBackend.Length == 0 || string.Equals(held.Backend, requestedBackend, StringComparison.OrdinalIgnoreCase))))
+            {
+                if (held is { ContextTokens: > 0 })
+                {
+                    NoteObservedContext(options, held.ContextTokens, afterOwnRequest: false);
+                }
+
+                return false;
+            }
+
+            if (TryBeginLocalChange() is not { } change)
+            {
+                if (held is { ContextTokens: > 0 })
+                {
+                    NoteObservedContext(options, held.ContextTokens, afterOwnRequest: false);
+                }
+
+                return false;
+            }
+
+            bool loaded;
+            try
+            {
+                loaded = await LocalServers.LoadTensorSharpAsync(
+                    endpoint, model, requestedBackend.Length > 0 ? requestedBackend : null, options.CustomApiKey, _lifetime.Token)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                change.TrySetResult();
+            }
+
+            _log.LogInformation(
+                "AI cleanup asked TensorSharp to load its model (backend={Backend}): {Loaded}.",
+                requestedBackend.Length > 0 ? requestedBackend : "default",
+                loaded);
+            if (!loaded)
+            {
+                if (requestedBackend.Length > 0)
+                {
+                    NoteTensorSharpRefusedBackend(options, requestedBackend);
+                }
+
+                if (held is { ContextTokens: > 0 })
+                {
+                    NoteObservedContext(options, held.ContextTokens, afterOwnRequest: false);
+                }
+
+                return false;
+            }
+
+            await LearnLocalContextAsync(options, ct).ConfigureAwait(false);
+            return true;
+        }
+        finally
+        {
+            _tensorSharpLane.Release();
+        }
     }
 
     /*
@@ -1153,6 +1333,12 @@ internal sealed partial class TextCleanupService
 
     private int LocalReasoningReserve(CleanupOptions options)
     {
+        if (LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) == LocalServerApp.TensorSharp &&
+            LocalModelTuning.SanitizeTensorSharpReasoningEffort(options.TensorSharpReasoningEffort).Length > 0)
+        {
+            return LocalReasoningHeadroomTokens;
+        }
+
         var allowance = Volatile.Read(ref _localReasoningAllowance);
         return allowance is not null && allowance.Options.MatchesIgnoringPrompt(options) &&
             allowance.PlainRequests == SendsPlainRequests(options)
@@ -1242,6 +1428,7 @@ internal sealed partial class TextCleanupService
             using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
             bounded.CancelAfter(LocalServerPrepareBound);
             await ReconcileLmStudioAsync(options, state: null, bounded.Token).ConfigureAwait(false);
+            await ReconcileTensorSharpAsync(options, state: null, bounded.Token).ConfigureAwait(false);
             var state = await LocalServers.ReadAsync(endpoint, options.CustomApiKey, bounded.Token).ConfigureAwait(false);
             if (state.LoadedFor(model) is { ContextTokens: > 0 } held)
             {
@@ -1304,11 +1491,15 @@ internal sealed partial class TextCleanupService
     private bool InstructionsFitLocked(CleanupOptions options) =>
         !FitsLocalContext(options) || LeavesRoomForDictationLocked(options, style: null);
 
-    // What makes room, for the app that runs the model: Foundry Local's context comes with its model.
+    // What makes room, for the app that runs the model: Foundry Local's context comes with its model, and TensorSharp's
+    // engine window is set when TensorSharp starts unless capped lower in Scribe.
     private static string ContextAdvice(CleanupOptions options) =>
         options.Provider == CleanupProvider.FoundryLocal
             ? "Another model or shorter instructions make room."
-            : "A larger context size or shorter instructions make room.";
+            : LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) == LocalServerApp.TensorSharp &&
+              AskedContextTokens(options) is null
+                ? "Starting TensorSharp with a larger context window or using shorter instructions makes room."
+                : "A larger context size or shorter instructions make room.";
 
     // AI cleanup cannot run on this model: its instructions leave no room for a dictation in what it reads at once.
     private static CleanupReason ContextTooSmallReason(CleanupOptions options) => CleanupReason.Same(
@@ -1480,7 +1671,15 @@ internal sealed partial class TextCleanupService
             }
 
             var state = await LocalServers.ReadAsync(endpoint, candidate.CustomApiKey, bounded.Token).ConfigureAwait(false);
-            return state.LoadedFor(model)?.ContextTokens is > 0 and var tokens ? tokens : ContextBudget.AssumedContextTokens;
+            var live = state.LoadedFor(model)?.ContextTokens is > 0 and var tokens ? tokens : (int?)null;
+            if (LocalAiServer.AppServing(candidate.Provider, candidate.CustomEndpoint) == LocalServerApp.TensorSharp)
+            {
+                return asked is { } tensorSharpAsked && live is { } tensorSharpLive
+                    ? Math.Min(tensorSharpAsked, tensorSharpLive)
+                    : asked ?? live ?? ContextBudget.AssumedContextTokens;
+            }
+
+            return live ?? ContextBudget.AssumedContextTokens;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {

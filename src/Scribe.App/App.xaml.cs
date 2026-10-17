@@ -130,6 +130,14 @@ public partial class App : Application
         var requestedPage = RequestedSettingsPage(e.Args, out var hasSettingsSwitch);
         if (!isNew)
         {
+            // When both Windows Restart Manager and Start with Windows launch Scribe after an OS update reboot, the
+            // duplicate restart instance exits quietly without opening Settings or showing a notice.
+            if (ApplicationRestartRegistration.HasRestartedSwitch(e.Args))
+            {
+                Shutdown();
+                return;
+            }
+
             // Hand the request to the running instance rather than telling the user to go find the
             // tray icon themselves. Only fall back to the notice when the signal cannot be raised.
             if (TrySignalShowSettings(requestedPage))
@@ -736,6 +744,7 @@ public partial class App : Application
         // An isolated data folder (SCRIBE_DATA_DIR) never reconciles: its preference belongs to a
         // scratch profile, while the Run entry or task belongs to the installed app, which a
         // direct-download build would otherwise delete or repoint at this build.
+        ApplicationRestartRegistration.TryRegisterForUpdateRestart(paths.IsIsolatedRoot, log);
         if (paths.IsIsolatedRoot)
         {
             log.LogInformation("Startup registration not reconciled: this instance uses an isolated data folder.");

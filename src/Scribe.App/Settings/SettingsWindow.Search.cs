@@ -415,6 +415,12 @@ public partial class SettingsWindow
             case "LmStudioWholeVocabularyCheck":
                 LmStudioTuningExpander.IsExpanded = true;
                 break;
+            case "TensorSharpBackendCombo":
+            case "TensorSharpContextSizeCombo":
+            case "TensorSharpReasoningEffortCombo":
+            case "TensorSharpWholeVocabularyCheck":
+                TensorSharpTuningExpander.IsExpanded = true;
+                break;
             case "FoundryWholeVocabularyCheck":
                 FoundryTuningExpander.IsExpanded = true;
                 break;

@@ -300,6 +300,11 @@ needed, whatever that time. These requests go
 only to that app on this PC and carry nothing you said, only an API key you
 saved for that address, if any: the one saved now, as cleanup requests carry, or,
 to free a copy Scribe loaded with a key you have since replaced, that earlier key.
+With TensorSharp at its own address on this PC, Scribe asks which models and
+hardware options it has, which model is loaded and how much it reads at once, and,
+when nothing is loaded or a hardware option is chosen in TensorSharp settings,
+asks TensorSharp to load the model on that hardware; TensorSharp keeps its hosted
+model in memory while its server runs.
 
 On macOS, with a context size chosen for Ollama, each native cleanup or readying
 request first asks the configured local address for that model's context limit.

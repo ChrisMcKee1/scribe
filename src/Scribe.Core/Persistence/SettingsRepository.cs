@@ -872,6 +872,9 @@ public sealed class SettingsRepository : ISettingsRepository
         // the bounds Scribe asks for.
         settings.AiCleanupOllamaContextTokens = Cleanup.ContextBudget.Sanitize(settings.AiCleanupOllamaContextTokens);
         settings.AiCleanupLmStudioContextTokens = Cleanup.ContextBudget.Sanitize(settings.AiCleanupLmStudioContextTokens);
+        settings.AiCleanupTensorSharpContextTokens = Cleanup.ContextBudget.Sanitize(settings.AiCleanupTensorSharpContextTokens);
+        settings.AiCleanupTensorSharpBackend = Cleanup.LocalModelTuning.SanitizeTensorSharpBackend(settings.AiCleanupTensorSharpBackend);
+        settings.AiCleanupTensorSharpReasoningEffort = Cleanup.LocalModelTuning.SanitizeTensorSharpReasoningEffort(settings.AiCleanupTensorSharpReasoningEffort);
 
         return settings;
     }

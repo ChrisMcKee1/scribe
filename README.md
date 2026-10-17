@@ -85,7 +85,7 @@ wrong and what to do next. Put it in any of nine places on screen, or turn it of
 <tr>
 <td width="50%" valign="top">
 <a href="docs/screenshots/ai-cleanup.png"><img src="docs/screenshots/ai-cleanup.png" alt="The AI cleanup page: Use AI cleanup on, On this PC chosen from the four places it can run, and How to run it with Let Scribe manage it chosen over Ollama and LM Studio, with Scribe's model list below" /></a><br />
-<b>AI cleanup.</b> Optional. Fixes punctuation, drops fillers, keeps only what you meant when you correct yourself and writes lists as lists, on this PC with Scribe, Ollama or LM Studio, or with the AI service you choose. Until it's ready, Scribe types what it hears.
+<b>AI cleanup.</b> Optional. Fixes punctuation, drops fillers, keeps only what you meant when you correct yourself and writes lists as lists, on this PC with Scribe, Ollama, LM Studio or TensorSharp, or with the AI service you choose. Until it's ready, Scribe types what it hears.
 </td>
 <td width="50%" valign="top">
 <a href="docs/screenshots/dictionary.png"><img src="docs/screenshots/dictionary.png" alt="The Dictionary page's Your words tab: 13 words, such as dot net written as .NET and cube control as kubectl, next to the Word packs tab showing 2 of 11 on" /></a><br />
@@ -181,13 +181,14 @@ the text is typed. You choose where it runs:
   - **Let Scribe manage it,** with [Foundry Local](https://learn.microsoft.com/azure/ai-foundry/foundry-local/).
     Setting it up downloads the AI runtime for your PC and the model you pick, which can take several GB,
     and Scribe removes them if you move AI cleanup elsewhere.
-  - **Ollama** or **LM Studio**, if you already have one. Scribe lists the models you downloaded in it, shows
-    how much memory the model uses, and has the app free that memory after the time you set without a
-    dictation, when you pause dictation, when AI cleanup stops using the model, and when you choose **Free
-    memory**. That unloads it for any other app that uses the same model too. A small open model does the
-    job: Gemma 4 E2B cleans a dictation in about a third of a second on a recent NVIDIA graphics card. If
-    you set LM Studio to require an API key, choose **Another AI service** instead and enter its address
-    and key there.
+  - **Ollama**, **LM Studio** or **TensorSharp**, if you already have one. Scribe lists the models you have in it and
+    shows how much memory the loaded model uses. For Ollama and LM Studio, Scribe has the app free that memory after the
+    time you set without a dictation, when you pause dictation, when AI cleanup stops using the model, and when you choose
+    **Free memory** (which unloads it for any other app that uses the same model too); TensorSharp keeps its hosted GGUF
+    model in memory while its server runs and lets you choose which hardware backend (`GGML CUDA`, `Direct CUDA`, `GGML
+    Vulkan`, `GGML CPU`, `Pure C# CPU`) and thinking effort to run it with. A small open model does the job: Gemma 4 E2B
+    cleans a dictation in about a third of a second on a recent NVIDIA graphics card. If you set LM Studio or TensorSharp
+    to require an API key, choose **Another AI service** instead and enter its address and key there.
   - Each app's own settings, folded away under it, choose its **Context size** (how much the model reads at
     once) and whether to **Send your whole vocabulary when it fits** rather than just the words a dictation
     mentions. Every request is kept to what the model's context holds, your dictation first.

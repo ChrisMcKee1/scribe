@@ -727,6 +727,143 @@ public sealed class LocalContextServiceTests
 
     private static string ChatSystemMessage(JsonElement body) => SystemMessage(body);
 
+    private static string UserMessage(JsonElement body) =>
+        body.GetProperty("messages").EnumerateArray()
+            .First(message => message.GetProperty("role").GetString() == "user")
+            .GetProperty("content").GetString()!;
+
+    [Theory]
+    [InlineData("", "ggml_cuda", false, null)]
+    [InlineData("low", "ggml_vulkan", true, "low")]
+    [InlineData("medium", "cuda", true, "medium")]
+    [InlineData("high", "ggml_cpu", true, "high")]
+    public async Task TensorSharp_tuning_applies_backend_context_thinking_and_prefix_cache_friendly_glossary(
+        string effort, string backend, bool expectedThink, string? expectedEffort)
+    {
+        const string model = "gemma-4-26B-A4B-it-UD-IQ3_S.gguf";
+        var bodies = new List<JsonElement>();
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct)).RootElement.Clone();
+            lock (bodies)
+            {
+                bodies.Add(body);
+            }
+
+            // TensorSharp rejects reasoning_effort: "none" with HTTP 400.
+            if (body.TryGetProperty("reasoning_effort", out var re) && re.GetString() == "none")
+            {
+                return ScriptedHttpHandler.Json(HttpStatusCode.BadRequest, """{"error":{"message":"reasoning_effort must be one of low, medium or high (got none)"}}""");
+            }
+
+            return ScriptedHttpHandler.ChatCompletion("We need to ship the Kestrel build by Thursday.");
+        });
+
+        await using var harness = new CleanupHarness(http: http);
+        harness.LocalServers.State = new LocalServerState(
+            LocalServerReach.Reached,
+            [new LocalServerModel(model, model, 11_289_671_136) { MaxContextTokens = 262144 }],
+            [new LocalServerLoadedModel(model, 11_289_671_136) { ContextTokens = 16384, Backend = "ggml_cuda" }]);
+
+        var settings = new AppSettings
+        {
+            EnableAiCleanup = true,
+            AiCleanupProvider = CleanupProvider.OpenAiCompatible,
+            AiCleanupCustomEndpoint = LocalAiServer.TensorSharpAddress,
+            AiCleanupCustomModel = model,
+            AiCleanupTensorSharpContextTokens = 8192,
+            AiCleanupTensorSharpBackend = backend,
+            AiCleanupTensorSharpReasoningEffort = effort,
+            AiCleanupTensorSharpSendWholeVocabulary = false,
+        };
+        var options = LocalModelTuning.Apply(
+            CleanupHarness.Custom(LocalAiServer.TensorSharpAddress, model) with
+            {
+                VocabularyMode = CleanupVocabularyMode.Mentioned,
+            },
+            settings);
+
+        harness.Service.Configure(options);
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        Assert.Equal(8192, harness.Service.LocalContextTokens);
+
+        if (!string.Equals(backend, "ggml_cuda", StringComparison.OrdinalIgnoreCase))
+        {
+            Assert.Contains(harness.LocalServers.TensorSharpLoads, load => load.Model == model && load.Backend == backend);
+        }
+
+        var vocab = Admitted([DictionaryEntry.New("kes trel", "Kestrel"), DictionaryEntry.New("cosmos d b", "Cosmos DB")]);
+        harness.Service.ForgetLastModelAnswerForTesting();
+        var admitted = harness.Service.Admit(vocab);
+        admitted.Prewarm();
+        await harness.Service.WaitForPrewarmForTesting().WaitAsync(Bound);
+
+        var result = await admitted.CleanAsync("um we need to ship the kestrel build by friday no thursday").WaitAsync(Bound);
+        Assert.Equal(CleanupOutcome.Cleaned, result.Outcome);
+
+        var sent = Snapshot(bodies);
+        // Probe + Prewarm + Dictation: no failed 400 probe on reasoning_effort: none.
+        Assert.Equal(3, sent.Count);
+        foreach (var req in sent)
+        {
+            Assert.False(req.GetProperty("skills_discovery").GetBoolean());
+            Assert.False(req.GetProperty("multi_agent").GetBoolean());
+            Assert.Equal("none", req.GetProperty("tool_choice").GetString());
+            Assert.Equal(expectedThink, req.GetProperty("think").GetBoolean());
+            if (expectedEffort is null)
+            {
+                Assert.False(req.TryGetProperty("reasoning_effort", out _));
+            }
+            else
+            {
+                Assert.Equal(expectedEffort, req.GetProperty("reasoning_effort").GetString());
+            }
+        }
+
+        // System message is identical across Probe, Prewarm, and Dictation so TensorSharp's Radix SharedPrefixTokens
+        // checkpoint hits 100% of the time; the mentioned glossary is carried in the user turn.
+        var probeSystem = SystemMessage(sent[0]);
+        var prewarmSystem = SystemMessage(sent[1]);
+        var dictationSystem = SystemMessage(sent[2]);
+        Assert.Equal(probeSystem, prewarmSystem);
+        Assert.Equal(prewarmSystem, dictationSystem);
+        Assert.DoesNotContain("Kestrel", dictationSystem, StringComparison.Ordinal);
+        Assert.Contains("Kestrel", UserMessage(sent[2]), StringComparison.Ordinal);
+        Assert.DoesNotContain("Cosmos DB", UserMessage(sent[2]), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_refused_TensorSharp_backend_is_remembered_and_not_retried_on_every_dictation()
+    {
+        const string model = "gemma-4-26B-A4B-it-UD-IQ3_S.gguf";
+        var http = new ScriptedHttpHandler((_, _) =>
+            Task.FromResult(ScriptedHttpHandler.ChatCompletion("We ship on Thursday.")));
+
+        await using var harness = new CleanupHarness(http: http);
+        harness.LocalServers.State = new LocalServerState(
+            LocalServerReach.Reached,
+            [new LocalServerModel(model, model, 11_289_671_136) { MaxContextTokens = 262144 }],
+            [new LocalServerLoadedModel(model, 11_289_671_136) { ContextTokens = 16384, Backend = "ggml_cuda" }]);
+        harness.LocalServers.TensorSharpLoadAnswer = (_, _) => false;
+
+        var options = CleanupHarness.Custom(LocalAiServer.TensorSharpAddress, model) with
+        {
+            TensorSharpBackend = "cuda",
+        };
+        harness.Service.Configure(options);
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+        Assert.Single(harness.LocalServers.TensorSharpLoads);
+
+        harness.Service.ForgetLastModelAnswerForTesting();
+        var admitted = harness.Service.Admit(CleanupVocabulary.None);
+        admitted.Prewarm();
+        await harness.Service.WaitForPrewarmForTesting().WaitAsync(Bound);
+        Assert.Equal(CleanupOutcome.Cleaned, (await admitted.CleanAsync("um we ship on thursday").WaitAsync(Bound)).Outcome);
+
+        // The refused backend is not requested again during prewarm or dictation.
+        Assert.Single(harness.LocalServers.TensorSharpLoads);
+    }
+
     private static async Task WaitUntilAsync(Func<bool> condition)
     {
         var deadline = DateTime.UtcNow + Bound;
