@@ -142,4 +142,41 @@ public sealed class LocalServerContextTests
         Assert.Equal("gemma3:1b", body!.Value.GetProperty("model").GetString());
         Assert.Equal(0, await client.ReadMaxContextAsync(LocalAiServer.LmStudioAddress, "gemma3:1b"));
     }
+
+    [Fact]
+    public async Task Ollama_caps_the_model_s_context_when_its_Modelfile_declares_num_ctx()
+    {
+        using var client = new LocalServerClient(new ScriptedHttpHandler((_, _) => Task.FromResult(
+            ScriptedHttpHandler.Json(HttpStatusCode.OK, """
+                {
+                  "parameters": "draft_num_predict 3\nnum_ctx 32768\ntemperature 1",
+                  "model_info": {"general.architecture":"gemma4","gemma4.context_length":262144},
+                  "capabilities": ["completion"]
+                }
+                """))));
+
+        Assert.Equal(32768, await client.ReadMaxContextAsync(LocalAiServer.OllamaAddress, "gemma4:26b-a4b-iq3s"));
+    }
+
+    [Fact]
+    public async Task Ollama_includes_the_main_model_weights_when_ps_reports_only_the_draft_head_buffer()
+    {
+        using var client = new LocalServerClient(new ScriptedHttpHandler((request, _) => Task.FromResult(
+            request.RequestUri!.AbsolutePath switch
+            {
+                "/api/tags" => ScriptedHttpHandler.Json(HttpStatusCode.OK, """
+                    {"models":[{"name":"gemma4:26b-a4b-iq3s","size":11751438250,"capabilities":["completion"]}]}
+                    """),
+                "/api/ps" => ScriptedHttpHandler.Json(HttpStatusCode.OK, """
+                    {"models":[{"name":"gemma4:26b-a4b-iq3s","model":"gemma4:26b-a4b-iq3s","size":1046332046,"size_vram":1046332046,"context_length":32768,"runner":"llamacpp"}]}
+                    """),
+                _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+            })));
+
+        var state = await client.ReadAsync(LocalAiServer.OllamaAddress);
+        var loaded = state.LoadedFor("gemma4:26b-a4b-iq3s")!;
+
+        Assert.Equal(11751438250L + 1046332046L, loaded.MemoryBytes);
+        Assert.Equal(32768, loaded.ContextTokens);
+    }
 }

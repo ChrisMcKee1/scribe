@@ -307,7 +307,7 @@ anything was dictated.
   may receive, merged personal first, the ones whose spoken or written words appear in the recognized text, exactly
   or heard slightly differently (sound keys and small slips, see the class), then the usual budget applies: up to
   5,000 terms and 24,000 characters (80 terms under the Local prompt style). Measured on the frozen 25 cases
-  (docs/local-model-benchmark.md): the blind judge's score did not drop, the right word pack term reached the output
+  (evidence `docs/benchmarks/cleanup-tuning-2026-09-29.json`): the blind judge's score did not drop, the right word pack term reached the output
   in 97% of uses on Gemma 4 E4B against 67% with the whole list (whose first 80 terms under the Local style often
   left out the one a dictation needed), and a cloud request's input fell from about 7,500 to 1,400 tokens. It comes
   from the vocabulary generation the
@@ -499,7 +499,7 @@ dotnet run --project tools/Scribe.Evals
 dotnet run --project tools/Scribe.Evals -- --models qwen3-1.7b,phi-3.5-mini
 
 # Local model benchmark (docs/local-model-benchmark.md): the frozen 25 dictations through the real cleanup service,
-# on Ollama, LM Studio or Foundry Local (runtime prefix ollama:, lmstudio:, foundry:, or openai:<url>|<model>), then a
+# on Ollama, LM Studio, TensorSharp or Foundry Local (runtime prefix ollama:, lmstudio:, tensorsharp:, foundry:, or openai:<url>|<model>), then a
 # blind grade through the GitHub Copilot command-line tool (default judge claude-opus-5.5) with cloud answers as anchors.
 # Set SCRIBE_DATA_DIR to a scratch folder first, as for any dev instance.
 dotnet run -c Release --project tools/Scribe.Evals -- --benchmark --no-cloud --runs 3 --no-judge --local-models "ollama:gemma4:e2b,lmstudio:google/gemma-4-e2b,foundry:qwen2.5-1.5b" --cases-from docs/benchmarks/gpt6-astra-2026-09-04.json --glossary-libraries default --out <dir>
@@ -3492,7 +3492,7 @@ reads too: the pinned SDK omits it while awaiting a progress line, which the sta
 
 `LocalAiServer.IsOnThisPc` counts an http or https address at `localhost`, `127.0.0.0/8`, `[::1]` or a
 `*.localhost` name as a model on this PC, which is how most people run Ollama and LM Studio. Each rule below was
-measured in the 0.5.2 local benchmark (docs/local-model-benchmark.md), where 0.5.1's behavior cost nine models 26
+measured in the 0.5.2 local benchmark (evidence `docs/benchmarks/local-models-2026-09-29.json`), where 0.5.1's behavior cost nine models 26
 points on average:
 
 - **Automatic picks the short instructions and the 80-term budget** (`CleanupPrompt.ResolvePromptStyle` and
@@ -3625,13 +3625,13 @@ recording indicator saying so, rather than being typed without cleanup.
 - **Microsoft Foundry asks for the least reasoning a deployment accepts** (`AzureReasoningEffortFor`): none, then low
   when the probe's 400 names the effort (gpt-6.1-sol: "'none' is not supported ... Supported values are: 'low', ..."),
   then no effort field. Measured for 0.5.2: no quality change and about a third less time on gpt-6-sol, and the same on
-  gpt-6.1-sol at low (docs/local-model-benchmark.md). `AzureReasoningEffortTests` pins it on the wire.
+  gpt-6.1-sol at low (evidence `docs/benchmarks/cleanup-tuning-2026-09-29.json`). `AzureReasoningEffortTests` pins it on the wire.
 
 ## Context size and the whole vocabulary on this PC (read before touching ContextBudget, the glossary fit or LocalModelTuning)
 
 The maintainer asked for 0.5.3: a context size setting for local models where the runtime supports one, the whole
-vocabulary sent when it fits, and the dictated text first when it does not. Measured in round three of
-docs/local-model-benchmark.md (evidence `docs/benchmarks/context-window-2026-09-30.json`).
+vocabulary sent when it fits, and the dictated text first when it does not. Measured on September 30, 2026
+(evidence `docs/benchmarks/context-window-2026-09-30.json`).
 
 - **Every request to Foundry Local, and to Ollama or LM Studio at its own address, is planned to fit its context**
   (`TextCleanupService.PlanLocalRequestLocked`, under `_gate` in `CleanCoreAsync`). Each request, with the longest answer

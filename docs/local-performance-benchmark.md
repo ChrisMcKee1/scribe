@@ -1,7 +1,6 @@
 # Local Performance Benchmark
 
-Updated September 28, 2026, for 0.5.1, with speech recognition examples from September 29. The July 2026
-run follows it.
+Updated September 28, 2026, for 0.5.1, with speech recognition examples from September 29.
 
 This report measures local CPU and managed allocation costs in Scribe's production code. It uses a
 dedicated BenchmarkDotNet 0.15.8 project, Release builds, out-of-process execution, and the memory
@@ -67,63 +66,22 @@ dotnet run --project tools/Scribe.AsrCheck -c Release -- --scenarios --quick
 | `A-clean-dict-scribe` | 3.97 s | 13.5 ms | 133.9 ms |
 | `A-clean-long-passage` | 23.26 s | 74.2 ms | 639.3 ms |
 
-## July 2026 run
+## What this does not measure
 
-Measured on .NET 10.0.9.
-
-### Result
-
-| Production path | Baseline mean | Optimized mean | Time change | Baseline allocation | Optimized allocation | Allocation change |
-|---|---:|---:|---:|---:|---:|---:|
-| 10-second audio aggregation | 164.43 us | 69.33 us | **-57.8%** | 2,625.29 KB | 625.12 KB | **-76.2%** |
-| 48k-character cleanup chunking | 38.71 us | 30.47 us | **-21.3%** | 375.93 KB | 190.96 KB | **-49.2%** |
-| 10-second audio serialization round trip | 71.45 us | 69.65 us | -2.5% | 1,250.11 KB | 1,250.11 KB | 0% |
-| 100-rule dictionary processing | 117.97 us | 115.99 us | -1.7% | 213.80 KB | 213.80 KB | 0% |
-
-Short-run timing has wider confidence intervals than a publication benchmark, so the allocation
-results and repeated focused runs are the primary evidence. The two optimized methods produced large,
-repeatable improvements; movement in the two unchanged controls is ordinary run-to-run variance.
-
-### Changes Adopted
-
-`AudioCaptureService.ReadAll` previously appended each provider read to a dynamically growing
-`List<float>` and then copied the list into the returned array. A 160,000-sample capture allocated
-about four times the 625 KB result payload. It now grows temporary storage through pooled arrays
-(`ArrayPool<float>.Shared`, or for the capture service's own conversions a `CaptureScratchPool` that the idle release
-empties) and materializes only the exact returned array. A unit test forces growth
-past the initial one-second buffer and verifies every sample survives unchanged.
-
-`TextCleanupService.ChunkForCleanup` previously allocated a target-sized window string for each
-boundary search, then allocated substring and trim results for returned chunks. It now searches and
-trims `ReadOnlySpan<char>` windows and creates each final chunk string once. All punctuation,
-whitespace fallback, and hard-split tests remain unchanged.
-
-### Changes Rejected
-
-Audio serialization was not changed. The benchmark deliberately performs a byte-array to float-array
-round trip, so its 1.25 MB allocation is the expected pair of 625 KB payloads. Production persistence
-writes and reads occur separately; pooling those retained SQLite values would complicate ownership
-without removing the required result allocation.
-
-Dictionary processing was not changed. A deliberately heavy 100-rule, 500-match workload completes
-in about 116 us. Replacing regex matching and candidate ordering with a custom scanner would add
-behavioral risk for a sub-millisecond path and lacks benchmark evidence of user-visible value.
-
-VAD model execution and ASR inference are intentionally excluded from this microbenchmark. They need
-scenario profiling with the actual native models and representative audio. Use `dotnet-counters` or
-`dotnet-trace` on a Release app session before changing VAD window handling or native inference code.
+VAD model execution and speech recognition are not in the BenchmarkDotNet microbenchmarks; the speech
+samples above come from the scenario suite instead. Judging a change to VAD window handling or native
+inference needs scenario profiling with the actual native models and representative audio: use
+`dotnet-counters` or `dotnet-trace` on a Release app session first.
 
 ## Reproduce
 
-```powershell
-dotnet run --project tools/Scribe.Benchmarks/Scribe.Benchmarks.csproj -c Release -- --filter "*" --artifacts artifacts/performance/current --join
-```
-
-Use a narrower filter while iterating:
+Run these from inside the repository, in Release. Every filter below names a benchmark class from the first
+table; `--filter "*"` runs them all, and `--artifacts <folder>` puts BenchmarkDotNet's output elsewhere.
 
 ```powershell
-dotnet run --project tools/Scribe.Benchmarks/Scribe.Benchmarks.csproj -c Release -- --filter "*ReadAllAudio*" --artifacts artifacts/performance/audio
-dotnet run --project tools/Scribe.Benchmarks/Scribe.Benchmarks.csproj -c Release -- --filter "*ChunkLongTranscript*" --artifacts artifacts/performance/chunking
+dotnet run --project tools/Scribe.Benchmarks/Scribe.Benchmarks.csproj -c Release -- --filter "*CaptureAssemblyBenchmarks*" --artifacts artifacts/performance/capture
+dotnet run --project tools/Scribe.Benchmarks/Scribe.Benchmarks.csproj -c Release -- --filter "*ProcessDetailedBenchmarks*" --artifacts artifacts/performance/dictionary
+dotnet run --project tools/Scribe.Benchmarks/Scribe.Benchmarks.csproj -c Release -- --filter "*LibraryCompositionBenchmarks*" --artifacts artifacts/performance/word-packs
 ```
 
 These use BenchmarkDotNet's quick ShortRun job, which is right for a first look but can report error
@@ -131,12 +89,20 @@ bars wider than the difference being measured. For any number you quote, add `--
 to use BenchmarkDotNet's default job, and report Mean, Error, StdDev and Allocated:
 
 ```powershell
-dotnet run --project tools/Scribe.Benchmarks/Scribe.Benchmarks.csproj -c Release -- --scribe-default-job --filter "*ReadAllAudio*" --artifacts artifacts/performance/audio
+dotnet run --project tools/Scribe.Benchmarks/Scribe.Benchmarks.csproj -c Release -- --scribe-default-job --filter "*CaptureAssemblyBenchmarks*" --artifacts artifacts/performance/capture
 ```
 
-The benchmark job passes `/p:RuntimeIdentifier=win-x64` to both restore and build. This is required
-because BenchmarkDotNet's generated .NET 10 Windows project otherwise restores only the framework
-target while the Scribe project reference requests the `win-x64` target.
+The end-to-end figures come from the soak, the idle release check (once as shipped, once with
+`ForcedIdleGc`, 0.5.0's collection) and the scenario suite:
 
-Raw reports from this run are under `artifacts/performance/baseline` and
-`artifacts/performance/optimized`.
+```powershell
+dotnet run -c Release --project tools/Scribe.Benchmarks -- --soak --cycles 100
+dotnet run -c Release --project tools/Scribe.Benchmarks -- --idle-release
+dotnet run -c Release --project tools/Scribe.Benchmarks -- --idle-release --flags ForcedIdleGc
+dotnet run --project tools/Scribe.AsrCheck -c Release -- --scenarios
+```
+
+The benchmark job passes `/p:RuntimeIdentifier=<host RID>` (`win-x64` or `win-arm64`, matching the host
+process) to both restore and build. This is required because BenchmarkDotNet's generated .NET 10 Windows
+project otherwise restores only the framework target while the Scribe project reference requests the
+RID-specific target.

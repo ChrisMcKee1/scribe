@@ -467,25 +467,33 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
                 return 0;
             }
 
-            // The model's own figure, named for its architecture: "gemma4.context_length", "qwen3.context_length".
+            // The model's own figure, named for its architecture ("gemma4.context_length", "qwen3.context_length"), capped by any
+            // explicit PARAMETER num_ctx in the Modelfile so a model tuned for a specific VRAM budget is not overridden.
             using var document = await ReadJsonAsync(response, timeout.Token).ConfigureAwait(false);
-            if (document.RootElement.ValueKind != JsonValueKind.Object ||
-                !document.RootElement.TryGetProperty("model_info", out var info) || info.ValueKind != JsonValueKind.Object)
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
                 return 0;
             }
 
-            foreach (var property in info.EnumerateObject())
+            var modelLimit = 0;
+            if (document.RootElement.TryGetProperty("model_info", out var info) && info.ValueKind == JsonValueKind.Object)
             {
-                if (property.Name.EndsWith(".context_length", StringComparison.Ordinal) &&
-                    property.Value.ValueKind == JsonValueKind.Number &&
-                    property.Value.TryGetInt64(out var length) && length > 0)
+                foreach (var property in info.EnumerateObject())
                 {
-                    return (int)Math.Min(length, int.MaxValue);
+                    if (property.Name.EndsWith(".context_length", StringComparison.Ordinal) &&
+                        property.Value.ValueKind == JsonValueKind.Number &&
+                        property.Value.TryGetInt64(out var length) && length > 0)
+                    {
+                        modelLimit = (int)Math.Min(length, int.MaxValue);
+                        break;
+                    }
                 }
             }
 
-            return 0;
+            var configuredLimit = ParseOllamaParameterInt(Text(document.RootElement, "parameters"), "num_ctx");
+            return modelLimit > 0 && configuredLimit > 0
+                ? Math.Min(modelLimit, configuredLimit)
+                : modelLimit > 0 ? modelLimit : configuredLimit;
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
@@ -593,7 +601,17 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
                 {
                     if ((Text(model, "name") ?? Text(model, "model")) is { } name)
                     {
-                        loaded.Add(new LocalServerLoadedModel(name, Number(model, "size"))
+                        // When a model includes a speculative DRAFT head on the llamacpp runner (e.g. Gemma 4 12B / 26B-A4B),
+                        // Ollama's /api/ps reports only the draft model's ~1 GB buffer instead of the main model weights.
+                        var memory = Math.Max(Number(model, "size"), Number(model, "size_vram"));
+                        if (memory > 0 &&
+                            models.FirstOrDefault(listed => SameModel(listed.Id, name)) is { SizeBytes: > 0 } listedModel &&
+                            memory < listedModel.SizeBytes / 5)
+                        {
+                            memory += listedModel.SizeBytes;
+                        }
+
+                        loaded.Add(new LocalServerLoadedModel(name, memory)
                         {
                             ContextTokens = Int(model, "context_length"),
                         });
@@ -855,6 +873,37 @@ public sealed class LocalServerClient : ILocalServerClient, IDisposable
             : 0;
 
     private static int Int(JsonElement element, string name) => (int)Math.Min(Number(element, name), int.MaxValue);
+
+    private static int ParseOllamaParameterInt(string? parameters, string key)
+    {
+        if (string.IsNullOrWhiteSpace(parameters))
+        {
+            return 0;
+        }
+
+        foreach (var rawLine in parameters.AsSpan().EnumerateLines())
+        {
+            var line = rawLine.Trim();
+            if (!line.StartsWith(key, StringComparison.OrdinalIgnoreCase) || line.Length <= key.Length)
+            {
+                continue;
+            }
+
+            var rest = line[key.Length..];
+            if (!char.IsWhiteSpace(rest[0]))
+            {
+                continue;
+            }
+
+            if (long.TryParse(rest.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) &&
+                parsed > 0)
+            {
+                return (int)Math.Min(parsed, int.MaxValue);
+            }
+        }
+
+        return 0;
+    }
 
     private static (LocalServerApp App, Uri Uri)? Root(string endpoint)
     {

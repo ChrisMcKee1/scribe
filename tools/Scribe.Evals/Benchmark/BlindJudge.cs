@@ -56,7 +56,7 @@ internal sealed record BlindCalibration(string CaseId, string Hash, string Packe
 
 /// <summary>
 /// Identity-blind grading of retained cleanup outputs, the design the September 4 GPT-6-Astra review
-/// used (docs/gpt6-astra-benchmark.md): each case's distinct outputs are shuffled, labelled and graded
+/// used (docs/model-leaderboard.md): each case's distinct outputs are shuffled, labelled and graded
 /// together against the raw transcript, the shipped writing style and a reference rewrite, on four
 /// dimensions weighted 45% fidelity, 25% instruction adherence, 20% disfluency and 10% mechanics. The
 /// judge never sees a model name, a runtime, a timing or another judge's score. Identical texts are one

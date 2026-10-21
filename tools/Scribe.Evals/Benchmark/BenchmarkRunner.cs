@@ -382,7 +382,7 @@ internal sealed class BenchmarkRunner
         QualityJudge? judge, CancellationToken ct)
     {
         var endpoint = model.Provider == CleanupProvider.OpenAiCompatible ? model.Endpoint : null;
-        var admitted = _cfg.Admitted && model.Group != BenchGroup.Cloud;
+        var admitted = _cfg.AdmitRequests || (model.Group != BenchGroup.Cloud && _cfg.Admitted);
         var glossary = admitted ? null : _cfg.GlossaryFor(model.Provider, endpoint);
         var vocabulary = admitted
             ? new CleanupVocabulary(_cfg.GlossaryEntries ?? [], Scribe.Core.Libraries.AiVocabularyScope.None)
@@ -403,6 +403,12 @@ internal sealed class BenchmarkRunner
                 CustomEndpoint: model.Endpoint, CustomModel: model.Target,
                 PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt, LocalPrompt: _cfg.LocalPrompt),
 
+            CleanupProvider.GitHubCopilot => new CleanupOptions(true, CleanupProvider.GitHubCopilot,
+                CleanupModelCatalog.DefaultAlias, null, null,
+                WritingStyle: style, Glossary: glossary,
+                CopilotModel: model.Target,
+                PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt, LocalPrompt: _cfg.LocalPrompt),
+
             _ => new CleanupOptions(true, CleanupProvider.FoundryLocal, model.Target, null, null,
                 WritingStyle: style, Glossary: glossary,
                 PromptStyle: _cfg.PromptStyle, FrontierPrompt: _cfg.FrontierPrompt, LocalPrompt: _cfg.LocalPrompt),
@@ -415,8 +421,8 @@ internal sealed class BenchmarkRunner
             options = options with
             {
                 VocabularyMode = _cfg.VocabularyMode,
-                LocalContextTokens = _cfg.LocalContextTokens,
-                SendWholeVocabulary = _cfg.SendWholeVocabulary,
+                LocalContextTokens = model.Group == BenchGroup.Cloud ? null : _cfg.LocalContextTokens,
+                SendWholeVocabulary = model.Group != BenchGroup.Cloud && _cfg.SendWholeVocabulary,
             };
         }
 

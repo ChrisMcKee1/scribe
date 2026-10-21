@@ -68,11 +68,10 @@ staying silent. Line numbers below are hints and the file names are the anchors.
 | `docs/foundry-setup.md` | End-user walkthrough for creating a Foundry resource, driving `scripts/Setup-ScribeFoundry.ps1` by raw GitHub URL. | Azure roles, endpoints, and that script's parameters. |
 | `docs/service-principal-setup.md` | End-user service-principal walkthrough. Linked from the settings window. | `AzureCredentialFactory`, `AzureServicePrincipal`, the role GUIDs. |
 | `docs/microsoft-store-submission.md` | Working Partner Center checklist: product identity, declarations, listing copy, screenshot order, certification notes, and the automation secrets. | `Directory.Build.props` Store identity, `build/pack-msix.ps1`, `.github/workflows/store.yml`. |
-| `docs/model-leaderboard.md` | The golden-suite benchmark report. Hand-written prose on top (revision notes, TL;DR table, key findings), machine-generated report body below. | `CleanupModelCatalog`, `CleanupPrompt`. |
-| `docs/gpt56-phonetic-benchmark.md` | A focused prompt A/B report, linked from the leaderboard header. | Prompt work. |
+| `docs/model-leaderboard.md` | The golden-suite and cloud benchmark report. Hand-written prose on top (revision notes, TL;DR table, key findings), machine-generated report body below. | `CleanupModelCatalog`, `CleanupPrompt`. |
+| `docs/local-model-benchmark.md` | The local-model benchmark report across Ollama, LM Studio, TensorSharp and Foundry Local. | `LocalAppSetup`, `CleanupModelCatalog`, `CleanupPrompt`. |
 | `docs/local-performance-benchmark.md` | A BenchmarkDotNet report. | `tools/Scribe.Benchmarks`. |
-| `docs/release-notes-*.md` | Historical per-release notes. Present for 0.2.19, 0.2.20, 0.3.1, 0.3.2, 0.3.11, 0.4.0, 0.4.3 and 0.4.4 only. | No workflow or script reads them; `AGENTS.md` names the latest one under Releases. See Exceptions. |
-| `Scribe-0.2.x-Teams-Update.md` | A one-off historical announcement covering 0.2.1 to 0.2.15. | Nothing. See Exceptions. |
+| `docs/release-notes-*.md` | Release notes for the current version only (`docs/release-notes-0.5.10.md` at this writing). Earlier versions' notes were removed and remain in git history. | No workflow or script reads them; `AGENTS.md` names the current one under Releases. See Exceptions. |
 
 Two verified couplings that make `PRIVACY.md` different in kind from the rest:
 
@@ -429,10 +428,9 @@ Do not raise any of the following.
   behavior that a code change can falsify. Whether the UI honors it is `ui-shell-quality`'s question.
   Fire on `PRODUCT.md` only when the diff edits it and the edit contradicts `AGENTS.md` or
   `PRIVACY.md`.
-- **A missing release-notes file.** `docs/release-notes-*.md` exists for a handful of versions only,
-  and no workflow or script references them. A version bump does not owe one.
-- **`Scribe-0.2.x-Teams-Update.md`.** A one-off announcement covering 0.2.1 to 0.2.15. It is a
-  historical artifact and is not maintained.
+- **A missing release-notes file.** Only the current version's `docs/release-notes-*.md` is kept, and no
+  workflow or script references them. A version bump does not owe one, and the absence of an older
+  version's file is not drift.
 - **A version number quoted in prose.** `AGENTS.md` explicitly disclaims its own. `Directory.Build.props`
   `<VersionPrefix>` is the single source of truth.
 - **The test count in `AGENTS.md`.** It is written as an as-of stamp with a note that the count only

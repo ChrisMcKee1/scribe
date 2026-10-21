@@ -930,6 +930,11 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 Volatile.Write(ref _lastModelAnswer, 0);
             }
 
+            if (!sameConfig)
+            {
+                Volatile.Write(ref _promptCached, 0);
+            }
+
             _options = effective;
 
             if (!effective.Enabled)
@@ -1511,23 +1516,37 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     // The model was freed, or is about to be: the next recording readies it again, and says so when it has to load,
     // instead of trusting an answer from before the release.
-    private void ForgetModelAnswer() => Volatile.Write(ref _lastModelAnswer, 0);
+    private int _promptCached;
+
+    private void ForgetModelAnswer()
+    {
+        Volatile.Write(ref _lastModelAnswer, 0);
+        Volatile.Write(ref _promptCached, 0);
+    }
 
     // The model answered a request made for these options: the configuration AI cleanup uses now counts as warm only when
     // the request was made for it, not for a configuration Test connection tried or one changed meanwhile.
-    private void NoteModelAnswered(CleanupOptions options)
+    private void NoteModelAnswered(CleanupOptions options, bool fullPromptCached = false)
     {
         lock (_gate)
         {
             if (_options.MatchesIgnoringPrompt(options))
             {
                 Volatile.Write(ref _lastModelAnswer, System.Diagnostics.Stopwatch.GetTimestamp());
+                if (fullPromptCached && _options == options)
+                {
+                    Volatile.Write(ref _promptCached, 1);
+                }
             }
         }
     }
 
     // Test-only: as if the model last answered longer ago than PrewarmAfterIdle, which the readiness probe never is.
-    internal void ForgetLastModelAnswerForTesting() => Volatile.Write(ref _lastModelAnswer, 0);
+    internal void ForgetLastModelAnswerForTesting()
+    {
+        Volatile.Write(ref _lastModelAnswer, 0);
+        Volatile.Write(ref _promptCached, 0);
+    }
 
     // Test-only: completes when no prewarm is running.
     internal async Task WaitForPrewarmForTesting()
@@ -1693,8 +1712,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 await ReconcileTensorSharpAsync(options, state, cts.Token).ConfigureAwait(false);
             }
 
-            // Held at the right size and answered within PrewarmAfterIdle: loaded, with the instructions cached.
-            if (answeredRecently && !coldStart)
+            // Held at the right size and answered within PrewarmAfterIdle (or kept indefinitely with its full prompt
+            // already cached): loaded, with the instructions cached.
+            var pinnedAndCached = state is { Reach: LocalServerReach.Reached } &&
+                options.LocalModelKeepAliveMinutes == 0 &&
+                Volatile.Read(ref _lastModelAnswer) != 0 &&
+                Volatile.Read(ref _promptCached) != 0;
+            if ((answeredRecently || pinnedAndCached) && !coldStart)
             {
                 return ModelPreparationResult.Continue;
             }
@@ -1751,7 +1775,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 .ConfigureAwait(false);
 
             // A configuration changed meanwhile is not the one this answer readied.
-            NoteModelAnswered(options);
+            NoteModelAnswered(options, fullPromptCached: true);
 
             // What the app holds the model with now that this request reached it, before the dictation it readies is fitted
             // into it.
@@ -3339,7 +3363,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             var runOptions = new ChatClientAgentRunOptions(chatOptions);
             var result = await agent.RunAsync(BuildUserMessage(chunk, userTurnGlossary), options: runOptions, cancellationToken: cts.Token)
                 .ConfigureAwait(false);
-            NoteModelAnswered(options);
+            NoteModelAnswered(options, fullPromptCached: true);
             NoteLocalModelUse(options);
 
             attemptUsage = result.Usage;

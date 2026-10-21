@@ -230,6 +230,12 @@ internal static class BenchmarkModels
                 BenchGroup.Local, trimmed, CleanupProvider.OpenAiCompatible, endpoints.TensorSharp, tensorSharpModel, tensorSharpModel, note);
         }
 
+        if (TryStripPrefix(trimmed, "copilot:", out var copilotModel))
+        {
+            return new BenchModel(
+                BenchGroup.Cloud, trimmed, CleanupProvider.GitHubCopilot, null, copilotModel, copilotModel, note);
+        }
+
         if (TryStripPrefix(trimmed, "openai:", out var rest))
         {
             var bar = rest.LastIndexOf('|');

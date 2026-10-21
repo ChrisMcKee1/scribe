@@ -236,8 +236,10 @@ the text is typed. You choose where it runs:
 Requests using Scribe's OpenAI client also include client language/version, operating system,
 processor architecture and runtime name/version headers, sent to the same AI service.
 
-Settings doesn't recommend a model. The [local model benchmark](docs/local-model-benchmark.md) compares 39
-open models across Foundry Local, Ollama and LM Studio, and the cloud models, on quality and time.
+Settings doesn't recommend a model. The [local model benchmark](docs/local-model-benchmark.md) compares open
+models across Ollama, LM Studio, TensorSharp and Foundry Local, on a graphics card and on the processor
+alone, for quality and time, and the [model leaderboard](docs/model-leaderboard.md) ranks the cloud models
+against the best of them.
 
 If Microsoft Foundry or another AI service fails its connection check with a temporary connection error,
 throttling or a server error, Scribe makes one automatic reconnect at a later recording, once 30 seconds
@@ -350,16 +352,16 @@ samples included, and how to reproduce them.
   history, which keeps recordings on your PC for at most 7 days and 250 MB.
 - **Speech recognition is local:** Parakeet runs on your CPU through
   [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx).
-- **AI cleanup is optional, and goes where you choose.** On this PC, with Scribe's own model, Ollama or LM
-  Studio, everything stays on your PC. With Microsoft Foundry, GitHub Copilot or another AI service, each
-  cleanup request sends the text Scribe recognized for that dictation (never audio), Scribe's cleanup
-  instructions with your writing style, and the words from your dictionary plus the word packs you let AI
-  cleanup use that the dictation appears to mention (up to 5,000 words or phrases, or 80 with the short
-  instructions, which a server on your PC such as Ollama or LM Studio gets unless you choose otherwise). A
-  word whose written text spans more than one line or runs past 100 characters, such as a signature, stays
-  out. It goes only to the service you set up. With a server on your PC, starting a dictation also sends it
-  the instructions with no dictated text, and none of your vocabulary unless you chose to send your whole
-  vocabulary to it, so a model it unloaded is ready by the time you stop talking.
+- **AI cleanup is optional, and goes where you choose.** On this PC, with Scribe's own model, Ollama, LM
+  Studio or TensorSharp, everything stays on your PC. With Microsoft Foundry, GitHub Copilot or another AI
+  service, each cleanup request sends the text Scribe recognized for that dictation (never audio), Scribe's
+  cleanup instructions with your writing style, and the words from your dictionary plus the word packs you
+  let AI cleanup use that the dictation appears to mention (up to 5,000 words or phrases, or 80 with the
+  short instructions, which a server on your PC such as Ollama or LM Studio gets unless you choose
+  otherwise). A word whose written text spans more than one line or runs past 100 characters, such as a
+  signature, stays out. It goes only to the service you set up. With a server on your PC, starting a
+  dictation also sends it the instructions with no dictated text, and none of your vocabulary unless you
+  chose to send your whole vocabulary to it, so a model it unloaded is ready by the time you stop talking.
 - **Microsoft Foundry.** Scribe asks Microsoft Foundry not to store the response, though Microsoft's abuse
   monitoring can still keep a sample of flagged prompts and responses for review, as its
   [data privacy page](https://learn.microsoft.com/azure/foundry/responsible-ai/openai/data-privacy)
