@@ -1,6 +1,6 @@
 # Local AI cleanup benchmark
 
-Updated October 21, 2026, for Scribe 0.5.10. How well and how fast open models clean up dictation
+Updated October 21, 2026, for Scribe 0.5.11. How well and how fast open models clean up dictation
 on this PC across the four local runtimes Scribe supports: **Ollama**, **TensorSharp**, **LM Studio**
 and **Foundry Local**.
 
