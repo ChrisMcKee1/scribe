@@ -275,10 +275,10 @@ public sealed class ContextWindowTests
             Assert.False(custom.SendWholeVocabulary);
         }
 
-        // Frontier and custom services apply their own context size and whole-vocabulary setting only when a context size is chosen.
+        // Frontier and custom services apply their own context size and whole-vocabulary setting, including when Context size is left on the service's default (0).
         var frontierSettings = new AppSettings
         {
-            AiCleanupAzureContextTokens = 1_048_576,
+            AiCleanupAzureContextTokens = 0,
             AiCleanupAzureSendWholeVocabulary = true,
             AiCleanupCopilotContextTokens = 262_144,
             AiCleanupCopilotSendWholeVocabulary = true,
@@ -286,7 +286,7 @@ public sealed class ContextWindowTests
             AiCleanupCustomSendWholeVocabulary = true,
         };
         var azure = LocalModelTuning.Apply(new CleanupOptions(true, CleanupProvider.AzureFoundry, "qwen", "https://example.openai.azure.com/", "gpt-5"), frontierSettings);
-        Assert.Equal(1_048_576, azure.LocalContextTokens);
+        Assert.Null(azure.LocalContextTokens);
         Assert.True(azure.SendWholeVocabulary);
 
         var copilot = LocalModelTuning.Apply(new CleanupOptions(true, CleanupProvider.GitHubCopilot, "qwen", null, null), frontierSettings);

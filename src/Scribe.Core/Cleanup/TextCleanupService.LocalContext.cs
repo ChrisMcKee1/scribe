@@ -124,9 +124,9 @@ internal sealed partial class TextCleanupService
         options.Provider == CleanupProvider.FoundryLocal ||
         LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) != LocalServerApp.None;
 
-    // A remote or custom service whose context size and whole-vocabulary option were explicitly chosen.
+    // A remote or custom service whose context size or whole-vocabulary option was explicitly chosen.
     private static bool FitsRemoteContext(CleanupOptions options) =>
-        !FitsLocalContext(options) && options.LocalContextTokens is > 0 && options.SendWholeVocabulary;
+        !FitsLocalContext(options) && (options.SendWholeVocabulary || options.LocalContextTokens is > 0);
 
     // Any model whose context Scribe fits requests and vocabulary into.
     private static bool FitsContext(CleanupOptions options) =>
@@ -148,9 +148,17 @@ internal sealed partial class TextCleanupService
     // Must be called under _gate. The context a request for this configuration is fitted into, when Scribe knows it.
     private int? EffectiveContextLocked(CleanupOptions options)
     {
-        if (!FitsLocalContext(options) && options.LocalContextTokens is > 0 and var remoteAsked)
+        if (!FitsLocalContext(options))
         {
-            return ContextBudget.Sanitize(remoteAsked);
+            if (options.LocalContextTokens is > 0 and var remoteAsked)
+            {
+                return ContextBudget.Sanitize(remoteAsked);
+            }
+
+            if (options.SendWholeVocabulary)
+            {
+                return ContextBudget.MaximumSize;
+            }
         }
 
         if (UsesOllamaApi(options))

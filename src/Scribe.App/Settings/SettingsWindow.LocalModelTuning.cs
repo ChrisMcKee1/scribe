@@ -199,21 +199,27 @@ public partial class SettingsWindow
 
         if (AzureContextStatusText is not null)
         {
-            var azureAsked = SelectedAzureContextTokens;
+            var azureAsked = SelectedAzureContextTokens > 0
+                ? SelectedAzureContextTokens
+                : (AzureWholeVocabularyCheck?.IsChecked == true ? ContextBudget.MaximumSize : 0);
             AzureContextStatusText.Text = LocalModelTuningText.RemoteContextStatus(
                 azureAsked, _wholeVocabularyTokens, VocabularyRoomAt(azureAsked));
         }
 
         if (CopilotContextStatusText is not null)
         {
-            var copilotAsked = SelectedCopilotContextTokens;
+            var copilotAsked = SelectedCopilotContextTokens > 0
+                ? SelectedCopilotContextTokens
+                : (CopilotWholeVocabularyCheck?.IsChecked == true ? ContextBudget.MaximumSize : 0);
             CopilotContextStatusText.Text = LocalModelTuningText.RemoteContextStatus(
                 copilotAsked, _wholeVocabularyTokens, VocabularyRoomAt(copilotAsked));
         }
 
         if (CustomContextStatusText is not null)
         {
-            var customAsked = SelectedCustomContextTokens;
+            var customAsked = SelectedCustomContextTokens > 0
+                ? SelectedCustomContextTokens
+                : (CustomWholeVocabularyCheck?.IsChecked == true ? ContextBudget.MaximumSize : 0);
             CustomContextStatusText.Text = LocalModelTuningText.RemoteContextStatus(
                 customAsked, _wholeVocabularyTokens, VocabularyRoomAt(customAsked));
         }

@@ -164,8 +164,8 @@ public static class CleanupDisclosure
     /// </summary>
     public static string FullContextSuggestionConsentFor(CleanupProvider provider, int contextTokens) =>
         "To suggest vocabulary, Scribe will send your dictionary, the word packs you let AI cleanup use, and as much " +
-        $"of your dictation history as fits in the {Count(ContextBudget.Sanitize(contextTokens))}-token context window " +
-        $"you chose, as your dictations were inserted, to {Destination(provider)}. That text can include words your " +
+        $"of your dictation history as fits in the {Count(ContextBudget.Sanitize(contextTokens))}-token context window, " +
+        $"as your dictations were inserted, to {Destination(provider)}. That text can include words your " +
         "dictionary and snippets added. Your writing style and audio are not sent. If where AI cleanup runs or which " +
         "word packs it may use changes before the request goes out, nothing is sent.";
 

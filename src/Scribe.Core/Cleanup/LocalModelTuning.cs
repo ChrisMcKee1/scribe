@@ -29,11 +29,10 @@ public static class LocalModelTuning
 
         if (options.Provider == CleanupProvider.AzureFoundry)
         {
-            var size = Size(settings.AiCleanupAzureContextTokens);
             return options with
             {
-                LocalContextTokens = size,
-                SendWholeVocabulary = size is not null && settings.AiCleanupAzureSendWholeVocabulary,
+                LocalContextTokens = Size(settings.AiCleanupAzureContextTokens),
+                SendWholeVocabulary = settings.AiCleanupAzureSendWholeVocabulary,
                 TensorSharpBackend = null,
                 TensorSharpReasoningEffort = null,
             };
@@ -41,11 +40,10 @@ public static class LocalModelTuning
 
         if (options.Provider == CleanupProvider.GitHubCopilot)
         {
-            var size = Size(settings.AiCleanupCopilotContextTokens);
             return options with
             {
-                LocalContextTokens = size,
-                SendWholeVocabulary = size is not null && settings.AiCleanupCopilotSendWholeVocabulary,
+                LocalContextTokens = Size(settings.AiCleanupCopilotContextTokens),
+                SendWholeVocabulary = settings.AiCleanupCopilotSendWholeVocabulary,
                 TensorSharpBackend = null,
                 TensorSharpReasoningEffort = null,
             };
@@ -77,7 +75,7 @@ public static class LocalModelTuning
             _ => options with
             {
                 LocalContextTokens = Size(settings.AiCleanupCustomContextTokens),
-                SendWholeVocabulary = Size(settings.AiCleanupCustomContextTokens) is not null && settings.AiCleanupCustomSendWholeVocabulary,
+                SendWholeVocabulary = settings.AiCleanupCustomSendWholeVocabulary,
                 TensorSharpBackend = null,
                 TensorSharpReasoningEffort = null,
             },

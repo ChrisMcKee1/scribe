@@ -2991,17 +2991,17 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             options = _options;
             var instructions = BuildAuxiliarySystemPrompt(options, systemPrompt);
-            if (options.SendWholeVocabulary && (FitsLocalContext(options) || options.LocalContextTokens is > 0) &&
-                ContextTokensLocked(options) >= 32768)
+            if (FitsContext(options) && ContextTokensLocked(options) >= 32768 &&
+                (options.SendWholeVocabulary || (!FitsLocalContext(options) && options.LocalContextTokens is > 0)))
             {
                 outputCeiling = Math.Clamp(ContextTokensLocked(options) / 8, AuxiliaryCompletionMaxTokens, PostProcessing.AiDictionarySuggester.FullContextMaxOutputTokens);
             }
 
-            // A model whose context Scribe fits (on this PC, or with an explicit context size): the request and its longest
-            // answer fit it, the answer's ceiling lowered to the room left, and a request that leaves less than
-            // AuxiliaryMinOutputTokens for the answer is not sent at all (the dictionary suggestions then fall back to the
-            // history miner).
-            if (FitsLocalContext(options) || options.LocalContextTokens is > 0)
+            // A model whose context Scribe fits (on this PC, or with an explicit context size / whole vocabulary): the
+            // request and its longest answer fit it, the answer's ceiling lowered to the room left, and a request that
+            // leaves less than AuxiliaryMinOutputTokens for the answer is not sent at all (the dictionary suggestions
+            // then fall back to the history miner).
+            if (FitsContext(options))
             {
                 var room = ContextBudget.VocabularyTokensFor(
                     ContextTokensLocked(options), instructions, TokenEstimate.Transcript(userMessage));

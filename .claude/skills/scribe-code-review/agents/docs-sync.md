@@ -71,7 +71,7 @@ staying silent. Line numbers below are hints and the file names are the anchors.
 | `docs/model-leaderboard.md` | The golden-suite and cloud benchmark report. Hand-written prose on top (revision notes, TL;DR table, key findings), machine-generated report body below. | `CleanupModelCatalog`, `CleanupPrompt`. |
 | `docs/local-model-benchmark.md` | The local-model benchmark report across Ollama, LM Studio, TensorSharp and Foundry Local. | `LocalAppSetup`, `CleanupModelCatalog`, `CleanupPrompt`. |
 | `docs/local-performance-benchmark.md` | A BenchmarkDotNet report. | `tools/Scribe.Benchmarks`. |
-| `docs/release-notes-*.md` | Release notes for the current version only (`docs/release-notes-0.5.12.md` at this writing). Earlier versions' notes were removed and remain in git history. | No workflow or script reads them; `AGENTS.md` names the current one under Releases. See Exceptions. |
+| `docs/release-notes-*.md` | Release notes for the current version only (`docs/release-notes-0.5.13.md` at this writing). Earlier versions' notes were removed and remain in git history. | No workflow or script reads them; `AGENTS.md` names the current one under Releases. See Exceptions. |
 
 Two verified couplings that make `PRIVACY.md` different in kind from the rest:
 

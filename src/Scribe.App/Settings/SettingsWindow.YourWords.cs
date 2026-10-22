@@ -608,7 +608,7 @@ public partial class SettingsWindow
             aiEntries,
             SelectedCustomEndpoint,
             SendsWholeVocabulary,
-            SelectedContextTokens);
+            SelectedContextTokens > 0 ? SelectedContextTokens : (SendsWholeVocabulary ? ContextBudget.MaximumSize : 0));
         DictionaryGlossaryHint.Text = GlossaryHint.Describe(hint);
 
         // What a model's context needs to hold all of it, for each app's settings on the AI cleanup page.
@@ -620,14 +620,14 @@ public partial class SettingsWindow
     private bool SendsWholeVocabulary => SelectedProvider switch
     {
         Scribe.Core.Cleanup.CleanupProvider.FoundryLocal => FoundryWholeVocabularyCheck?.IsChecked == true,
-        Scribe.Core.Cleanup.CleanupProvider.AzureFoundry => SelectedAzureContextTokens > 0 && AzureWholeVocabularyCheck?.IsChecked == true,
-        Scribe.Core.Cleanup.CleanupProvider.GitHubCopilot => SelectedCopilotContextTokens > 0 && CopilotWholeVocabularyCheck?.IsChecked == true,
+        Scribe.Core.Cleanup.CleanupProvider.AzureFoundry => AzureWholeVocabularyCheck?.IsChecked == true,
+        Scribe.Core.Cleanup.CleanupProvider.GitHubCopilot => CopilotWholeVocabularyCheck?.IsChecked == true,
         _ => SelectedLocalApp switch
         {
             Scribe.Core.Cleanup.LocalServerApp.Ollama => OllamaWholeVocabularyCheck?.IsChecked == true,
             Scribe.Core.Cleanup.LocalServerApp.LmStudio => LmStudioWholeVocabularyCheck?.IsChecked == true,
             Scribe.Core.Cleanup.LocalServerApp.TensorSharp => TensorSharpWholeVocabularyCheck?.IsChecked == true,
-            _ => SelectedCustomContextTokens > 0 && CustomWholeVocabularyCheck?.IsChecked == true,
+            _ => CustomWholeVocabularyCheck?.IsChecked == true,
         },
     };
 
@@ -784,7 +784,8 @@ public partial class SettingsWindow
         // offline pattern miner when no model is ready, so the button still helps with no AI configured.
         if (_cleanup.Recipient is { } recipient)
         {
-            var consentText = recipient.SendsWholeVocabulary && recipient.ContextTokens is > 0 and var consentTokens
+            var fullContextTokens = EffectiveLearnFromHistoryContextTokens(recipient);
+            var consentText = fullContextTokens is > 0 and var consentTokens
                 ? CleanupDisclosure.FullContextSuggestionConsentFor(recipient.Provider, consentTokens)
                 : CleanupDisclosure.SuggestionConsentFor(recipient.Provider);
             // The recipient is captured before the question and handed to CompleteAsync, which sends only
@@ -799,7 +800,7 @@ public partial class SettingsWindow
                 return;
             }
 
-            await RunDictionarySuggestionAsync(() => SuggestWithAiAsync(current, recipient));
+            await RunDictionarySuggestionAsync(() => SuggestWithAiAsync(current, recipient, fullContextTokens));
         }
         else
         {
@@ -839,11 +840,36 @@ public partial class SettingsWindow
         }
     }
 
-    private async Task SuggestWithAiAsync(IReadOnlyList<DictionaryEntry> current, CleanupRecipient recipient)
+    private int? EffectiveLearnFromHistoryContextTokens(CleanupRecipient recipient)
     {
-        var fullContextTokens = recipient.SendsWholeVocabulary
-            ? recipient.ContextTokens ?? (_cleanup.LocalContextTokens is > 0 and var liveTokens ? liveTokens : (int?)null)
-            : null;
+        var sameProviderOnPage = SelectedProvider == recipient.Provider;
+        var useWholeVocabulary = recipient.SendsWholeVocabulary || (sameProviderOnPage && SendsWholeVocabulary);
+        var explicitTokens = recipient.ContextTokens
+            ?? (sameProviderOnPage && SelectedContextTokens > 0 ? SelectedContextTokens : (int?)null);
+        if (explicitTokens is > 0 and var chosenTokens)
+        {
+            return ContextBudget.Sanitize(chosenTokens);
+        }
+
+        if (!useWholeVocabulary)
+        {
+            return null;
+        }
+
+        if (_cleanup.LocalContextTokens is > 0 and var liveLocalTokens)
+        {
+            return ContextBudget.Sanitize(liveLocalTokens);
+        }
+
+        return recipient.IsOnDevice ? ContextBudget.AssumedContextTokens : ContextBudget.MaximumSize;
+    }
+
+    private async Task SuggestWithAiAsync(
+        IReadOnlyList<DictionaryEntry> current,
+        CleanupRecipient recipient,
+        int? fullContextTokens = null)
+    {
+        fullContextTokens ??= EffectiveLearnFromHistoryContextTokens(recipient);
         var historyLimit = fullContextTokens is > 0 ? int.MaxValue : 1000;
         List<HistoryEntry> history;
         try
