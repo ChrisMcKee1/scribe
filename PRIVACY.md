@@ -348,7 +348,12 @@ standard suggestion request and up to 6,000 characters of your most recent
 dictations as they were inserted, which can include text your dictionary and
 snippets added. It sends them only to the provider it named: if where AI cleanup
 runs changes before the request goes out, nothing is sent. It does not send
-your dictionary itself or your writing style. If you request an AI usage insight,
+your dictionary itself or your writing style. When you also choose a context
+size and turn on "Send your whole vocabulary when it fits", AI cleanup fits your
+whole vocabulary into that context size with each cleanup request, and
+requesting AI dictionary suggestions sends your dictionary, the word packs you
+let AI cleanup use, and as much of your dictation history as fits in that
+context window. If you request an AI usage insight,
 Scribe sends aggregate usage totals and the labels of recurring terms your
 dictionary covers, leaving out any label whose replacement text spans more than
 one line or is longer than 100 characters. It sends no transcripts, audio,

@@ -111,7 +111,9 @@ internal sealed partial class TextCleanupService
         {
             lock (_gate)
             {
-                return _options.Enabled && FitsLocalContext(_options) ? EffectiveContextLocked(_options) ?? 0 : 0;
+                return _options.Enabled && (FitsLocalContext(_options) || _options.LocalContextTokens is > 0)
+                    ? EffectiveContextLocked(_options) ?? 0
+                    : 0;
             }
         }
     }
@@ -121,6 +123,14 @@ internal sealed partial class TextCleanupService
     private static bool FitsLocalContext(CleanupOptions options) =>
         options.Provider == CleanupProvider.FoundryLocal ||
         LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) != LocalServerApp.None;
+
+    // A remote or custom service whose context size and whole-vocabulary option were explicitly chosen.
+    private static bool FitsRemoteContext(CleanupOptions options) =>
+        !FitsLocalContext(options) && options.LocalContextTokens is > 0 && options.SendWholeVocabulary;
+
+    // Any model whose context Scribe fits requests and vocabulary into.
+    private static bool FitsContext(CleanupOptions options) =>
+        FitsLocalContext(options) || FitsRemoteContext(options);
 
     // The size Scribe asks Ollama, LM Studio or TensorSharp for; null leaves the context to the app's own setting.
     private static int? AskedContextTokens(CleanupOptions options) =>
@@ -138,6 +148,11 @@ internal sealed partial class TextCleanupService
     // Must be called under _gate. The context a request for this configuration is fitted into, when Scribe knows it.
     private int? EffectiveContextLocked(CleanupOptions options)
     {
+        if (!FitsLocalContext(options) && options.LocalContextTokens is > 0 and var remoteAsked)
+        {
+            return ContextBudget.Sanitize(remoteAsked);
+        }
+
         if (UsesOllamaApi(options))
         {
             var asked = AskedContextTokens(options)!.Value;
@@ -1735,7 +1750,7 @@ internal sealed partial class TextCleanupService
         bool readying,
         int? vocabularyTokens)
     {
-        if (!FitsLocalContext(options))
+        if (!FitsContext(options))
         {
             return readying
                 ? null

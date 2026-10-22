@@ -39,6 +39,9 @@ public sealed class SettingsSearchIndexTests
         ["WordDetailsWrittenBox"] = "A row editor for the selected word; the Word packs entry covers it.",
         ["WordDetailsWholeWordCheck"] = "A row editor for the selected word; the Word packs entry covers it.",
         ["LocalAppModelBox"] = "Lists the models of the app chosen under On this PC; the Ollama and LM Studio entries land beside it.",
+        ["AzureWholeVocabularyCheck"] = "Part of Microsoft Foundry's Context and vocabulary section; the context size entry right above it lands beside it.",
+        ["CustomWholeVocabularyCheck"] = "Part of Another AI service's Context and vocabulary section; the context size entry right above it lands beside it.",
+        ["CopilotWholeVocabularyCheck"] = "Part of GitHub Copilot's Context and vocabulary section; the context size entry right above it lands beside it.",
     };
 
     private static readonly IReadOnlyDictionary<string, string> LabelExceptions = new Dictionary<string, string>(StringComparer.Ordinal)

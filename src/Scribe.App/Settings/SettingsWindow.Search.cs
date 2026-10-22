@@ -424,6 +424,18 @@ public partial class SettingsWindow
             case "FoundryWholeVocabularyCheck":
                 FoundryTuningExpander.IsExpanded = true;
                 break;
+            case "AzureContextSizeCombo":
+            case "AzureWholeVocabularyCheck":
+                AzureTuningExpander.IsExpanded = true;
+                break;
+            case "CustomContextSizeCombo":
+            case "CustomWholeVocabularyCheck":
+                CustomTuningExpander.IsExpanded = true;
+                break;
+            case "CopilotContextSizeCombo":
+            case "CopilotWholeVocabularyCheck":
+                CopilotTuningExpander.IsExpanded = true;
+                break;
         }
     }
 

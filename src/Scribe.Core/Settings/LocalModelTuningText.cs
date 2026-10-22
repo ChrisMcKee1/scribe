@@ -50,6 +50,21 @@ public static class LocalModelTuningText
         WholeVocabularyWhat +
         "and Foundry Local reads it again for every dictation, which can add many seconds to each one without a graphics card.";
 
+    /// <summary>The line under a remote AI service's context and vocabulary expander.</summary>
+    public const string RemoteTuningSummary =
+        "How much of your context window, vocabulary and history Scribe sends. Most people never need to change these.";
+
+    /// <summary>Under a remote AI service's context size.</summary>
+    public const string RemoteContextSizeHint =
+        "How much your selected model reads at once, in tokens of about 3 or 4 characters. Choose the context window your " +
+        "model supports so Scribe can fit your whole vocabulary and history into it.";
+
+    /// <summary>Under a remote AI service's whole vocabulary switch.</summary>
+    public const string RemoteWholeVocabularyHint =
+        "With a context size chosen above, sends every word from your dictionary and the word packs you let AI cleanup use " +
+        "with each cleanup request, and sends those word packs, your dictionary and as much of your dictation history as fits " +
+        "when you choose Learn from history.";
+
     /// <summary>The context size choice, the same for Ollama and LM Studio.</summary>
     public const string ContextSizeTitle = "Context size";
 
@@ -187,11 +202,37 @@ public static class LocalModelTuningText
         return sizes;
     }
 
-    /// <summary>A size as the list names it: "32K (32,768 tokens)".</summary>
+    /// <summary>A size as the list names it: "32K (32,768 tokens)" or "1M (1,048,576 tokens)".</summary>
     public static string SizeLabel(int tokens) =>
-        tokens % 1024 == 0
-            ? $"{tokens / 1024}K ({Count(tokens)} tokens)"
-            : $"{Count(tokens)} tokens";
+        tokens % (1024 * 1024) == 0
+            ? $"{tokens / (1024 * 1024)}M ({Count(tokens)} tokens)"
+            : tokens % 1024 == 0
+                ? $"{tokens / 1024}K ({Count(tokens)} tokens)"
+                : $"{Count(tokens)} tokens";
+
+    /// <summary>
+    /// The status line under a remote AI service's context and vocabulary settings: the context size chosen, how much the
+    /// whole vocabulary needs, and whether it fits at that size.
+    /// </summary>
+    public static string RemoteContextStatus(int asked, long vocabularyTokens, int? vocabularyRoom = null)
+    {
+        var context = asked > 0
+            ? $"Scribe fits requests within {Count(asked)} tokens."
+            : "Choose a context size to fit your whole vocabulary and full history into each request.";
+        if (vocabularyTokens <= 0)
+        {
+            return context + " AI cleanup has no vocabulary to send.";
+        }
+
+        var needs = $"{context} Your whole vocabulary needs about {Count(vocabularyTokens)} tokens";
+        return vocabularyRoom switch
+        {
+            null => needs + ".",
+            var room when room >= vocabularyTokens => needs + ", which fits at this size.",
+            > 0 and var room => $"{needs}; at this size, about {Count(room)} of them fit beside a dictation.",
+            _ => needs + "; at this size, none of it fits beside a dictation.",
+        };
+    }
 
     /// <summary>
     /// The status line under an app's settings: the context the model reads, as far as Scribe knows it, how much the whole

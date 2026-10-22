@@ -607,7 +607,8 @@ public partial class SettingsWindow
             SelectedPromptStyle,
             aiEntries,
             SelectedCustomEndpoint,
-            SendsWholeVocabulary);
+            SendsWholeVocabulary,
+            SelectedContextTokens);
         DictionaryGlossaryHint.Text = GlossaryHint.Describe(hint);
 
         // What a model's context needs to hold all of it, for each app's settings on the AI cleanup page.
@@ -615,17 +616,33 @@ public partial class SettingsWindow
         UpdateLocalModelTuning();
     }
 
-    // The whole vocabulary switch of the app on this PC that runs the AI, as the page shows it.
+    // The whole vocabulary switch of the app or service that runs the AI, as the page shows it.
     private bool SendsWholeVocabulary => SelectedProvider switch
     {
         Scribe.Core.Cleanup.CleanupProvider.FoundryLocal => FoundryWholeVocabularyCheck?.IsChecked == true,
+        Scribe.Core.Cleanup.CleanupProvider.AzureFoundry => SelectedAzureContextTokens > 0 && AzureWholeVocabularyCheck?.IsChecked == true,
+        Scribe.Core.Cleanup.CleanupProvider.GitHubCopilot => SelectedCopilotContextTokens > 0 && CopilotWholeVocabularyCheck?.IsChecked == true,
         _ => SelectedLocalApp switch
         {
             Scribe.Core.Cleanup.LocalServerApp.Ollama => OllamaWholeVocabularyCheck?.IsChecked == true,
             Scribe.Core.Cleanup.LocalServerApp.LmStudio => LmStudioWholeVocabularyCheck?.IsChecked == true,
             Scribe.Core.Cleanup.LocalServerApp.TensorSharp => TensorSharpWholeVocabularyCheck?.IsChecked == true,
-            _ => false,
+            _ => SelectedCustomContextTokens > 0 && CustomWholeVocabularyCheck?.IsChecked == true,
         },
+    };
+
+    private int SelectedContextTokens => SelectedProvider switch
+    {
+        Scribe.Core.Cleanup.CleanupProvider.AzureFoundry => SelectedAzureContextTokens,
+        Scribe.Core.Cleanup.CleanupProvider.GitHubCopilot => SelectedCopilotContextTokens,
+        Scribe.Core.Cleanup.CleanupProvider.OpenAiCompatible => SelectedLocalApp switch
+        {
+            Scribe.Core.Cleanup.LocalServerApp.Ollama => SelectedOllamaContextTokens,
+            Scribe.Core.Cleanup.LocalServerApp.LmStudio => SelectedLmStudioContextTokens,
+            Scribe.Core.Cleanup.LocalServerApp.TensorSharp => SelectedTensorSharpContextTokens,
+            _ => SelectedCustomContextTokens,
+        },
+        _ => 0,
     };
 
     private LibraryComposition? CurrentLibraryComposition()
@@ -759,7 +776,7 @@ public partial class SettingsWindow
         // saved are excluded from new suggestions too.
         var current = _rows
             .Where(r => !string.IsNullOrWhiteSpace(r.Pattern))
-            .Select(r => new DictionaryEntry(r.Id, r.Pattern.Trim(), (r.Replacement ?? string.Empty).Trim()))
+            .Select(r => new DictionaryEntry(r.Id, r.Pattern.Trim(), (r.Replacement ?? string.Empty).Trim(), r.WholeWord, r.Enabled))
             .ToList();
 
         // Prefer the user's configured AI model: it can work out how a term is spoken versus how it is
@@ -767,13 +784,16 @@ public partial class SettingsWindow
         // offline pattern miner when no model is ready, so the button still helps with no AI configured.
         if (_cleanup.Recipient is { } recipient)
         {
+            var consentText = recipient.SendsWholeVocabulary && recipient.ContextTokens is > 0 and var consentTokens
+                ? CleanupDisclosure.FullContextSuggestionConsentFor(recipient.Provider, consentTokens)
+                : CleanupDisclosure.SuggestionConsentFor(recipient.Provider);
             // The recipient is captured before the question and handed to CompleteAsync, which sends only
             // while cleanup still serves it, so the history goes where the dialog said or nowhere. Asked
             // unless both it and the saved provider run on this PC (AiRequestConsent says why both).
             if (AiRequestConsent.IsNeeded(recipient, _savedAiProvider) &&
                 !await ConfirmRiskyAsync(
                     CleanupDisclosure.SuggestionConsentTitle,
-                    CleanupDisclosure.SuggestionConsentFor(recipient.Provider),
+                    consentText,
                     "Send and continue"))
             {
                 return;
@@ -821,10 +841,14 @@ public partial class SettingsWindow
 
     private async Task SuggestWithAiAsync(IReadOnlyList<DictionaryEntry> current, CleanupRecipient recipient)
     {
+        var fullContextTokens = recipient.SendsWholeVocabulary
+            ? recipient.ContextTokens ?? (_cleanup.LocalContextTokens is > 0 and var liveTokens ? liveTokens : (int?)null)
+            : null;
+        var historyLimit = fullContextTokens is > 0 ? int.MaxValue : 1000;
         List<HistoryEntry> history;
         try
         {
-            history = await Task.Run(() => _history.GetRecent(1000).ToList());
+            history = await Task.Run(() => _history.GetRecent(historyLimit).ToList());
         }
         catch (Exception ex)
         {
@@ -843,43 +867,105 @@ public partial class SettingsWindow
             return;
         }
 
-        var sample = AiDictionarySuggester.BuildHistorySample(history);
-        if (string.IsNullOrWhiteSpace(sample))
-        {
-            ShowThemedMessage(
-                "Nothing to suggest",
-                "There are no recent dictations to learn from yet. Keep dictating and try again later.");
-            return;
-        }
-
         try
         {
-            // The recipient the user agreed to, checked again where the request is built: a Save during the
-            // history read above cannot turn this into a request to another provider.
-            var completion = await _cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample, recipient);
-            if (_closed)
+            string? response;
+            IReadOnlyList<DictionaryEntry> suggestions;
+            if (fullContextTokens is > 0 and var contextTokens)
             {
-                return;
+                var vocabulary = _libraryVocabulary.Current;
+                var request = AiDictionarySuggester.BuildFullContextRequest(
+                    history,
+                    current,
+                    vocabulary.AllAiEntries,
+                    contextTokens);
+                if (string.IsNullOrWhiteSpace(request.UserMessage))
+                {
+                    ShowThemedMessage(
+                        "Nothing to suggest",
+                        "There are no recent dictations to learn from yet. Keep dictating and try again later.");
+                    return;
+                }
+
+                var scopedCompletion = await _cleanup.CompleteAsync(
+                    request.SystemPrompt,
+                    request.UserMessage,
+                    recipient,
+                    vocabulary.AllAiScope);
+                if (_closed)
+                {
+                    return;
+                }
+
+                if (scopedCompletion.Outcome == ScopedCompletionOutcome.RecipientChanged)
+                {
+                    ShowThemedMessage(
+                        "Nothing was sent",
+                        "Where AI cleanup runs changed after you agreed to send your dictations, so Scribe sent " +
+                        "nothing. Choose Learn from history again to decide for the AI service in use now.");
+                    return;
+                }
+
+                if (scopedCompletion.Outcome == ScopedCompletionOutcome.LibraryScopeNarrowed)
+                {
+                    ShowThemedMessage(
+                        "Nothing was sent",
+                        "Which word packs AI cleanup may use changed before the request went out, so Scribe sent " +
+                        "nothing. Choose Learn from history again.");
+                    return;
+                }
+
+                response = scopedCompletion.Text;
+                if (string.IsNullOrWhiteSpace(response))
+                {
+                    await SuggestWithMinerAsync(current, aiRanFirst: true);
+                    return;
+                }
+
+                suggestions = AiDictionarySuggester.ParseSuggestions(
+                    response,
+                    current.Concat(vocabulary.Entries),
+                    request.MaxSuggestions);
+            }
+            else
+            {
+                var sample = AiDictionarySuggester.BuildHistorySample(history);
+                if (string.IsNullOrWhiteSpace(sample))
+                {
+                    ShowThemedMessage(
+                        "Nothing to suggest",
+                        "There are no recent dictations to learn from yet. Keep dictating and try again later.");
+                    return;
+                }
+
+                // The recipient the user agreed to, checked again where the request is built: a Save during the
+                // history read above cannot turn this into a request to another provider.
+                var completion = await _cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample, recipient);
+                if (_closed)
+                {
+                    return;
+                }
+
+                if (completion.Outcome == CompletionOutcome.RecipientChanged)
+                {
+                    ShowThemedMessage(
+                        "Nothing was sent",
+                        "Where AI cleanup runs changed after you agreed to send your dictations, so Scribe sent " +
+                        "nothing. Choose Learn from history again to decide for the AI service in use now.");
+                    return;
+                }
+
+                response = completion.Text;
+                if (string.IsNullOrWhiteSpace(response))
+                {
+                    // The model was unavailable or returned nothing: fall back to the deterministic miner.
+                    await SuggestWithMinerAsync(current, aiRanFirst: true);
+                    return;
+                }
+
+                suggestions = AiDictionarySuggester.ParseSuggestions(response, current);
             }
 
-            if (completion.Outcome == CompletionOutcome.RecipientChanged)
-            {
-                ShowThemedMessage(
-                    "Nothing was sent",
-                    "Where AI cleanup runs changed after you agreed to send your dictations, so Scribe sent " +
-                    "nothing. Choose Learn from history again to decide for the AI service in use now.");
-                return;
-            }
-
-            var response = completion.Text;
-            if (string.IsNullOrWhiteSpace(response))
-            {
-                // The model was unavailable or returned nothing: fall back to the deterministic miner.
-                await SuggestWithMinerAsync(current, aiRanFirst: true);
-                return;
-            }
-
-            var suggestions = AiDictionarySuggester.ParseSuggestions(response, current);
             if (suggestions.Count == 0)
             {
                 await SuggestWithMinerAsync(current, aiRanFirst: true);

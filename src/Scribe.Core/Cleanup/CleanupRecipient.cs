@@ -29,6 +29,12 @@ public sealed class CleanupRecipient
     /// <summary>True when the request stays on this PC (Foundry Local).</summary>
     public bool IsOnDevice => Provider == CleanupProvider.FoundryLocal;
 
+    /// <summary>True when the configuration sends the whole vocabulary when it fits in the context window.</summary>
+    public bool SendsWholeVocabulary => _configuration.SendWholeVocabulary;
+
+    /// <summary>The context size configured on this recipient, in tokens, or null when left to the service/app default.</summary>
+    public int? ContextTokens => _configuration.LocalContextTokens;
+
     /// <summary>Whether a service serving <paramref name="serving"/> is this recipient.</summary>
     public bool Matches(CleanupOptions serving) => _configuration.MatchesIgnoringPrompt(serving);
 }

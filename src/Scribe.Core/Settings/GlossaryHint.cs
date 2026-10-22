@@ -44,7 +44,8 @@ public static class GlossaryHint
         CleanupPromptStyle PromptStyle,
         IReadOnlyList<DictionaryEntry>? AiLibraryEntries = null,
         string? CustomEndpoint = null,
-        bool SendWholeVocabulary = false);
+        bool SendWholeVocabulary = false,
+        int ContextTokens = 0);
 
     /// <summary>
     /// The estimated tokens of the whole vocabulary AI cleanup may receive, header included, as dictation would render it
@@ -115,7 +116,7 @@ public static class GlossaryHint
             var onThisPc = input.Provider == CleanupProvider.FoundryLocal ||
                 LocalAiServer.Serves(input.Provider, input.CustomEndpoint);
             var receiver = onThisPc ? "The AI model on this PC" : "Your AI service";
-            if (onThisPc && input.SendWholeVocabulary)
+            if ((onThisPc || input.ContextTokens > 0) && input.SendWholeVocabulary)
             {
                 // Send your whole vocabulary when it fits (CleanupPrompt.FitGlossary), the dictation's own words first.
                 var tokens = WholeVocabularyTokens(input);

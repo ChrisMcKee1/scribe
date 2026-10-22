@@ -65,6 +65,29 @@ public static class AiVocabularyPolicy
     }
 
     /// <summary>
+    /// The scope of every usable library in <paramref name="catalog"/> permitted by <see cref="IsPermitted"/>, whether
+    /// currently enabled for local replacement or not: what full-context Learn from history may carry as reference
+    /// vocabulary.
+    /// </summary>
+    public static AiVocabularyScope AllPermittedScopeOf(LibraryCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+        var state = catalog.LocalState;
+        var permitted = new List<KeyValuePair<string, LibraryContentHash?>>();
+        foreach (var library in catalog.Libraries)
+        {
+            var id = library.Content.Id;
+            if (LibraryTiers.IsUsable(library.State) &&
+                IsPermitted(state, id, library.Content.BuiltIn, library.ContentHash))
+            {
+                permitted.Add(new(id, library.ContentHash));
+            }
+        }
+
+        return new AiVocabularyScope(catalog.Generation, permitted) { RequiresEnabled = false };
+    }
+
+    /// <summary>
     /// Whether AI permission narrowed since <paramref name="admitted"/>: exactly <c>!current.Covers(admitted)</c>, so a
     /// library the admitted scope permitted that <paramref name="current"/> does not, or permits for other content, has
     /// narrowed it even when the library is still permitted (review finding A12).

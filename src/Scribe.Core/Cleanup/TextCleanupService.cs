@@ -2512,7 +2512,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // A model whose context Scribe knows gets requests that fit it, under the instructions this call runs with: the
             // dictated text and its answer first, in chunks small enough to leave the vocabulary some room.
             int? vocabularyTokens = null;
-            if (FitsLocalContext(options))
+            if (FitsContext(options))
             {
                 if (PlanLocalRequestLocked(options, style, text) is { } plan)
                 {
@@ -2991,11 +2991,17 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             options = _options;
             var instructions = BuildAuxiliarySystemPrompt(options, systemPrompt);
+            if (options.SendWholeVocabulary && (FitsLocalContext(options) || options.LocalContextTokens is > 0) &&
+                ContextTokensLocked(options) >= 32768)
+            {
+                outputCeiling = Math.Clamp(ContextTokensLocked(options) / 8, AuxiliaryCompletionMaxTokens, PostProcessing.AiDictionarySuggester.FullContextMaxOutputTokens);
+            }
 
-            // A model on this PC reads a limited context: the request and its longest answer fit it, the answer's ceiling
-            // lowered to the room left, and a request that leaves less than AuxiliaryMinOutputTokens for the answer is not
-            // sent at all (the dictionary suggestions then fall back to the history miner).
-            if (FitsLocalContext(options))
+            // A model whose context Scribe fits (on this PC, or with an explicit context size): the request and its longest
+            // answer fit it, the answer's ceiling lowered to the room left, and a request that leaves less than
+            // AuxiliaryMinOutputTokens for the answer is not sent at all (the dictionary suggestions then fall back to the
+            // history miner).
+            if (FitsLocalContext(options) || options.LocalContextTokens is > 0)
             {
                 var room = ContextBudget.VocabularyTokensFor(
                     ContextTokensLocked(options), instructions, TokenEstimate.Transcript(userMessage));

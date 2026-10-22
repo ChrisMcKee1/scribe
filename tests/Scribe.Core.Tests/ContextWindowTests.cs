@@ -267,13 +267,35 @@ public sealed class ContextWindowTests
         Assert.Null(foundry.LocalContextTokens);
         Assert.True(foundry.SendWholeVocabulary);
 
-        // Another AI service, even one on this PC, gets none of it.
+        // Another AI service gets none of the local apps' tuning unless its own context size is chosen.
         foreach (var other in new[] { "http://localhost:8080/v1", "https://openrouter.ai/api/v1" })
         {
             var custom = LocalModelTuning.Apply(CleanupHarness.Custom(other), settings);
             Assert.Null(custom.LocalContextTokens);
             Assert.False(custom.SendWholeVocabulary);
         }
+
+        // Frontier and custom services apply their own context size and whole-vocabulary setting only when a context size is chosen.
+        var frontierSettings = new AppSettings
+        {
+            AiCleanupAzureContextTokens = 1_048_576,
+            AiCleanupAzureSendWholeVocabulary = true,
+            AiCleanupCopilotContextTokens = 262_144,
+            AiCleanupCopilotSendWholeVocabulary = true,
+            AiCleanupCustomContextTokens = 131_072,
+            AiCleanupCustomSendWholeVocabulary = true,
+        };
+        var azure = LocalModelTuning.Apply(new CleanupOptions(true, CleanupProvider.AzureFoundry, "qwen", "https://example.openai.azure.com/", "gpt-5"), frontierSettings);
+        Assert.Equal(1_048_576, azure.LocalContextTokens);
+        Assert.True(azure.SendWholeVocabulary);
+
+        var copilot = LocalModelTuning.Apply(new CleanupOptions(true, CleanupProvider.GitHubCopilot, "qwen", null, null), frontierSettings);
+        Assert.Equal(262_144, copilot.LocalContextTokens);
+        Assert.True(copilot.SendWholeVocabulary);
+
+        var customWithContext = LocalModelTuning.Apply(CleanupHarness.Custom("https://openrouter.ai/api/v1"), frontierSettings);
+        Assert.Equal(131_072, customWithContext.LocalContextTokens);
+        Assert.True(customWithContext.SendWholeVocabulary);
 
         // Ollama's setting (0) leaves the size to Ollama.
         Assert.Null(LocalModelTuning.Apply(CleanupHarness.Custom(LocalAiServer.OllamaAddress), new AppSettings()).LocalContextTokens);

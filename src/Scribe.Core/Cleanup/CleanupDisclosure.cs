@@ -158,6 +158,17 @@ public static class CleanupDisclosure
         "text can include words your dictionary and snippets added. Your dictionary list, your writing style " +
         "and audio are not sent. If where AI cleanup runs changes before the request goes out, nothing is sent.";
 
+    /// <summary>
+    /// The confirmation shown before AI dictionary suggestions send full-context vocabulary and history when a
+    /// context size and whole vocabulary are selected.
+    /// </summary>
+    public static string FullContextSuggestionConsentFor(CleanupProvider provider, int contextTokens) =>
+        "To suggest vocabulary, Scribe will send your dictionary, the word packs you let AI cleanup use, and as much " +
+        $"of your dictation history as fits in the {Count(ContextBudget.Sanitize(contextTokens))}-token context window " +
+        $"you chose, as your dictations were inserted, to {Destination(provider)}. That text can include words your " +
+        "dictionary and snippets added. Your writing style and audio are not sent. If where AI cleanup runs or which " +
+        "word packs it may use changes before the request goes out, nothing is sent.";
+
     private static string Destination(CleanupProvider provider) => provider switch
     {
         CleanupProvider.AzureFoundry => "your Microsoft Foundry deployment",

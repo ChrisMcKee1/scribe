@@ -1811,6 +1811,35 @@
                                                 </CheckBox>
                                                 <TextBlock Margin="28,2,0,0" x:Name="AiPromptCachingHint" Style="{StaticResource CardDescription}" Text="{x:Static cleanup:CleanupDisclosure.PromptCachingTradeOff}"/>
                                             </StackPanel>
+
+                                            <ui:CardExpander x:Name="AzureTuningExpander" Margin="0,16,0,0" IsExpanded="False"
+                                                             AutomationProperties.Name="Microsoft Foundry context and vocabulary">
+                                                <ui:CardExpander.Header>
+                                                    <StackPanel>
+                                                        <TextBlock Text="Context and vocabulary" Style="{StaticResource CardTitle}"/>
+                                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0"
+                                                                   Text="{x:Static coresettings:LocalModelTuningText.RemoteTuningSummary}"/>
+                                                    </StackPanel>
+                                                </ui:CardExpander.Header>
+                                                <StackPanel Margin="0,4,0,0">
+                                                    <TextBlock x:Name="AzureContextSizeTitle" Text="Context size" Style="{StaticResource CardTitle}"/>
+                                                    <ComboBox x:Name="AzureContextSizeCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                              AutomationProperties.LabeledBy="{Binding ElementName=AzureContextSizeTitle}"
+                                                              AutomationProperties.HelpText="{Binding Text, ElementName=AzureContextSizeHint}"
+                                                              SelectionChanged="LocalModelTuning_Changed"/>
+                                                    <TextBlock x:Name="AzureContextSizeHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                               Text="{x:Static coresettings:LocalModelTuningText.RemoteContextSizeHint}"/>
+                                                    <CheckBox x:Name="AzureWholeVocabularyCheck" Style="{StaticResource SettingCheckBox}" Margin="0,16,0,0"
+                                                              AutomationProperties.LabeledBy="{Binding ElementName=AzureWholeVocabularyTitle}"
+                                                              AutomationProperties.HelpText="{Binding Text, ElementName=AzureWholeVocabularyHint}"
+                                                              Checked="LocalModelTuning_Changed" Unchecked="LocalModelTuning_Changed">
+                                                        <TextBlock x:Name="AzureWholeVocabularyTitle" Text="Send your whole vocabulary when it fits" Style="{StaticResource CardTitle}"/>
+                                                    </CheckBox>
+                                                    <TextBlock Margin="28,2,0,0" x:Name="AzureWholeVocabularyHint" Style="{StaticResource CardDescription}"
+                                                               Text="{x:Static coresettings:LocalModelTuningText.RemoteWholeVocabularyHint}"/>
+                                                    <TextBlock x:Name="AzureContextStatusText" Style="{StaticResource CardDescription}" Margin="0,12,0,0"/>
+                                                </StackPanel>
+                                            </ui:CardExpander>
                                         </StackPanel>
 
                                         <!-- Bring-your-own OpenAI-compatible endpoint (Ollama, LM Studio, OpenRouter...) -->
@@ -1850,6 +1879,35 @@
                                                        Text="Enter a key if your service needs one. Saved encrypted on this PC with your Windows account."/>
                                             <settings:SettingsStatusRow x:Name="CustomStatusRow" PrimaryActionInvoked="CustomStatusRow_PrimaryActionInvoked"/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,8,0,0" Text="{x:Static cleanup:CleanupDisclosure.CustomServiceCaching}"/>
+
+                                            <ui:CardExpander x:Name="CustomTuningExpander" Margin="0,16,0,0" IsExpanded="False"
+                                                             AutomationProperties.Name="Another AI service context and vocabulary">
+                                                <ui:CardExpander.Header>
+                                                    <StackPanel>
+                                                        <TextBlock Text="Context and vocabulary" Style="{StaticResource CardTitle}"/>
+                                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0"
+                                                                   Text="{x:Static coresettings:LocalModelTuningText.RemoteTuningSummary}"/>
+                                                    </StackPanel>
+                                                </ui:CardExpander.Header>
+                                                <StackPanel Margin="0,4,0,0">
+                                                    <TextBlock x:Name="CustomContextSizeTitle" Text="Context size" Style="{StaticResource CardTitle}"/>
+                                                    <ComboBox x:Name="CustomContextSizeCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                              AutomationProperties.LabeledBy="{Binding ElementName=CustomContextSizeTitle}"
+                                                              AutomationProperties.HelpText="{Binding Text, ElementName=CustomContextSizeHint}"
+                                                              SelectionChanged="LocalModelTuning_Changed"/>
+                                                    <TextBlock x:Name="CustomContextSizeHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                               Text="{x:Static coresettings:LocalModelTuningText.RemoteContextSizeHint}"/>
+                                                    <CheckBox x:Name="CustomWholeVocabularyCheck" Style="{StaticResource SettingCheckBox}" Margin="0,16,0,0"
+                                                              AutomationProperties.LabeledBy="{Binding ElementName=CustomWholeVocabularyTitle}"
+                                                              AutomationProperties.HelpText="{Binding Text, ElementName=CustomWholeVocabularyHint}"
+                                                              Checked="LocalModelTuning_Changed" Unchecked="LocalModelTuning_Changed">
+                                                        <TextBlock x:Name="CustomWholeVocabularyTitle" Text="Send your whole vocabulary when it fits" Style="{StaticResource CardTitle}"/>
+                                                    </CheckBox>
+                                                    <TextBlock Margin="28,2,0,0" x:Name="CustomWholeVocabularyHint" Style="{StaticResource CardDescription}"
+                                                               Text="{x:Static coresettings:LocalModelTuningText.RemoteWholeVocabularyHint}"/>
+                                                    <TextBlock x:Name="CustomContextStatusText" Style="{StaticResource CardDescription}" Margin="0,12,0,0"/>
+                                                </StackPanel>
+                                            </ui:CardExpander>
                                         </StackPanel>
 
                                         <StackPanel x:Name="CopilotPanel" Visibility="Collapsed">
@@ -1877,6 +1935,35 @@
                                             <TextBlock x:Name="CopilotModelHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
                                                        Text="Leave empty to use your account's default model."/>
                                             <TextBlock Style="{StaticResource CardDescription}" Margin="0,8,0,0" Text="{x:Static cleanup:CleanupDisclosure.CopilotCaching}"/>
+
+                                            <ui:CardExpander x:Name="CopilotTuningExpander" Margin="0,16,0,0" IsExpanded="False"
+                                                             AutomationProperties.Name="GitHub Copilot context and vocabulary">
+                                                <ui:CardExpander.Header>
+                                                    <StackPanel>
+                                                        <TextBlock Text="Context and vocabulary" Style="{StaticResource CardTitle}"/>
+                                                        <TextBlock Style="{StaticResource CardDescription}" Margin="0,2,0,0"
+                                                                   Text="{x:Static coresettings:LocalModelTuningText.RemoteTuningSummary}"/>
+                                                    </StackPanel>
+                                                </ui:CardExpander.Header>
+                                                <StackPanel Margin="0,4,0,0">
+                                                    <TextBlock x:Name="CopilotContextSizeTitle" Text="Context size" Style="{StaticResource CardTitle}"/>
+                                                    <ComboBox x:Name="CopilotContextSizeCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
+                                                              AutomationProperties.LabeledBy="{Binding ElementName=CopilotContextSizeTitle}"
+                                                              AutomationProperties.HelpText="{Binding Text, ElementName=CopilotContextSizeHint}"
+                                                              SelectionChanged="LocalModelTuning_Changed"/>
+                                                    <TextBlock x:Name="CopilotContextSizeHint" Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                               Text="{x:Static coresettings:LocalModelTuningText.RemoteContextSizeHint}"/>
+                                                    <CheckBox x:Name="CopilotWholeVocabularyCheck" Style="{StaticResource SettingCheckBox}" Margin="0,16,0,0"
+                                                              AutomationProperties.LabeledBy="{Binding ElementName=CopilotWholeVocabularyTitle}"
+                                                              AutomationProperties.HelpText="{Binding Text, ElementName=CopilotWholeVocabularyHint}"
+                                                              Checked="LocalModelTuning_Changed" Unchecked="LocalModelTuning_Changed">
+                                                        <TextBlock x:Name="CopilotWholeVocabularyTitle" Text="Send your whole vocabulary when it fits" Style="{StaticResource CardTitle}"/>
+                                                    </CheckBox>
+                                                    <TextBlock Margin="28,2,0,0" x:Name="CopilotWholeVocabularyHint" Style="{StaticResource CardDescription}"
+                                                               Text="{x:Static coresettings:LocalModelTuningText.RemoteWholeVocabularyHint}"/>
+                                                    <TextBlock x:Name="CopilotContextStatusText" Style="{StaticResource CardDescription}" Margin="0,12,0,0"/>
+                                                </StackPanel>
+                                            </ui:CardExpander>
                                         </StackPanel>
                                     </StackPanel>
                                 </ui:Card>

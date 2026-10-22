@@ -313,7 +313,7 @@ public sealed class LibrarySelectionInUseTests : IDisposable
         Assert.Contains("var libraryScope = _usageLibraryScope;", handler, StringComparison.Ordinal);
         Assert.Matches(@"CompleteAsync\(\s*UsageInsight\.SystemPrompt,\s*UsageInsight\.BuildSummary\(snapshot\),\s*recipient,\s*libraryScope\);", handler);
         Assert.Equal(
-            ["_cleanup.CompleteAsync(", "_cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample, recipient);"],
+            ["_cleanup.CompleteAsync(", "_cleanup.CompleteAsync(", "_cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample, recipient);"],
             Regex.Matches(window, @"_cleanup\.CompleteAsync\([^\r\n]*").Select(match => match.Value.Trim()).Order(StringComparer.Ordinal).ToList());
     }
 

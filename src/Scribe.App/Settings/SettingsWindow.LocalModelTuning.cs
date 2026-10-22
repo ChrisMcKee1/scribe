@@ -26,6 +26,15 @@ public partial class SettingsWindow
     private int SelectedTensorSharpContextTokens =>
         (TensorSharpContextSizeCombo?.SelectedItem as ComboBoxItem)?.Tag is int tokens ? tokens : 0;
 
+    private int SelectedAzureContextTokens =>
+        (AzureContextSizeCombo?.SelectedItem as ComboBoxItem)?.Tag is int tokens ? tokens : 0;
+
+    private int SelectedCopilotContextTokens =>
+        (CopilotContextSizeCombo?.SelectedItem as ComboBoxItem)?.Tag is int tokens ? tokens : 0;
+
+    private int SelectedCustomContextTokens =>
+        (CustomContextSizeCombo?.SelectedItem as ComboBoxItem)?.Tag is int tokens ? tokens : 0;
+
     private string SelectedTensorSharpBackend =>
         (TensorSharpBackendCombo?.SelectedItem as ComboBoxItem)?.Tag is string backend ? backend : string.Empty;
 
@@ -38,11 +47,17 @@ public partial class SettingsWindow
         FillContextSizes(OllamaContextSizeCombo, "Ollama", _settings.AiCleanupOllamaContextTokens);
         FillContextSizes(LmStudioContextSizeCombo, "LM Studio", _settings.AiCleanupLmStudioContextTokens);
         FillContextSizes(TensorSharpContextSizeCombo, "TensorSharp", _settings.AiCleanupTensorSharpContextTokens);
+        FillContextSizes(AzureContextSizeCombo, "Microsoft Foundry", _settings.AiCleanupAzureContextTokens);
+        FillContextSizes(CopilotContextSizeCombo, "GitHub Copilot", _settings.AiCleanupCopilotContextTokens);
+        FillContextSizes(CustomContextSizeCombo, "The service", _settings.AiCleanupCustomContextTokens);
         FillTensorSharpBackends(null, _settings.AiCleanupTensorSharpBackend);
         FillTensorSharpReasoningEfforts(_settings.AiCleanupTensorSharpReasoningEffort);
         OllamaWholeVocabularyCheck.IsChecked = _settings.AiCleanupOllamaSendWholeVocabulary;
         LmStudioWholeVocabularyCheck.IsChecked = _settings.AiCleanupLmStudioSendWholeVocabulary;
         TensorSharpWholeVocabularyCheck.IsChecked = _settings.AiCleanupTensorSharpSendWholeVocabulary;
+        AzureWholeVocabularyCheck.IsChecked = _settings.AiCleanupAzureSendWholeVocabulary;
+        CopilotWholeVocabularyCheck.IsChecked = _settings.AiCleanupCopilotSendWholeVocabulary;
+        CustomWholeVocabularyCheck.IsChecked = _settings.AiCleanupCustomSendWholeVocabulary;
         FoundryWholeVocabularyCheck.IsChecked = _settings.AiCleanupFoundryLocalSendWholeVocabulary;
         UpdateLocalModelTuning();
     }
@@ -181,6 +196,27 @@ public partial class SettingsWindow
             : 0;
         FoundryContextStatusText.Text = LocalModelTuningText.ContextStatus(
             "Foundry Local", foundryInUse, asked: 0, _wholeVocabularyTokens, VocabularyRoomAt(foundryInUse));
+
+        if (AzureContextStatusText is not null)
+        {
+            var azureAsked = SelectedAzureContextTokens;
+            AzureContextStatusText.Text = LocalModelTuningText.RemoteContextStatus(
+                azureAsked, _wholeVocabularyTokens, VocabularyRoomAt(azureAsked));
+        }
+
+        if (CopilotContextStatusText is not null)
+        {
+            var copilotAsked = SelectedCopilotContextTokens;
+            CopilotContextStatusText.Text = LocalModelTuningText.RemoteContextStatus(
+                copilotAsked, _wholeVocabularyTokens, VocabularyRoomAt(copilotAsked));
+        }
+
+        if (CustomContextStatusText is not null)
+        {
+            var customAsked = SelectedCustomContextTokens;
+            CustomContextStatusText.Text = LocalModelTuningText.RemoteContextStatus(
+                customAsked, _wholeVocabularyTokens, VocabularyRoomAt(customAsked));
+        }
     }
 
     // The context AI cleanup serves, when the saved settings run it on exactly what the page shows (the app, the model and

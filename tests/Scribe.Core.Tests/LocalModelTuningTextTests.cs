@@ -35,6 +35,7 @@ public sealed class LocalModelTuningTextTests
         Assert.Equal((0, "Ollama's setting"), sizes[0]);
         Assert.Equal(ContextBudget.OfferedSizes, sizes.Skip(1).Select(size => size.Tokens));
         Assert.Contains((32768, "32K (32,768 tokens)"), sizes);
+        Assert.Contains((1048576, "1M (1,048,576 tokens)"), sizes);
         Assert.Equal("3,000 tokens", LocalModelTuningText.SizeLabel(3000));
     }
 
@@ -117,6 +118,10 @@ public sealed class LocalModelTuningTextTests
             LocalModelTuningText.ContextSizeTitle,
             LocalModelTuningText.OllamaContextSizeHint,
             LocalModelTuningText.LmStudioContextSizeHint,
+            LocalModelTuningText.RemoteTuningSummary,
+            LocalModelTuningText.RemoteContextSizeHint,
+            LocalModelTuningText.RemoteWholeVocabularyHint,
+            LocalModelTuningText.RemoteContextStatus(1_048_576, 9000, 1_000_000),
             LocalModelTuningText.ContextStatus("Ollama", 4096, 32768, 9000, 1500),
         ];
 
@@ -146,8 +151,12 @@ public sealed class LocalModelTuningTextTests
             CleanupPrompt.GlossaryHeaderTokens + CleanupPrompt.Tokens(CleanupPrompt.GlossaryLines(DictionaryEntryBuilder.Build(rows).Entries.OrderBy(e => e.Pattern, StringComparer.Ordinal))),
             tokens);
 
-        // Off, or a service elsewhere, is what every release since 0.5.2 said.
+        // Off, or a service elsewhere without a chosen context size, is what every release since 0.5.2 said.
         Assert.Contains("whichever of these 200 words a dictation appears to mention", GlossaryHint.Describe(Input(false, LocalAiServer.OllamaAddress)), StringComparison.Ordinal);
         Assert.Contains("Your AI service receives whichever", GlossaryHint.Describe(Input(true, "https://openrouter.ai/api/v1")), StringComparison.Ordinal);
+        Assert.Contains(
+            $"Your AI service receives all 200 of these words with each cleanup request when they fit in its context with the dictation, about {tokens:N0} tokens.",
+            GlossaryHint.Describe(Input(true, "https://openrouter.ai/api/v1") with { ContextTokens = 1_048_576 }),
+            StringComparison.Ordinal);
     }
 }

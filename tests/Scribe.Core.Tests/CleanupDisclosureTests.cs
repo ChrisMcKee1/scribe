@@ -151,6 +151,9 @@ public sealed class CleanupDisclosureTests
         Assert.Contains("audio are not sent", text, StringComparison.Ordinal);
         Assert.Contains("If where AI cleanup runs changes before the request goes out, nothing is sent.", text, StringComparison.Ordinal);
         Assert.EndsWith("?", CleanupDisclosure.SuggestionConsentTitle, StringComparison.Ordinal);
+        var fullText = CleanupDisclosure.FullContextSuggestionConsentFor(provider, 1_048_576);
+        Assert.Contains("your dictionary, the word packs you let AI cleanup use, and as much of your dictation history as fits in the 1,048,576-token context window", fullText, StringComparison.Ordinal);
+        Assert.Contains(destination, fullText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -163,6 +166,7 @@ public sealed class CleanupDisclosureTests
             CleanupDisclosure.CustomServiceCaching, CleanupDisclosure.CopilotCaching, PromptCachePolicy.Rejected.Display,
         };
         texts.AddRange(Enum.GetValues<CleanupProvider>().Select(CleanupDisclosure.SuggestionConsentFor));
+        texts.AddRange(Enum.GetValues<CleanupProvider>().Select(p => CleanupDisclosure.FullContextSuggestionConsentFor(p, 1_048_576)));
         texts.AddRange(Enum.GetValues<CleanupProvider>().Select(CleanupDisclosure.SummaryFor));
 
         foreach (var text in texts)

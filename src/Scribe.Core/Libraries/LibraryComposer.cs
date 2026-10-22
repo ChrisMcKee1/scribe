@@ -167,10 +167,57 @@ public sealed class LibraryComposer : ILibraryComposer
     {
         ArgumentNullException.ThrowIfNull(catalog);
         var composition = LibraryComposition.Committed(catalog, [], new GlossaryBudget(0));
+        var allAiEntries = ComposeAllAiPermittedEntries(catalog, composition.AiLibraryEntries);
         var vocabulary = new LibraryVocabulary(
-            catalog.Generation, composition.LibraryEntries, composition.AiLibraryEntries, AiVocabularyPolicy.ScopeOf(catalog));
+            catalog.Generation,
+            composition.LibraryEntries,
+            composition.AiLibraryEntries,
+            AiVocabularyPolicy.ScopeOf(catalog),
+            allAiEntries,
+            AiVocabularyPolicy.AllPermittedScopeOf(catalog));
         LibraryVocabularyOrigins.Record(vocabulary, composition);
         return vocabulary;
+    }
+
+    private static IReadOnlyList<DictionaryEntry> ComposeAllAiPermittedEntries(
+        LibraryCatalog catalog,
+        IReadOnlyList<DictionaryEntry> enabledAiEntries)
+    {
+        var state = catalog.LocalState;
+        var seen = new HashSet<LibraryTermKey>(enabledAiEntries.Count);
+        var all = new List<DictionaryEntry>(enabledAiEntries.Count);
+        foreach (var entry in enabledAiEntries)
+        {
+            var key = LibraryTermKey.From(entry.Pattern);
+            if (!key.IsEmpty)
+            {
+                seen.Add(key);
+            }
+
+            all.Add(entry);
+        }
+
+        foreach (var library in catalog.Libraries)
+        {
+            var id = library.Content.Id;
+            if (state.EnabledIds.Contains(id) ||
+                !LibraryTiers.IsUsable(library.State) ||
+                !AiVocabularyPolicy.IsPermitted(state, id, library.Content.BuiltIn, library.ContentHash))
+            {
+                continue;
+            }
+
+            foreach (var row in library.Content.Rows)
+            {
+                var key = LibraryTiers.CompetingKey(row);
+                if (row.Values.Enabled && !key.IsEmpty && seen.Add(key))
+                {
+                    all.Add(row.Values.ToEntry());
+                }
+            }
+        }
+
+        return all;
     }
 
     /// <inheritdoc/>
@@ -195,6 +242,21 @@ public sealed class LibraryComposer : ILibraryComposer
             !deleted.Contains(pair.Key) &&
             AiVocabularyPolicy.IsPermittedByChoice(next, pair.Key, library.Content.BuiltIn));
         return new AiVocabularyScope(scope.Generation, kept);
+    }
+
+    internal static AiVocabularyScope AllPermittedScopeWhileSaving(LibraryCatalog committed, LibraryChangeSet changes)
+    {
+        ArgumentNullException.ThrowIfNull(committed);
+        ArgumentNullException.ThrowIfNull(changes);
+
+        var next = changes.LocalState;
+        var deleted = new HashSet<string>(changes.Deletions.Select(deletion => deletion.LibraryId), StringComparer.OrdinalIgnoreCase);
+        var scope = AiVocabularyPolicy.AllPermittedScopeOf(committed);
+        var kept = scope.PermittedContent.Where(pair =>
+            committed.Find(pair.Key) is { } library &&
+            !deleted.Contains(pair.Key) &&
+            AiVocabularyPolicy.IsPermittedByChoice(next, pair.Key, library.Content.BuiltIn));
+        return new AiVocabularyScope(scope.Generation, kept) { RequiresEnabled = false };
     }
 
     // A legacy id enters the document's list only when every library an older build loads under it is, after the commit,

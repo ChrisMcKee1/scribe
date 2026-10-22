@@ -155,4 +155,40 @@ public sealed class AiDictionarySuggesterTests
 
         Assert.Equal(100, sample.Length);
     }
+
+    [Fact]
+    public void SystemPrompt_instructs_the_model_to_use_surrounding_context_for_misrewritten_phrases()
+    {
+        Assert.Contains("Read the surrounding sentence, topic, and nearby dictations carefully", AiDictionarySuggester.SystemPrompt, StringComparison.Ordinal);
+        Assert.Contains("earlier rewrite got wrong in context", AiDictionarySuggester.SystemPrompt, StringComparison.Ordinal);
+        Assert.Contains("existing vocabulary rules", AiDictionarySuggester.SystemPrompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildFullContextRequest_sends_all_word_packs_dictionary_and_history_beyond_6000_chars_in_a_million_token_window()
+    {
+        var history = Enumerable.Range(0, 2500)
+            .Select(i => H($"dictation entry {i}: we deployed the home chart to the cube cluster for project {i}"))
+            .ToList();
+        var dictionary = Enumerable.Range(0, 100)
+            .Select(i => DictionaryEntry.New($"personal spoken {i}", $"PersonalWritten{i}"))
+            .ToList();
+        var wordPacks = Enumerable.Range(0, 500)
+            .Select(i => DictionaryEntry.New($"pack spoken {i}", $"PackWritten{i}"))
+            .ToList();
+
+        var request = AiDictionarySuggester.BuildFullContextRequest(
+            history,
+            dictionary,
+            wordPacks,
+            contextTokens: 1_048_576);
+
+        Assert.Equal(AiDictionarySuggester.FullContextMaxSuggestions, request.MaxSuggestions);
+        Assert.Equal(600, request.VocabularyTermsIncluded);
+        Assert.Equal(2500, request.HistoryEntriesIncluded);
+        Assert.True(request.UserMessage.Length > 100_000);
+        Assert.Contains("PersonalWritten0", request.SystemPrompt, StringComparison.Ordinal);
+        Assert.Contains("PackWritten499", request.SystemPrompt, StringComparison.Ordinal);
+        Assert.Contains($"Return at most {AiDictionarySuggester.FullContextMaxSuggestions} items, fewer is fine.", request.SystemPrompt, StringComparison.Ordinal);
+    }
 }

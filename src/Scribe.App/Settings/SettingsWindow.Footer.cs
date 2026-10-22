@@ -254,9 +254,15 @@ public partial class SettingsWindow
         draft.AiCleanupOllamaContextTokens = SelectedOllamaContextTokens;
         draft.AiCleanupLmStudioContextTokens = SelectedLmStudioContextTokens;
         draft.AiCleanupTensorSharpContextTokens = SelectedTensorSharpContextTokens;
+        draft.AiCleanupAzureContextTokens = SelectedAzureContextTokens;
+        draft.AiCleanupCopilotContextTokens = SelectedCopilotContextTokens;
+        draft.AiCleanupCustomContextTokens = SelectedCustomContextTokens;
         draft.AiCleanupOllamaSendWholeVocabulary = OllamaWholeVocabularyCheck.IsChecked == true;
         draft.AiCleanupLmStudioSendWholeVocabulary = LmStudioWholeVocabularyCheck.IsChecked == true;
         draft.AiCleanupTensorSharpSendWholeVocabulary = TensorSharpWholeVocabularyCheck.IsChecked == true;
+        draft.AiCleanupAzureSendWholeVocabulary = AzureWholeVocabularyCheck.IsChecked == true;
+        draft.AiCleanupCopilotSendWholeVocabulary = CopilotWholeVocabularyCheck.IsChecked == true;
+        draft.AiCleanupCustomSendWholeVocabulary = CustomWholeVocabularyCheck.IsChecked == true;
         draft.AiCleanupTensorSharpBackend = SelectedTensorSharpBackend;
         draft.AiCleanupTensorSharpReasoningEffort = SelectedTensorSharpReasoningEffort;
         draft.AiCleanupFoundryLocalSendWholeVocabulary = FoundryWholeVocabularyCheck.IsChecked == true;

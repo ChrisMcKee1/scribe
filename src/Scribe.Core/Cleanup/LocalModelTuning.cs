@@ -27,6 +27,30 @@ public static class LocalModelTuning
             };
         }
 
+        if (options.Provider == CleanupProvider.AzureFoundry)
+        {
+            var size = Size(settings.AiCleanupAzureContextTokens);
+            return options with
+            {
+                LocalContextTokens = size,
+                SendWholeVocabulary = size is not null && settings.AiCleanupAzureSendWholeVocabulary,
+                TensorSharpBackend = null,
+                TensorSharpReasoningEffort = null,
+            };
+        }
+
+        if (options.Provider == CleanupProvider.GitHubCopilot)
+        {
+            var size = Size(settings.AiCleanupCopilotContextTokens);
+            return options with
+            {
+                LocalContextTokens = size,
+                SendWholeVocabulary = size is not null && settings.AiCleanupCopilotSendWholeVocabulary,
+                TensorSharpBackend = null,
+                TensorSharpReasoningEffort = null,
+            };
+        }
+
         return LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) switch
         {
             LocalServerApp.Ollama => options with
@@ -52,8 +76,8 @@ public static class LocalModelTuning
             },
             _ => options with
             {
-                LocalContextTokens = null,
-                SendWholeVocabulary = false,
+                LocalContextTokens = Size(settings.AiCleanupCustomContextTokens),
+                SendWholeVocabulary = Size(settings.AiCleanupCustomContextTokens) is not null && settings.AiCleanupCustomSendWholeVocabulary,
                 TensorSharpBackend = null,
                 TensorSharpReasoningEffort = null,
             },

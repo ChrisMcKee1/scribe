@@ -873,6 +873,9 @@ public sealed class SettingsRepository : ISettingsRepository
         settings.AiCleanupOllamaContextTokens = Cleanup.ContextBudget.Sanitize(settings.AiCleanupOllamaContextTokens);
         settings.AiCleanupLmStudioContextTokens = Cleanup.ContextBudget.Sanitize(settings.AiCleanupLmStudioContextTokens);
         settings.AiCleanupTensorSharpContextTokens = Cleanup.ContextBudget.Sanitize(settings.AiCleanupTensorSharpContextTokens);
+        settings.AiCleanupAzureContextTokens = Cleanup.ContextBudget.Sanitize(settings.AiCleanupAzureContextTokens);
+        settings.AiCleanupCopilotContextTokens = Cleanup.ContextBudget.Sanitize(settings.AiCleanupCopilotContextTokens);
+        settings.AiCleanupCustomContextTokens = Cleanup.ContextBudget.Sanitize(settings.AiCleanupCustomContextTokens);
         settings.AiCleanupTensorSharpBackend = Cleanup.LocalModelTuning.SanitizeTensorSharpBackend(settings.AiCleanupTensorSharpBackend);
         settings.AiCleanupTensorSharpReasoningEffort = Cleanup.LocalModelTuning.SanitizeTensorSharpReasoningEffort(settings.AiCleanupTensorSharpReasoningEffort);
 

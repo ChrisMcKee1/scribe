@@ -19,8 +19,8 @@ public static class ContextBudget
     /// </summary>
     public const int AssumedContextTokens = 4096;
 
-    /// <summary>The context sizes Settings offers for Ollama and LM Studio, in tokens.</summary>
-    public static IReadOnlyList<int> OfferedSizes { get; } = [8192, 16384, 32768, 65536, 131072];
+    /// <summary>The context sizes Settings offers for AI cleanup, in tokens.</summary>
+    public static IReadOnlyList<int> OfferedSizes { get; } = [8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576];
 
     /// <summary>The smallest context size Scribe asks an app for, and the largest.</summary>
     public const int MinimumSize = 2048;

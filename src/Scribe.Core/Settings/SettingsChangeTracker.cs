@@ -163,9 +163,15 @@ public static class SettingsChangeTracker
             baseline.AiCleanupOllamaContextTokens != draft.AiCleanupOllamaContextTokens ||
             baseline.AiCleanupLmStudioContextTokens != draft.AiCleanupLmStudioContextTokens ||
             baseline.AiCleanupTensorSharpContextTokens != draft.AiCleanupTensorSharpContextTokens ||
+            baseline.AiCleanupAzureContextTokens != draft.AiCleanupAzureContextTokens ||
+            baseline.AiCleanupCopilotContextTokens != draft.AiCleanupCopilotContextTokens ||
+            baseline.AiCleanupCustomContextTokens != draft.AiCleanupCustomContextTokens ||
             baseline.AiCleanupOllamaSendWholeVocabulary != draft.AiCleanupOllamaSendWholeVocabulary ||
             baseline.AiCleanupLmStudioSendWholeVocabulary != draft.AiCleanupLmStudioSendWholeVocabulary ||
             baseline.AiCleanupTensorSharpSendWholeVocabulary != draft.AiCleanupTensorSharpSendWholeVocabulary ||
+            baseline.AiCleanupAzureSendWholeVocabulary != draft.AiCleanupAzureSendWholeVocabulary ||
+            baseline.AiCleanupCopilotSendWholeVocabulary != draft.AiCleanupCopilotSendWholeVocabulary ||
+            baseline.AiCleanupCustomSendWholeVocabulary != draft.AiCleanupCustomSendWholeVocabulary ||
             !Same(baseline.AiCleanupTensorSharpBackend, draft.AiCleanupTensorSharpBackend) ||
             !Same(baseline.AiCleanupTensorSharpReasoningEffort, draft.AiCleanupTensorSharpReasoningEffort) ||
             baseline.AiCleanupFoundryLocalSendWholeVocabulary != draft.AiCleanupFoundryLocalSendWholeVocabulary ||

@@ -343,6 +343,33 @@ public sealed class AppSettings
     public bool AiCleanupFoundryLocalSendWholeVocabulary { get; set; }
 
     /// <summary>
+    /// The context size, in tokens, Scribe fits vocabulary and Learn from history requests into when AI cleanup runs on
+    /// Microsoft Foundry; 0 uses the standard cloud vocabulary budget without a fixed context size.
+    /// </summary>
+    public int AiCleanupAzureContextTokens { get; set; }
+
+    /// <summary>The same as <see cref="AiCleanupOllamaSendWholeVocabulary"/>, for Microsoft Foundry when a context size is chosen.</summary>
+    public bool AiCleanupAzureSendWholeVocabulary { get; set; }
+
+    /// <summary>
+    /// The context size, in tokens, Scribe fits vocabulary and Learn from history requests into when AI cleanup runs on
+    /// GitHub Copilot; 0 uses the standard cloud vocabulary budget without a fixed context size.
+    /// </summary>
+    public int AiCleanupCopilotContextTokens { get; set; }
+
+    /// <summary>The same as <see cref="AiCleanupOllamaSendWholeVocabulary"/>, for GitHub Copilot when a context size is chosen.</summary>
+    public bool AiCleanupCopilotSendWholeVocabulary { get; set; }
+
+    /// <summary>
+    /// The context size, in tokens, Scribe fits vocabulary and Learn from history requests into when AI cleanup runs on
+    /// another AI service; 0 uses the standard cloud vocabulary budget without a fixed context size.
+    /// </summary>
+    public int AiCleanupCustomContextTokens { get; set; }
+
+    /// <summary>The same as <see cref="AiCleanupOllamaSendWholeVocabulary"/>, for another AI service when a context size is chosen.</summary>
+    public bool AiCleanupCustomSendWholeVocabulary { get; set; }
+
+    /// <summary>
     /// The context size cap, in tokens, Scribe fits prompts and vocabulary into when AI cleanup runs on TensorSharp;
     /// 0 leaves it to the context window TensorSharp loaded the model with.
     /// </summary>

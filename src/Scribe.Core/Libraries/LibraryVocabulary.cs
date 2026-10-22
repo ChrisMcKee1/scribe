@@ -52,6 +52,13 @@ public sealed class AiVocabularyScope
     /// <summary>The committed generation the scope was computed from.</summary>
     public long Generation { get; }
 
+    /// <summary>
+    /// True when every library in this scope must also be enabled for local replacement (the default for dictation and
+    /// usage insights); false for <see cref="AiVocabularyPolicy.AllPermittedScopeOf"/>, which covers all usable
+    /// AI-permitted word packs for full-context Learn from history.
+    /// </summary>
+    internal bool RequiresEnabled { get; init; } = true;
+
     /// <summary>The libraries whose terms may be sent: the keys of <see cref="PermittedContent"/>.</summary>
     public IReadOnlySet<string> PermittedLibraryIds { get; }
 
@@ -108,7 +115,9 @@ public sealed class LibraryVocabulary
         long generation,
         IReadOnlyList<DictionaryEntry> entries,
         IReadOnlyList<DictionaryEntry> aiEntries,
-        AiVocabularyScope aiScope)
+        AiVocabularyScope aiScope,
+        IReadOnlyList<DictionaryEntry>? allAiEntries = null,
+        AiVocabularyScope? allAiScope = null)
     {
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(aiEntries);
@@ -118,6 +127,8 @@ public sealed class LibraryVocabulary
         Entries = [.. entries];
         AiEntries = [.. aiEntries];
         AiScope = aiScope;
+        AllAiEntries = allAiEntries is null ? AiEntries : [.. allAiEntries];
+        AllAiScope = allAiScope ?? aiScope;
     }
 
     /// <summary>No library vocabulary: nothing enabled, or nothing loaded yet.</summary>
@@ -137,4 +148,13 @@ public sealed class LibraryVocabulary
 
     /// <summary>The libraries <see cref="AiEntries"/> were drawn from.</summary>
     public AiVocabularyScope AiScope { get; }
+
+    /// <summary>
+    /// Every entry from a usable, AI-permitted word pack in the catalog: <see cref="AiEntries"/> first, followed by any
+    /// disabled AI-permitted word packs' entries in precedence order.
+    /// </summary>
+    public IReadOnlyList<DictionaryEntry> AllAiEntries { get; }
+
+    /// <summary>The libraries <see cref="AllAiEntries"/> were drawn from.</summary>
+    public AiVocabularyScope AllAiScope { get; }
 }

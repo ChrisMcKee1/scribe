@@ -54,6 +54,8 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
     // prepare until its completion; a hand-off must be covered by both.
     private AiVocabularyScope _publishedScope = AiVocabularyScope.None;
     private AiVocabularyScope? _savingScope;
+    private AiVocabularyScope _publishedAllPermittedScope = AiVocabularyScope.None;
+    private AiVocabularyScope? _savingAllPermittedScope;
 
     // Under _libraryLock.
     private LivePreparation? _live;
@@ -364,8 +366,10 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         ArgumentNullException.ThrowIfNull(handOff);
         lock (_gate)
         {
-            if (_parts.Composer.HasNarrowed(admitted, _publishedScope) ||
-                (_savingScope is { } saving && _parts.Composer.HasNarrowed(admitted, saving)))
+            var published = admitted.RequiresEnabled ? _publishedScope : _publishedAllPermittedScope;
+            var saving = admitted.RequiresEnabled ? _savingScope : _savingAllPermittedScope;
+            if (_parts.Composer.HasNarrowed(admitted, published) ||
+                (saving is not null && _parts.Composer.HasNarrowed(admitted, saving)))
             {
                 return false;
             }
@@ -967,19 +971,24 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
     private void NarrowBeforeCommit(LibraryCatalog after)
     {
         AiVocabularyScope scope;
+        AiVocabularyScope allPermittedScope;
         try
         {
-            scope = _parts.Composer.ComposeVocabulary(after).AiScope;
+            var composed = _parts.Composer.ComposeVocabulary(after);
+            scope = composed.AiScope;
+            allPermittedScope = composed.AllAiScope;
         }
         catch (Exception ex)
         {
             TryLog(LogLevel.Warning, "The scope of a library state commit could not be computed ({Failure}); nothing is handed over.", FailureShape.Describe(ex));
             scope = AiVocabularyScope.None;
+            allPermittedScope = AiVocabularyScope.None;
         }
 
         lock (_gate)
         {
             _savingScope = scope;
+            _savingAllPermittedScope = allPermittedScope;
         }
     }
 
@@ -1020,6 +1029,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
             if (_live is null && _unsettled is null)
             {
                 _savingScope = null;
+                _savingAllPermittedScope = null;
             }
 
             if (current is not null && SameVocabulary(current, vocabulary))
@@ -1029,6 +1039,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
 
             _vocabulary = vocabulary;
             _publishedScope = vocabulary.AiScope;
+            _publishedAllPermittedScope = vocabulary.AllAiScope;
         }
 
         _pendingChanged.Add(vocabulary.Generation);
@@ -1036,8 +1047,8 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
 
     private LibraryVocabulary WithoutUncommittedGrants(LibraryCatalog adopted, LibraryCatalog stored, LibraryVocabulary vocabulary)
     {
-        var before = _parts.Composer.ComposeVocabulary(stored).AiScope;
-        var widened = vocabulary.AiScope.PermittedContent
+        var before = _parts.Composer.ComposeVocabulary(stored).AllAiScope;
+        var widened = vocabulary.AllAiScope.PermittedContent
             .Where(pair => !before.PermittedContent.TryGetValue(pair.Key, out var content) || content != pair.Value)
             .Select(pair => pair.Key)
             .ToList();
@@ -1056,7 +1067,9 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
 
     private static bool SameVocabulary(LibraryVocabulary a, LibraryVocabulary b) =>
         a.Generation == b.Generation && a.Entries.SequenceEqual(b.Entries) && a.AiEntries.SequenceEqual(b.AiEntries) &&
-        a.AiScope.Covers(b.AiScope) && b.AiScope.Covers(a.AiScope);
+        a.AllAiEntries.SequenceEqual(b.AllAiEntries) &&
+        a.AiScope.Covers(b.AiScope) && b.AiScope.Covers(a.AiScope) &&
+        a.AllAiScope.Covers(b.AllAiScope) && b.AllAiScope.Covers(a.AllAiScope);
 
     private static LibraryCatalog WithState(LibraryCatalog catalog, LibraryLocalState state) => new(
         catalog.Generation, catalog.Libraries, state, catalog.RecentlyDeleted, catalog.RetiredBuiltInEdits,
@@ -1240,19 +1253,23 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
 
         // The scope while saving is in force before the prepare returns, so a revocation holds before the commit.
         AiVocabularyScope saving;
+        AiVocabularyScope savingAllPermitted;
         try
         {
             saving = _parts.Composer.ScopeWhileSaving(read.Catalog, changes);
+            savingAllPermitted = LibraryComposer.AllPermittedScopeWhileSaving(read.Catalog, changes);
         }
         catch (Exception ex)
         {
             TryLog(LogLevel.Warning, "The scope while saving could not be computed ({Failure}); nothing is handed over.", FailureShape.Describe(ex));
             saving = AiVocabularyScope.None;
+            savingAllPermitted = AiVocabularyScope.None;
         }
 
         lock (_gate)
         {
             _savingScope = saving;
+            _savingAllPermittedScope = savingAllPermitted;
         }
 
         return new LibraryPrepareResult(LibraryPrepareStatus.Prepared, prepared, []);
@@ -1356,6 +1373,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         lock (_gate)
         {
             _savingScope = null;
+            _savingAllPermittedScope = null;
         }
 
         if (!notCommitted)
