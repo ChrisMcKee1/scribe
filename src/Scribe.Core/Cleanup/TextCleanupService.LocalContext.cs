@@ -111,7 +111,7 @@ internal sealed partial class TextCleanupService
         {
             lock (_gate)
             {
-                return _options.Enabled && (FitsLocalContext(_options) || _options.LocalContextTokens is > 0)
+                return _options.Enabled && FitsLocalContext(_options)
                     ? EffectiveContextLocked(_options) ?? 0
                     : 0;
             }
