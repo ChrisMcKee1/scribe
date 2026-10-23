@@ -1,11 +1,74 @@
-# Set up MAI-Transcribe-2 for speech recognition
+# Set up MAI-Transcribe-2 and Copilot+ PC features
 
 Scribe includes NVIDIA Parakeet for offline speech recognition on your PC across 25 European
-languages. In direct installs (`Scribe-win-x64-Setup.exe` and `Scribe-win-arm64-Setup.exe`, or when
-`SCRIBE_PERF_FLAGS=MaiTranscribeSpeech` is enabled), you can also choose **MAI-Transcribe-2** from
-Microsoft AI for cloud speech recognition across 60 languages, with built-in vocabulary biasing from
-your dictionary and AI-permitted word packs, and automatic fallback to Parakeet on your PC whenever
-you are offline.
+languages. With **Scribe 0.5.14+**, you can also unlock **MAI-Transcribe-2** from Microsoft AI and
+advanced **Copilot+ PC NPU** features.
+
+## What you get and why the Direct Installer is different from the Microsoft Store
+
+### What you get
+
+- **MAI-Transcribe-2 (Microsoft Foundry cloud speech recognition):**
+  - **60 languages** with automatic language detection and code-switching.
+  - **Built-in custom vocabulary biasing (`phraseList`):** Scribe automatically sends up to 500
+    terms from your dictionary and AI-permitted word packs with each dictation so product names,
+    acronyms and technical jargon are recognized accurately right out of the speech model.
+  - **Clean or Verbatim output style:** Choose **Clean** to strip filler words ("um", "uh") during
+    speech recognition, or **Verbatim** to keep speech exactly as spoken.
+  - **Automatic regional & offline fallback:** Uses `MAI-Transcribe-2` (`enhancedMode`) where
+    deployed, automatically falls back to Azure Fast Transcription in other Speech regions, and
+    falls back to offline **Parakeet** on your PC if you lose internet connectivity.
+- **Copilot+ PC NPU acceleration:**
+  - **On-device AI cleanup on your NPU** (Qualcomm Hexagon via `QNN`, Intel AI Boost via
+    `OpenVINO`, AMD XDNA via `Vitis AI`) with automatic `Phi-4 Mini` selection and automatic NPU-to-CPU fallback. (This is active in **both** the Microsoft Store and Direct Installer builds.)
+  - **Experimental Copilot+ PC NPU speech mode** (available in the Direct Installer via flag).
+
+### Why you need the Direct Installer (or flag) instead of the default Microsoft Store setup
+
+- **Microsoft Store certification rules:** Microsoft's developer policy explicitly prohibits
+  publishing apps that enable experimental Windows AI Speech APIs in the Microsoft Store, and
+  Scribe's Microsoft Store listing is certified under a strict **offline-audio-by-default** privacy
+  posture where microphone audio never leaves the PC.
+- To stay 100% compliant with Microsoft Store policies while giving power users every capability,
+  Scribe uses **installer-aware gating**:
+  - The **Microsoft Store build** keeps `MAI-Transcribe-2` and experimental NPU speech hidden by
+    default.
+  - The **Direct Installer (`Setup.exe` from GitHub Releases)** unlocks `MAI-Transcribe-2` out of
+    the box in **Settings > Advanced > Speech model**.
+
+---
+
+## Moving from the Microsoft Store version to the Direct Installer (Read First)
+
+If you already have the **Microsoft Store** version of Scribe installed, **do not keep both
+installed** (both would try to start with Windows and compete for your dictation shortcut), and
+**follow this exact order so you do not lose your dictionary, word packs, snippets or history**:
+
+> **Why order matters:** A fresh Microsoft Store install stores its data inside Windows' per-package
+> container (`%LOCALAPPDATA%\Packages\53984VeteranApps.ScribeAI_e3jkm6dfkwwbm\LocalCache\Local\ScribeData`).
+> Uninstalling the Store app *before* running the Direct Installer deletes that package container.
+> Running the Direct Installer *first* automatically migrates your Store database and word packs into
+> `%LOCALAPPDATA%\ScribeData` so nothing is lost when you uninstall the Store version.
+
+1. **Quit Scribe** in the system tray (right-click the Scribe icon in the taskbar notification area
+   and choose **Quit**).
+2. **Download and run the Direct Installer (`Setup.exe`) for your PC:**
+   - **Snapdragon Copilot+ PCs (`ARM64`):**
+     `https://github.com/ChrisMcKee1/scribe/releases/latest/download/Scribe-win-arm64-Setup.exe`
+   - **Intel & AMD PCs (`x64`):**
+     `https://github.com/ChrisMcKee1/scribe/releases/latest/download/Scribe-win-x64-Setup.exe`
+   - *(Note: Direct installers from GitHub are not Store-signed; if Windows SmartScreen prompts you,
+     click **More info > Run anyway**.)*
+3. **Wait for Scribe to launch once** into the system tray (this completes the automatic migration
+   of your settings, dictionary, word packs, snippets and history into `%LOCALAPPDATA%\ScribeData`).
+4. **Uninstall the Microsoft Store version:** Open **Windows Settings > Apps > Installed apps**,
+   find the Microsoft Store copy of **Scribe AI**, and choose **Uninstall** so only the Direct
+   Installer version remains.
+
+*(Alternative if you prefer to stay on the Microsoft Store install: you can unlock `MAI-Transcribe-2`
+in the Store version without switching installers by running
+`[Environment]::SetEnvironmentVariable("SCRIBE_PERF_FLAGS", "MaiTranscribeSpeech", "User")` in
+PowerShell and restarting Scribe.)*
 
 > **Why are authentication and model selection on two pages?**
 > Scribe shares one Microsoft Foundry sign-in (Azure CLI, app registration / service principal, or

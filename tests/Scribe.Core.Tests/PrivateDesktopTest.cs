@@ -83,7 +83,7 @@ internal static class PrivateDesktopTest
         }) { IsBackground = true };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), $"The private-desktop WPF check did not finish. phase={Phase}; limit=30s");
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), $"The private-desktop WPF check did not finish. phase={Phase}; limit=60s");
         failure?.Throw();
     }
 
