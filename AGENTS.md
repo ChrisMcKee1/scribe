@@ -2565,6 +2565,27 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   were reviewed for 0.5.8 and found no other cause. `OverlayLayeredWhileShownSourceTests` pins the source. Whenever
   the style changes the log shows `OverlayWindow.SetLayered on before show` or `off after hide`, and every state line
   shows `layered=`.
+- **Field report after 0.5.12 (2026-10-23): screenshots still break, so the layered style while hidden is not the
+  cause.** REA's `inspect-managed-members` on the shipped 0.5.12 `Overlay\Scribe.Overlay.dll` finds the `SetLayered`
+  strings (`on before show`, `off after hide`) and every DIAG switch, so the user ran the 0.5.8 change, and it still
+  works after a restart and breaks later, exactly as before. A press of Win+Shift+S that starts SnippingTool (the
+  bisection's two processes) means the shortcut reached Windows, so a stuck or swallowed key is not the mechanism, and a
+  key stuck in Windows' own state would not come back on quitting Scribe. Handy (cjpais/Handy 0.9.8, MIT), which has no
+  Snipping Tool report in its tracker, has the same lifecycle (one overlay window created hidden at startup, shown and
+  hidden per dictation, never destroyed) and also keeps a `WH_KEYBOARD_LL` and a `WH_MOUSE_LL` hook installed all the
+  time (the `handy-keys` crate), so neither the lifecycle nor the hooks are the difference. The difference is the window
+  itself: Handy's is a plain Win32 window from tao (`WS_EX_TOPMOST | WS_EX_NOACTIVATE`, transparency from
+  `DwmEnableBlurBehindWindow` with an empty region, content from a WebView2 child), never layered and never
+  click-through (it never calls `set_ignore_cursor_events`, and `handy.exe` imports neither `SetLayeredWindowAttributes`
+  nor `UpdateLayeredWindow`), while ours is a self-contained Windows App SDK window with lifted composition (the overlay
+  ships `dcompi.dll`, `dwmcorei.dll` and `DwmSceneI.dll`), a custom `SystemBackdrop`, `WS_EX_TRANSPARENT |
+  WS_EX_TOOLWINDOW` kept while hidden, and a layered child window WinUI creates itself (REA with Ghidra 12.1.4 on
+  `Microsoft.UI.Windowing.Core.dll`: `TitleBar.cxx` creates `ReunionWindowingCaptionControls` with
+  `WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP` and calls `SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)`). Which
+  part of the Windows App SDK window's state after its first show stops the snip is not known. The states known to work
+  are the ones the bisection and a fresh start produce: no overlay window, or a window created and never shown in a
+  helper that has never shown one. Before another fix ships, confirm on an affected PC that ending only
+  `Scribe.Overlay.exe` in Task Manager brings Win+Shift+S back.
 - **A new Windows App SDK feature needs its component package** in `Scribe.Overlay.csproj` (see the
   dependency rules above), or it is missing at runtime while the build stays clean.
 - If you change overlay behavior, verify with the live log: look for `installer layout`,
@@ -3938,6 +3959,17 @@ vocabulary sent when it fits, and the dictated text first when it does not. Meas
   that bug is solved by the out‑of‑process WinUI 3 design.
 - Let a logging failure reach a destructive catch (process kill, teardown).
 - Send audio anywhere off the device.
+
+## Reverse engineering shipped binaries (REA)
+
+`.mcp.json` registers REA (`rea-agents`, morluto/rea, MIT) pinned to 6.7.0, and its workflow skill lives in
+`.claude/skills/reverse-engineer-anything` (with REA's license). Use it when a claim depends on a shipped binary
+rather than source: what a release's `Scribe.Overlay.dll` or another app's executable actually calls. Its own skill
+says to skip it for ordinary source analysis. Static .NET inspection (`inspect-managed-members`,
+`inspect-managed-native-boundaries`) needs no engine; native decompilation (`trace`, `decompile`) needs Ghidra 12.1.x
+and a full JDK 21 or later, found through `GHIDRA_INSTALL_DIR`. To move the pin, change the version in `.mcp.json`
+and copy the skill from that release's `skills/reverse-engineer-anything` again. Release payloads are large (a
+Portable.zip is about 650 MB); a range-request reader can extract single files from it.
 
 ## Environment notes (this dev box)
 
