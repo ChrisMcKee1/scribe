@@ -12,6 +12,8 @@ public sealed class SettingsSearchIndexTests
         ["ModeCombo"] = "Part of its shortcut row; the shortcut's entry lands beside it.",
         ["DictationOnlyModeCombo"] = "Part of its shortcut row; the shortcut's entry lands beside it.",
         ["IdleReleaseCustomBox"] = "Shown only for Custom in its duration list; the list's entry covers it.",
+        ["MaiTranscribeStyleCombo"] = "Shown only when MAI-Transcribe-2 is selected in the Speech model list; the Speech model entry covers it.",
+        ["MaiTranscribeEndpointBox"] = "Shown only when MAI-Transcribe-2 is selected in the Speech model list; the Speech model entry covers it.",
         ["AiIdleReleaseCustomBox"] = "The AI cleanup copy of the same custom duration; its duration list's entry covers it.",
         ["MaxDictationCustomBox"] = "Shown only for Custom in its duration list; the list's entry covers it.",
         ["SnippetEnabledCheck"] = "A row editor; the page's entry covers it.",

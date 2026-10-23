@@ -33,7 +33,7 @@ Deleting the entry or clearing your history removes its recording sooner. When a
 recording is removed, the entry's text stays, as described under Dictation
 history.
 
-Scribe never transmits microphone audio off your device.
+Scribe never transmits microphone audio off your device unless you explicitly select the optional `MAI-Transcribe-2` cloud speech model in a direct install (or enable `MaiTranscribeSpeech`), in which case each dictation's recorded audio and up to 500 vocabulary phrases from your dictionary and AI-permitted word packs are sent to your configured Microsoft Foundry resource. AI cleanup never sends audio.
 
 ### Reporting an AI result
 

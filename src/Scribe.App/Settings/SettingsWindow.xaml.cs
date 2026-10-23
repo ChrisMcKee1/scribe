@@ -1386,7 +1386,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             .Where(model => _transcriptionModelInstaller.IsInstalled(model))
             .Select(model => model.Id)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var choices = TranscriptionModelChoices.Build(selectedModelId, installed);
+        var includeMaiTranscribe = InstallerFeatureGate.CanUseMaiTranscribe(
+            WindowsPackageIdentity.IsPackaged(),
+            _perfFlags);
+        var choices = TranscriptionModelChoices.Build(selectedModelId, installed, includeMaiTranscribe);
         TranscriptionModelCombo.ItemsSource = choices;
         TranscriptionModelCombo.SelectedItem = choices.FirstOrDefault(choice => choice.IsSelected) ?? choices[0];
     }
@@ -1801,6 +1804,11 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
     private bool SelectedSpeechModelIsRunning(string? selectedModelId)
     {
         var selected = TranscriptionModelCatalog.Resolve(selectedModelId);
+        if (selected.IsCloud)
+        {
+            return InstallerFeatureGate.CanUseMaiTranscribe(WindowsPackageIdentity.IsPackaged(), _perfFlags);
+        }
+
         var running = TranscriptionModelCatalog.Resolve(_runningTranscription.ModelId);
         var available = string.Equals(selected.Id, TranscriptionModelCatalog.DefaultId, StringComparison.OrdinalIgnoreCase) ||
             _transcriptionModelInstaller.IsInstalled(selected);
@@ -2368,6 +2376,14 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    private void MaiTranscribeEndpointBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_loadingUi)
+        {
+            RefreshSpeechModelSetupSummary();
+        }
+    }
+
     private void UpdateTranscriptionModelUi()
     {
         if (TranscriptionModelCombo.SelectedItem is not TranscriptionModelChoice choice)
@@ -2376,9 +2392,54 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         TranscriptionModelHint.Text = choice.Hint;
+        var isMai = string.Equals(choice.Id, TranscriptionModelCatalog.MaiTranscribe2Id, StringComparison.OrdinalIgnoreCase);
+        if (MaiTranscribePanel is not null)
+        {
+            MaiTranscribePanel.Visibility = isMai ? Visibility.Visible : Visibility.Collapsed;
+        }
+
         TranscriptionModelInstallButton.Visibility = choice.ShowInstall ? Visibility.Visible : Visibility.Collapsed;
         TranscriptionModelInstallButton.IsEnabled = choice.ShowInstall && !_transcriptionModelOp;
         TranscriptionModelInstallButton.Content = choice.IsInstalled ? "Downloaded" : "Download";
+        RefreshSpeechModelSetupSummary();
+    }
+
+    private void RefreshSpeechModelSetupSummary()
+    {
+        var selectedId = ((TranscriptionModelChoice?)TranscriptionModelCombo?.SelectedItem)?.Id
+            ?? _settings.TranscriptionModelId;
+        var signIn = ShownAzureSignInFields;
+        var status = TranscriptionModelChoices.DescribeSetupStatus(
+            selectedId,
+            MaiTranscribeEndpointBox?.Text,
+            AzureEndpointBox?.Text,
+            SelectedAzureAuthMode,
+            signIn.ApiKey,
+            signIn.TenantId,
+            signIn.ClientId,
+            signIn.ClientSecret,
+            _azureSignInStatus.IsSignedIn);
+
+        if (DictationSpeechModelStatusText is not null)
+        {
+            DictationSpeechModelStatusText.Text = status.CurrentModelLine;
+        }
+
+        if (DictationSpeechModelGuidanceText is not null)
+        {
+            DictationSpeechModelGuidanceText.Text = status.GuidanceLine;
+        }
+
+        if (DictationMaiAuthStatusText is not null)
+        {
+            DictationMaiAuthStatusText.Text = status.AuthStatusLine;
+            DictationMaiAuthStatusText.Visibility = status.IsMaiSelected ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        if (MaiTranscribeAuthSummaryText is not null)
+        {
+            MaiTranscribeAuthSummaryText.Text = status.AuthStatusLine;
+        }
     }
 
     private async void TranscriptionModelInstallButton_Click(object sender, RoutedEventArgs e)
@@ -3401,6 +3462,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         UpdateServicePrincipalValidation(servicePrincipal);
         UpdateAzureProjectApiKeyHint();
         RefreshAiStatus();
+        RefreshSpeechModelSetupSummary();
     }
 
     private void AzureManualToggleButton_Click(object sender, RoutedEventArgs e)
@@ -5345,6 +5407,10 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
             _settings.TranscriptionModelId =
                 ((TranscriptionModelChoice?)TranscriptionModelCombo.SelectedItem)?.Id ??
                 TranscriptionModelCatalog.DefaultId;
+            _settings.MaiTranscribeStyle =
+                ((MaiTranscribeStyleChoice?)MaiTranscribeStyleCombo.SelectedItem)?.Style ??
+                MaiTranscribeStyle.Clean;
+            _settings.MaiTranscribeEndpoint = NullIfBlank(MaiTranscribeEndpointBox.Text);
 
             _settings.EnableAiCleanup = aiCleanupEnabled;
             _settings.AiCleanupProvider = SelectedProvider;

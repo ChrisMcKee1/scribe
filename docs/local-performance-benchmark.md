@@ -1,6 +1,6 @@
 # Local Performance Benchmark
 
-Updated September 28, 2026, for 0.5.1, with speech recognition examples from September 29.
+Updated October 23, 2026, for 0.5.13, with speech recognition, `MAI-Transcribe-2` and Copilot+ PC NPU measurements.
 
 This report measures local CPU and managed allocation costs in Scribe's production code. It uses a
 dedicated BenchmarkDotNet 0.15.8 project, Release builds, out-of-process execution, and the memory
@@ -65,6 +65,29 @@ dotnet run --project tools/Scribe.AsrCheck -c Release -- --scenarios --quick
 | `A-clean-greeting` | 4.16 s | 18.2 ms | 128.0 ms |
 | `A-clean-dict-scribe` | 3.97 s | 13.5 ms | 133.9 ms |
 | `A-clean-long-passage` | 23.26 s | 74.2 ms | 639.3 ms |
+
+### October 23, 2026 verification (`Scribe.AsrCheck --scenarios --quick` and `MaiTranscribeBenchmarks`)
+
+Re-measured on October 23, 2026 on the same AMD Ryzen 9 9900X desktop (Windows 11 build 26300,
+.NET 10.0.13, Release build):
+
+- **`Scribe.AsrCheck -c Release -- --scenarios --quick`**: 49 scenarios, **44 passed, 0 failed**,
+  5 reported only; **201 checks, 0 failed** in 26.1 s total. Parakeet TDT 0.6B v3 decoded the 4.0 s
+  `A-clean-sentence` in **119 ms** (RTF 0.04), `A-clean-dict-github-copilot` in **117 ms** (RTF
+  0.04), `A-clean-long-passage` (23.3 s) in **638 ms** (RTF 0.03), and 20 rapid short dictations in
+  a **96 ms median / 128 ms P95** end-to-end loop with zero memory growth (1,517 MB private before
+  and after).
+- **Live Microsoft Foundry Speech (`MAI-Transcribe-2` / Fast Transcription, South Central US)**:
+  Across all 14 committed WAV fixtures (`1.92 s` to `23.26 s`) with `phraseList` vocabulary biasing,
+  round-trip HTTPS recognition completed in a **710 ms median (P50)** and **1,571 ms P95** (mean
+  760.9 ms, RTF 0.07 to 0.36).
+- **`MaiTranscribeBenchmarks` (`--scribe-default-job`, BenchmarkDotNet 0.15.8)**:
+
+| Method | Mean | Error | StdDev | Median | Allocated |
+|---|---:|---:|---:|---:|---:|
+| `EncodeWav4Seconds` (`MaiWavEncoder.EncodePcm16Wav`, 4 s @ 16 kHz) | 66.34 us | 1.326 us | 3.673 us | 66.78 us | 125.09 KB |
+| `EncodeWav23Seconds` (`MaiWavEncoder.EncodePcm16Wav`, 23 s @ 16 kHz) | 463.91 us | 9.252 us | 17.378 us | 460.99 us | 718.93 KB |
+| `BuildDefinition500Phrases` (`MaiTranscribeClient.BuildDefinitionJson`, 500 terms) | 11.63 us | 0.533 us | 1.571 us | 12.06 us | 55.20 KB |
 
 ## What this does not measure
 

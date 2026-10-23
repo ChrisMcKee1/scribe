@@ -50,6 +50,19 @@ public sealed class AppSettings
     /// <summary>Id of the offline speech-recognition model to load after the next restart.</summary>
     public string TranscriptionModelId { get; set; } = Transcription.TranscriptionModelCatalog.DefaultId;
 
+    /// <summary>
+    /// Optional Microsoft Foundry or Azure Speech resource address override for <c>MAI-Transcribe-2</c>.
+    /// Blank reuses <see cref="AiCleanupAzureEndpoint"/>.
+    /// </summary>
+    public string? MaiTranscribeEndpoint { get; set; }
+
+    /// <summary>
+    /// Output style for <c>MAI-Transcribe-2</c> (<see cref="Transcription.MaiTranscribeStyle.Clean"/> or
+    /// <see cref="Transcription.MaiTranscribeStyle.Verbatim"/>).
+    /// </summary>
+    [JsonConverter(typeof(Transcription.MaiTranscribeStyleJsonConverter))]
+    public Transcription.MaiTranscribeStyle MaiTranscribeStyle { get; set; } = Transcription.MaiTranscribeStyle.Clean;
+
     /// <summary>Trim leading/trailing silence and reject no-speech captures using VAD.</summary>
     public bool UseVoiceActivityDetection { get; set; } = true;
 

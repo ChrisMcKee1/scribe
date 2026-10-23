@@ -306,11 +306,16 @@ public partial class SettingsWindow
     private int CurrentIdleMinutes() =>
         SelectedDurationValue(IdleReleaseCombo, IdleReleaseCustomBox, _settings.ReleaseModelsAfterIdleMinutes);
 
-    // Read once per window: the display adapters do not change while Settings is open.
+    // Read once per window: the display adapters and neural accelerators do not change while Settings is open.
     private IReadOnlyList<Scribe.Core.Diagnostics.GraphicsAdapter> Adapters =>
         _adapters ??= Scribe.Core.Diagnostics.GraphicsAdapters.Detect();
 
     private IReadOnlyList<Scribe.Core.Diagnostics.GraphicsAdapter>? _adapters;
+
+    private IReadOnlyList<Scribe.Core.Diagnostics.NeuralAccelerator> Accelerators =>
+        _accelerators ??= Scribe.Core.Diagnostics.ComputeCapabilityReport.Detect().Accelerators;
+
+    private IReadOnlyList<Scribe.Core.Diagnostics.NeuralAccelerator>? _accelerators;
 
     // A graphics card with room for the larger local models (Gemma 4 E4B loads in about 3 GB; 12B and 26B-A4B need 12 GB+).
     private bool RoomyGraphicsCard => Adapters.Any(adapter => adapter.HasAtLeast(6));
@@ -326,10 +331,10 @@ public partial class SettingsWindow
             return;
         }
 
-        var alias = CleanupModelCatalog.DefaultAliasFor(Adapters);
+        var alias = CleanupModelCatalog.DefaultAliasFor(Adapters, Accelerators);
         if (!string.Equals(alias, CleanupModelCatalog.DefaultAlias, StringComparison.OrdinalIgnoreCase))
         {
-            _log.LogInformation("First AI cleanup setup on this PC starts from its larger model (graphics card with room for it).");
+            _log.LogInformation("First AI cleanup setup on this PC starts from its hardware-accelerated model.");
             SetFoundryModelItems([], alias);
             UpdateAiModelHint();
         }

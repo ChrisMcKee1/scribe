@@ -14,6 +14,10 @@ public partial class SettingsWindow
     // defaults. Only this page's controls, so the draft the other pages hold in their controls is left alone.
     private void LoadAdvancedControls(AppSettings source)
     {
+        MaiTranscribeStyleCombo.ItemsSource = TranscriptionModelChoices.StyleChoices;
+        MaiTranscribeStyleCombo.SelectedValuePath = nameof(MaiTranscribeStyleChoice.Style);
+        MaiTranscribeStyleCombo.SelectedValue = source.MaiTranscribeStyle;
+        MaiTranscribeEndpointBox.Text = source.MaiTranscribeEndpoint ?? string.Empty;
         LoadTranscriptionModelChoices(source.TranscriptionModelId);
         UpdateTranscriptionModelUi();
         ThreadsCombo.ItemsSource = ThreadChoices.Build(source.DecodeThreads);

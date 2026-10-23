@@ -1,8 +1,8 @@
 # Local AI cleanup benchmark
 
-Updated October 21, 2026, for Scribe 0.5.11. How well and how fast open models clean up dictation
+Updated October 23, 2026, for Scribe 0.5.13. How well and how fast open models clean up dictation
 on this PC across the four local runtimes Scribe supports: **Ollama**, **TensorSharp**, **LM Studio**
-and **Foundry Local**.
+and **Foundry Local** (including **Copilot+ PC NPUs** via Windows ML).
 
 > **Hardware:** NVIDIA GeForce RTX 5080 (16 GB), AMD Ryzen 9 9900X (12 cores), 95 GB of memory,
 > Windows 11 build 26200. Times are this PC's; the ranking and the quality scores are what carries
@@ -57,6 +57,7 @@ Ollama scored 94.1 against `gpt-5.6-terra`'s 93.8, in 462 ms against 2,088 ms.
 | The best quality under 4 GB VRAM | Gemma 4 E4B: `gemma4:e4b`, or `gemma4:e4b-it-qat` for a 6.1 GB download | 89.2 | 0.50 s | 4.6 s | 9.6 GB | 3.0 GB |
 | The smallest download that does the job | IBM Granite 4 3B: `granite4:3b` | 80.7 | 0.33 s | 3.9 s | 2.1 GB | 2.3 GB |
 | The best writing on the CPU alone | Qwen3 4B Instruct 2507: `qwen3:4b-instruct` | 81.7 | 0.41 s | 5.0 s (83.1) | 2.5 GB | 3.0 GB |
+| **Copilot+ PC with an NPU** (Qualcomm Hexagon, Intel AI Boost, AMD XDNA) | Foundry Local: **Phi-4 Mini** (`phi-4-mini`, selected automatically on first setup when no 8 GB+ NVIDIA RTX card is present) or **Qwen2.5 1.5B** | 78.7 (Phi-4 Mini), 74.0 (Qwen2.5 1.5B) | NPU (`QNN`, `OpenVINO`, `Vitis AI`) | 6.7 s | 3.7 GB / 1.5 GB | NPU shared |
 | Nothing else to install | Foundry Local: **Qwen2.5 1.5B** (the default), or **Qwen2.5 7B** with an NVIDIA RTX card of 8 GB or more | 74.0 (GPU), 66.1 (CPU); 7B: 85.4 | 0.37 s, NVIDIA RTX only; 7B: 0.74 s | 6.7 s | 1.3 GB (GPU), 1.8 GB (CPU); 7B: 4.7 GB | n/a |
 
 - In Settings, choose **On this PC**, then **Ollama**, **LM Studio** or **TensorSharp**: Scribe lists the
@@ -157,7 +158,14 @@ Ollama scored 94.1 against `gpt-5.6-terra`'s 93.8, in 462 ms against 2,088 ms.
   refused), and loaded with Qwen3 0.6B as its draft, Qwen3 4B 2507 took 0.74 s typically against 0.41 s
   without, because a cleanup writes only about 60 tokens.
 - **Foundry Local 2.1.0** is the only runtime that needs nothing else installed, and its SDK chooses the
-  hardware itself.
+  hardware itself. On a **Copilot+ PC** with a neural processing unit (Qualcomm Hexagon via
+  `QNNExecutionProvider`, Intel AI Boost via `OpenVINOExecutionProvider`, or AMD XDNA via
+  `VitisAIExecutionProvider`), Windows ML downloads and registers the NPU execution provider
+  automatically. When no 8 GB+ NVIDIA RTX graphics card is present, Scribe starts first-time Foundry
+  Local setup on `phi-4-mini`, and `FoundryModelVariant` recognizes `-npu` builds
+  (`<model>-qnn-npu`, `<model>-openvino-npu`, `<model>-vitis-npu`) so any NPU variant that fails to
+  load or fails its readiness check automatically falls back to its `<model>-generic-cpu` /
+  `<model>-cpu` counterpart for the session.
   - **Defaults:** Qwen2.5 1.5B on any PC (0.37 s on an NVIDIA RTX card through its TensorRT-RTX build, 6.7 s
     on the processor), and Qwen2.5 7B for a first setup on an NVIDIA RTX card of 8 GB or more (85.4 in
     0.74 s), still the best model Foundry Local offers for this job. TensorRT-RTX is the better build of

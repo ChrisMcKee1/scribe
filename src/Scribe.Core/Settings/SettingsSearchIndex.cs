@@ -147,7 +147,7 @@ public static class SettingsSearchIndex
 
         Entry("usage.period", SettingsPage.Usage, "UsagePeriodBox", "Period", ["usage", "range", "statistics"]),
 
-        Entry("advanced.speech-model", SettingsPage.Advanced, "TranscriptionModelCombo", "Speech model", ["model", "recognition", "parakeet", "moonshine"]),
+        Entry("advanced.speech-model", SettingsPage.Advanced, "TranscriptionModelCombo", "Speech model", ["model", "recognition", "parakeet", "moonshine", "mai", "mai-transcribe", "mai-transcribe-2", "cloud", "foundry"]),
         Entry("advanced.threads", SettingsPage.Advanced, "ThreadsCombo", "Processor threads", ["cpu", "decode", "advanced"]),
         Entry("advanced.free-memory", SettingsPage.Advanced, "IdleReleaseCombo", "Free memory when Scribe isn't used", ["idle", "release", "model", "memory"]),
         Entry("advanced.trim-silence", SettingsPage.Advanced, "VadCheck", "Trim silence", ["vad", "voice activity detection", "silence"]),

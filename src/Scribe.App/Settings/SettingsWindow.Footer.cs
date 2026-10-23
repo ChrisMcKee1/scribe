@@ -225,6 +225,8 @@ public partial class SettingsWindow
         draft.Profiles = BuildProfiles();
         draft.DecodeThreads = ((ThreadChoice?)ThreadsCombo.SelectedItem)?.Value ?? draft.DecodeThreads;
         draft.TranscriptionModelId = ((TranscriptionModelChoice?)TranscriptionModelCombo.SelectedItem)?.Id ?? Scribe.Core.Transcription.TranscriptionModelCatalog.DefaultId;
+        draft.MaiTranscribeStyle = ((MaiTranscribeStyleChoice?)MaiTranscribeStyleCombo.SelectedItem)?.Style ?? Scribe.Core.Transcription.MaiTranscribeStyle.Clean;
+        draft.MaiTranscribeEndpoint = NullIfBlank(MaiTranscribeEndpointBox.Text);
         draft.EnableAiCleanup = _externalAiCleanup.ForSave(AiCleanupCheck.IsChecked == true);
         draft.AiCleanupProvider = SelectedProvider;
         draft.AiCleanupModel = NullIfBlank(SelectedFoundryModelAlias) ?? CleanupModelCatalog.DefaultAlias;

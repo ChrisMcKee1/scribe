@@ -4,6 +4,7 @@ public enum TranscriptionModelArchitecture
 {
     NemoTransducer,
     Moonshine,
+    MaiCloud,
 }
 
 public sealed record TranscriptionModel(
@@ -19,7 +20,9 @@ public sealed record TranscriptionModel(
     string? ArchiveDirectory = null,
     IReadOnlyList<TranscriptionModelFile>? DownloadFiles = null)
 {
-    public bool IsBundled => DownloadUri is null && DownloadFiles is null;
+    public bool IsBundled => !IsCloud && DownloadUri is null && DownloadFiles is null;
+
+    public bool IsCloud => Architecture == TranscriptionModelArchitecture.MaiCloud;
 }
 
 public sealed record TranscriptionModelFile(
@@ -31,6 +34,8 @@ public sealed record TranscriptionModelFile(
 public static class TranscriptionModelCatalog
 {
     public const string DefaultId = "parakeet-tdt-0.6b-v3-int8";
+    public const string MaiTranscribe2Id = "mai-transcribe-2";
+    public const string MaiTranscribe2ModelName = "MAI-Transcribe-2";
     private const string ParakeetBaseUrl =
         "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main/";
 
@@ -39,6 +44,15 @@ public static class TranscriptionModelCatalog
 
     private static readonly string[] MoonshineFiles =
         ["preprocess.onnx", "encode.int8.onnx", "uncached_decode.int8.onnx", "cached_decode.int8.onnx", "tokens.txt"];
+
+    public static TranscriptionModel MaiTranscribe2 { get; } = new(
+        MaiTranscribe2Id,
+        "MAI-Transcribe-2 (Microsoft Foundry)",
+        "Cloud speech recognition across 60 languages with vocabulary hints.",
+        "60 languages",
+        0,
+        TranscriptionModelArchitecture.MaiCloud,
+        []);
 
     public static IReadOnlyList<TranscriptionModel> Curated { get; } =
     [
@@ -93,9 +107,16 @@ public static class TranscriptionModelCatalog
             "sherpa-onnx-moonshine-tiny-en-int8"),
     ];
 
-    public static TranscriptionModel Resolve(string? id) =>
-        Curated.FirstOrDefault(model => string.Equals(model.Id, id, StringComparison.OrdinalIgnoreCase))
-        ?? Curated[0];
+    public static TranscriptionModel Resolve(string? id)
+    {
+        if (string.Equals(id?.Trim(), MaiTranscribe2Id, StringComparison.OrdinalIgnoreCase))
+        {
+            return MaiTranscribe2;
+        }
+
+        return Curated.FirstOrDefault(model => string.Equals(model.Id, id, StringComparison.OrdinalIgnoreCase))
+            ?? Curated[0];
+    }
 
     private static TranscriptionModelFile File(string name, long size, string sha256) =>
         new(name, new Uri(ParakeetBaseUrl + name), size, sha256);

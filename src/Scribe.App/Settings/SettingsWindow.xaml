@@ -912,6 +912,25 @@
                                     </StackPanel>
                                 </ui:Card>
 
+                                <ui:Card Style="{StaticResource SettingsCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="Speech model" Style="{StaticResource CardTitle}"/>
+                                        <TextBlock x:Name="DictationSpeechModelStatusText" Style="{StaticResource CardDescription}"
+                                                   Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="DictationSpeechModelGuidanceText" Style="{StaticResource CardDescription}"
+                                                   Margin="0,6,0,0" TextWrapping="Wrap"/>
+                                        <TextBlock x:Name="DictationMaiAuthStatusText" Style="{StaticResource CardDescription}"
+                                                   Margin="0,6,0,0" TextWrapping="Wrap" Visibility="Collapsed"/>
+                                        <WrapPanel Margin="0,10,0,0">
+                                            <ui:Button Content="Choose speech model on Advanced"
+                                                       Margin="0,0,8,4" Click="DictationSpeechModelLink_Click"/>
+                                            <ui:Button x:Name="DictationMaiAuthButton"
+                                                       Content="Set up Microsoft Foundry sign-in on AI cleanup"
+                                                       Margin="0,0,0,4" Click="DictationMaiAuthLink_Click"/>
+                                        </WrapPanel>
+                                    </StackPanel>
+                                </ui:Card>
+
                                 <TextBlock Text="Shortcuts" Style="{StaticResource SectionHeader}"/>
                                 <ui:Card Style="{StaticResource SettingsCard}">
                                     <StackPanel>
@@ -1159,6 +1178,51 @@
                                         </ComboBox>
                                         <TextBlock x:Name="TranscriptionModelHint" Style="{StaticResource CardDescription}"
                                                    Margin="0,6,0,0" TextWrapping="Wrap"/>
+                                        <StackPanel x:Name="MaiTranscribePanel" Margin="0,12,0,0" Visibility="Collapsed">
+                                            <TextBlock x:Name="MaiTranscribeDisclosureText"
+                                                       Style="{StaticResource CardDescription}"
+                                                       Text="{x:Static coresettings:TranscriptionModelChoices.MaiTranscribeDisclosure}"
+                                                       TextWrapping="Wrap"/>
+                                            <TextBlock x:Name="MaiTranscribeModelNameNoteText"
+                                                       Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                       Text="{x:Static coresettings:TranscriptionModelChoices.MaiTranscribeModelNameNote}"
+                                                       TextWrapping="Wrap"/>
+                                            <TextBlock x:Name="MaiTranscribeAuthSummaryText"
+                                                       Style="{StaticResource CardDescription}" Margin="0,6,0,0"
+                                                       TextWrapping="Wrap"/>
+                                            <WrapPanel Margin="0,8,0,0">
+                                                <ui:Button Content="Set up Microsoft Foundry sign-in on AI cleanup"
+                                                           Margin="0,0,12,4" Click="DictationMaiAuthLink_Click"/>
+                                                <TextBlock Style="{StaticResource CardDescription}" VerticalAlignment="Center">
+                                                    <Hyperlink NavigateUri="{x:Static coresettings:TranscriptionModelChoices.SetupGuideUri}"
+                                                               RequestNavigate="Hyperlink_RequestNavigate">
+                                                        How to set up MAI-Transcribe-2 (Azure CLI or service principal)
+                                                    </Hyperlink>
+                                                </TextBlock>
+                                            </WrapPanel>
+                                            <TextBlock x:Name="MaiTranscribeStyleTitle" Text="MAI-Transcribe-2 style"
+                                                       Style="{StaticResource CardTitle}" Margin="0,10,0,0"/>
+                                            <ComboBox x:Name="MaiTranscribeStyleCombo" Margin="0,6,0,0"
+                                                      MinWidth="260" HorizontalAlignment="Left"
+                                                      DisplayMemberPath="Label"
+                                                      AutomationProperties.LabeledBy="{Binding ElementName=MaiTranscribeStyleTitle}">
+                                                <ComboBox.ItemContainerStyle>
+                                                    <Style TargetType="ComboBoxItem">
+                                                        <Setter Property="AutomationProperties.Name" Value="{Binding Label}"/>
+                                                    </Style>
+                                                </ComboBox.ItemContainerStyle>
+                                            </ComboBox>
+                                            <TextBlock x:Name="MaiTranscribeEndpointTitle" Text="Speech resource address (optional)"
+                                                       Style="{StaticResource CardTitle}" Margin="0,10,0,0"/>
+                                            <TextBlock Style="{StaticResource CardDescription}" Margin="0,4,0,0"
+                                                       Text="Leave blank to use the Microsoft Foundry resource address from AI cleanup."
+                                                       TextWrapping="Wrap"/>
+                                            <ui:TextBox x:Name="MaiTranscribeEndpointBox" Margin="0,6,0,0"
+                                                        MinWidth="360" HorizontalAlignment="Stretch"
+                                                        PlaceholderText="https://your-resource.cognitiveservices.azure.com"
+                                                        TextChanged="MaiTranscribeEndpointBox_TextChanged"
+                                                        AutomationProperties.LabeledBy="{Binding ElementName=MaiTranscribeEndpointTitle}"/>
+                                        </StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                             <ui:Button x:Name="TranscriptionModelInstallButton" Content="Download"
                                                        MinWidth="90" Click="TranscriptionModelInstallButton_Click"/>

@@ -78,7 +78,12 @@ public sealed partial class GlossarySourceTests
     ];
 
     // Other companies' product names, which keep their own words.
-    private static readonly Regex[] ProductNames = [new(@"\bAzure CLI\b"), new(@"\bMIT License\b")];
+    private static readonly Regex[] ProductNames =
+    [
+        new(@"\bAzure CLI\b"),
+        new(@"\bMIT License\b"),
+        new(@"\bMAI-Transcribe(?:-2|-1\.5)?\b"),
+    ];
 
     // Files whose text is never Scribe's words to a person, with why. Paths are relative to src.
     private static readonly IReadOnlyDictionary<string, string> ExcludedFiles = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

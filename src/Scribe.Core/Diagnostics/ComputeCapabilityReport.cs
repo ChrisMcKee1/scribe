@@ -54,6 +54,15 @@ public sealed record ComputeCapabilityReport
     public bool HasNpu => Accelerators.Count > 0;
 
     /// <summary>
+    /// True when this PC is running a native build with a recognized Copilot+ PC neural accelerator
+    /// (Qualcomm Hexagon, Intel AI Boost, or AMD XDNA/Ryzen AI).
+    /// </summary>
+    public bool IsCopilotPlusNpu =>
+        HasNpu &&
+        !IsEmulated &&
+        Accelerators.Any(a => a.Vendor is AcceleratorVendor.Qualcomm or AcceleratorVendor.Intel or AcceleratorVendor.Amd);
+
+    /// <summary>
     /// A single actionable sentence for the user, or <c>null</c> when nothing needs saying.
     /// Only emulation warrants advice: everything else is working as intended.
     /// </summary>

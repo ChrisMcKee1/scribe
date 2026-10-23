@@ -22,6 +22,8 @@ public static class AdvancedDefaults
         {
             AdvancedSection.SpeechRecognition =>
                 Count(settings.TranscriptionModelId != TranscriptionModelCatalog.DefaultId) +
+                Count(!string.IsNullOrWhiteSpace(settings.MaiTranscribeEndpoint)) +
+                Count(settings.MaiTranscribeStyle != defaults.MaiTranscribeStyle) +
                 Count(settings.DecodeThreads != defaults.DecodeThreads) +
                 Count(settings.ReleaseModelsAfterIdleMinutes != defaults.ReleaseModelsAfterIdleMinutes),
             AdvancedSection.Recording =>
@@ -42,6 +44,8 @@ public static class AdvancedDefaults
         ArgumentNullException.ThrowIfNull(target);
         var defaults = AppSettings.CreateDefault();
         target.TranscriptionModelId = defaults.TranscriptionModelId;
+        target.MaiTranscribeEndpoint = defaults.MaiTranscribeEndpoint;
+        target.MaiTranscribeStyle = defaults.MaiTranscribeStyle;
         target.DecodeThreads = defaults.DecodeThreads;
         target.ReleaseModelsAfterIdleMinutes = defaults.ReleaseModelsAfterIdleMinutes;
         target.UseVoiceActivityDetection = defaults.UseVoiceActivityDetection;

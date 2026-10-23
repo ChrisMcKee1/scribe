@@ -17,6 +17,19 @@ public partial class SettingsWindow
     private void AdvancedTypingLink_Click(object sender, RoutedEventArgs e) =>
         ShowPage(SettingsPage.Advanced, nameof(InjectionCombo));
 
+    private void DictationSpeechModelLink_Click(object sender, RoutedEventArgs e) =>
+        ShowPage(SettingsPage.Advanced, nameof(TranscriptionModelCombo));
+
+    private void DictationMaiAuthLink_Click(object sender, RoutedEventArgs e)
+    {
+        if (AiProviderFoundryRadio is not null && AiProviderFoundryRadio.IsChecked != true)
+        {
+            AiProviderFoundryRadio.IsChecked = true;
+        }
+
+        ShowPage(SettingsPage.AiCleanup, nameof(AiProviderFoundryRadio));
+    }
+
     private void AboutShowWelcomeButton_Click(object sender, RoutedEventArgs e) =>
         ShowWelcomeRequested?.Invoke(this, EventArgs.Empty);
 }

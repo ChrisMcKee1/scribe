@@ -34,6 +34,7 @@ public sealed class PerfFlags
         CliTokenEveryRequest,
         CoalesceDictionaryStatus,
         CompactLocalGlossary,
+        CopilotPlusNpuSpeech,
         DataLayerWarmUp,
         DeduplicateOverlayMeter,
         DeferSettingsPageData,
@@ -46,6 +47,7 @@ public sealed class PerfFlags
         InputTimings,
         LeanFooterRefresh,
         LightTraceBridge,
+        MaiTranscribeSpeech,
         MatcherPrefilter,
         OverlappedIntegrityCheck,
         PillBeforeTray,
@@ -80,6 +82,7 @@ public sealed class PerfFlags
     public const string CliTokenEveryRequest = nameof(CliTokenEveryRequest);
     public const string CoalesceDictionaryStatus = nameof(CoalesceDictionaryStatus);
     public const string CompactLocalGlossary = nameof(CompactLocalGlossary);
+    public const string CopilotPlusNpuSpeech = nameof(CopilotPlusNpuSpeech);
     public const string DataLayerWarmUp = nameof(DataLayerWarmUp);
     public const string DeduplicateOverlayMeter = nameof(DeduplicateOverlayMeter);
     public const string DeferSettingsPageData = nameof(DeferSettingsPageData);
@@ -92,6 +95,7 @@ public sealed class PerfFlags
     public const string InputTimings = nameof(InputTimings);
     public const string LeanFooterRefresh = nameof(LeanFooterRefresh);
     public const string LightTraceBridge = nameof(LightTraceBridge);
+    public const string MaiTranscribeSpeech = nameof(MaiTranscribeSpeech);
     public const string MatcherPrefilter = nameof(MatcherPrefilter);
     public const string OverlappedIntegrityCheck = nameof(OverlappedIntegrityCheck);
     public const string PillBeforeTray = nameof(PillBeforeTray);

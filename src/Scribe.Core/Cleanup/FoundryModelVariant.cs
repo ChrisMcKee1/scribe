@@ -5,12 +5,13 @@ public enum FoundryModelExecutionBuild
     Unknown = 0,
     Cpu = 1,
     Gpu = 2,
+    Npu = 3,
 }
 
 internal readonly record struct FoundryModelVariantCandidate(string Alias, string? ExecutionProvider);
 
 /// <summary>
-/// Alias-shape helpers for the GPU to CPU demotion.
+/// Alias-shape helpers for the GPU/NPU to CPU demotion.
 /// <para>
 /// Foundry Local reports a model's execution provider directly, and that is what the settings UI
 /// reads (see <see cref="FoundryExecutionProviders"/>). These helpers exist for the one case where
@@ -23,6 +24,7 @@ internal static class FoundryModelVariant
 {
     private const string GenericCpuSuffix = "-generic-cpu";
     private const string GpuSuffix = "-gpu";
+    private const string NpuSuffix = "-npu";
     private const string CpuSuffix = "-cpu";
     private const string CpuExecutionProvider = "CPUExecutionProvider";
 
@@ -39,6 +41,11 @@ internal static class FoundryModelVariant
             return FoundryModelExecutionBuild.Gpu;
         }
 
+        if (trimmed.EndsWith(NpuSuffix, StringComparison.OrdinalIgnoreCase))
+        {
+            return FoundryModelExecutionBuild.Npu;
+        }
+
         if (trimmed.EndsWith(CpuSuffix, StringComparison.OrdinalIgnoreCase))
         {
             return FoundryModelExecutionBuild.Cpu;
@@ -48,6 +55,11 @@ internal static class FoundryModelVariant
     }
 
     public static bool IsGpuAlias(string? alias) => Classify(alias) == FoundryModelExecutionBuild.Gpu;
+
+    public static bool IsNpuAlias(string? alias) => Classify(alias) == FoundryModelExecutionBuild.Npu;
+
+    public static bool IsAcceleratedAlias(string? alias) =>
+        Classify(alias) is FoundryModelExecutionBuild.Gpu or FoundryModelExecutionBuild.Npu;
 
     public static string? ResolveCpuCounterpartAlias(string? gpuAlias, IEnumerable<string> catalogAliases)
     {
@@ -60,7 +72,7 @@ internal static class FoundryModelVariant
         string? gpuAlias,
         IEnumerable<FoundryModelVariantCandidate> catalogCandidates)
     {
-        if (!IsGpuAlias(gpuAlias))
+        if (!IsAcceleratedAlias(gpuAlias))
         {
             return null;
         }
@@ -85,18 +97,23 @@ internal static class FoundryModelVariant
     public static bool IsCpuExecutionProvider(string? executionProvider) =>
         string.Equals(executionProvider?.Trim(), CpuExecutionProvider, StringComparison.OrdinalIgnoreCase);
 
-    // Foundry Local names a build <model>-<provider>-<device>: generic-gpu (WebGPU), cuda-gpu, trtrtx-gpu (TensorRT-RTX)
-    // and so on, and a family's CPU build is <model>-generic-cpu whichever of those its graphics card builds are. Only a
-    // segment of letters counts as the provider, so a name without one ("phi-4-gpu") never loses part of the model's own
-    // name; it keeps the older <model>-gpu to <model>-cpu shape.
-    private static IEnumerable<string> CandidateCpuAliases(string gpuAlias)
+    // Foundry Local names a build <model>-<provider>-<device>: generic-gpu (WebGPU), cuda-gpu, trtrtx-gpu (TensorRT-RTX),
+    // qnn-npu, openvino-npu, vitis-npu and so on, and a family's CPU build is <model>-generic-cpu whichever of those its
+    // accelerated builds are. Only a segment of letters counts as the provider, so a name without one ("phi-4-gpu" or
+    // "phi-4-npu") never loses part of the model's own name; it keeps the older <model>-gpu/<model>-npu to <model>-cpu shape.
+    private static IEnumerable<string> CandidateCpuAliases(string acceleratedAlias)
     {
-        if (!gpuAlias.EndsWith(GpuSuffix, StringComparison.OrdinalIgnoreCase))
+        var suffixLength = acceleratedAlias.EndsWith(GpuSuffix, StringComparison.OrdinalIgnoreCase)
+            ? GpuSuffix.Length
+            : acceleratedAlias.EndsWith(NpuSuffix, StringComparison.OrdinalIgnoreCase)
+                ? NpuSuffix.Length
+                : 0;
+        if (suffixLength == 0)
         {
             yield break;
         }
 
-        var stem = gpuAlias[..^GpuSuffix.Length];
+        var stem = acceleratedAlias[..^suffixLength];
         var provider = stem.LastIndexOf('-');
         if (provider > 0 && provider < stem.Length - 1 && stem[(provider + 1)..].All(char.IsAsciiLetter))
         {

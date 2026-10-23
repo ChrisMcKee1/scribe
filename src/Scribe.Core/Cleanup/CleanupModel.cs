@@ -32,11 +32,41 @@ public static class CleanupModelCatalog
     /// </summary>
     public const string LargeGpuAlias = "qwen2.5-7b";
 
+    /// <summary>
+    /// The first choice on a Copilot+ PC with a neural processing unit (Qualcomm Hexagon, Intel AI Boost or AMD XDNA)
+    /// when no 8 GB+ NVIDIA RTX graphics card is present. Foundry Local ships NPU-quantized Phi-4 Mini builds via
+    /// Windows ML (QNN, OpenVINO and Vitis AI).
+    /// </summary>
+    public const string CopilotPlusNpuAlias = "phi-4-mini";
+
     /// <summary>The model Settings starts a first setup with on this PC's hardware (<paramref name="adapters"/>).</summary>
-    public static string DefaultAliasFor(IReadOnlyList<Diagnostics.GraphicsAdapter> adapters)
+    public static string DefaultAliasFor(IReadOnlyList<Diagnostics.GraphicsAdapter> adapters) =>
+        DefaultAliasFor(adapters, []);
+
+    /// <summary>
+    /// The model Settings starts a first setup with on this PC's graphics cards (<paramref name="adapters"/>) and
+    /// neural accelerators (<paramref name="accelerators"/>).
+    /// </summary>
+    public static string DefaultAliasFor(
+        IReadOnlyList<Diagnostics.GraphicsAdapter> adapters,
+        IReadOnlyList<Diagnostics.NeuralAccelerator> accelerators)
     {
         ArgumentNullException.ThrowIfNull(adapters);
-        return adapters.Any(adapter => adapter.IsNvidiaRtx && adapter.HasAtLeast(8)) ? LargeGpuAlias : DefaultAlias;
+        ArgumentNullException.ThrowIfNull(accelerators);
+        if (adapters.Any(adapter => adapter.IsNvidiaRtx && adapter.HasAtLeast(8)))
+        {
+            return LargeGpuAlias;
+        }
+
+        if (accelerators.Any(accelerator =>
+                accelerator.Vendor is Diagnostics.AcceleratorVendor.Qualcomm
+                    or Diagnostics.AcceleratorVendor.Intel
+                    or Diagnostics.AcceleratorVendor.Amd))
+        {
+            return CopilotPlusNpuAlias;
+        }
+
+        return DefaultAlias;
     }
 
     public static IReadOnlyList<CleanupModel> Curated { get; } = new[]
@@ -46,10 +76,11 @@ public static class CleanupModelCatalog
         new CleanupModel("qwen3-1.7b", "Qwen3 1.7B", "About 1.3 GB. Scribe's default before version 0.5.2."),
 
         // Foundry Local 2.x runs these on an NVIDIA graphics card through its CUDA builds (0.5.2 benchmark, RTX 5080:
-        // Qwen3 4B 0.72 s, Phi-4 Mini 0.79 s, where 1.2.4 had them on the processor at 16 s). Qwen3.5 2B left the list:
-        // every build of it fails with 2.1.0 ("Invalid rank for input: position_ids"), and a saved choice of it says so.
-        new CleanupModel("qwen3-4b", "Qwen3 4B", "About 2.7 GB. Fast on an NVIDIA graphics card. Slow without one."),
-        new CleanupModel("phi-4-mini", "Phi-4 Mini", "About 3.7 GB. Fast on an NVIDIA graphics card. Slow without one."),
+        // Qwen3 4B 0.72 s, Phi-4 Mini 0.79 s, where 1.2.4 had them on the processor at 16 s) and on Copilot+ PC NPUs
+        // through Windows ML. Qwen3.5 2B left the list: every build of it fails with 2.1.0 ("Invalid rank for input:
+        // position_ids"), and a saved choice of it says so.
+        new CleanupModel("qwen3-4b", "Qwen3 4B", "About 2.7 GB. Fast on an NVIDIA graphics card or Copilot+ PC NPU. Slow without one."),
+        new CleanupModel("phi-4-mini", "Phi-4 Mini", "About 3.7 GB. Fast on an NVIDIA graphics card or Copilot+ PC NPU. Slow without one."),
     };
 
     /// <summary>Resolves an alias to its descriptor, falling back to the default when unknown.</summary>

@@ -6158,12 +6158,19 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 DescribeFailureShape(ex));
         }
 
-        if (FoundryModelVariant.IsGpuAlias(resolvedId))
+        if (FoundryModelVariant.IsAcceleratedAlias(resolvedId))
         {
             return resolvedId;
         }
 
-        return FoundryModelVariant.IsGpuAlias(options.FoundryModelAlias) ? options.FoundryModelAlias : null;
+        if (_pendingFoundryInUse is { Id: { } inUseId, Alias: { } inUseAlias } &&
+            string.Equals(inUseAlias, options.FoundryModelAlias, StringComparison.OrdinalIgnoreCase) &&
+            FoundryModelVariant.IsAcceleratedAlias(inUseId))
+        {
+            return inUseId;
+        }
+
+        return FoundryModelVariant.IsAcceleratedAlias(options.FoundryModelAlias) ? options.FoundryModelAlias : null;
     }
 
     private async Task<FoundryDemotionResult?> TryDemoteFoundryLoadFailureAsync(
@@ -6300,7 +6307,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     cpuAlias, sourceAlias, cpuFailure.Reason.Diagnostic);
             }
 
-            const string neither = "Neither the GPU nor the CPU build of this model would run. Pick a different model in Settings.";
+            var buildKind = FoundryModelVariant.IsNpuAlias(sourceAlias) ? "NPU" : "GPU";
+            var neither = $"Neither the {buildKind} nor the CPU build of this model would run. Pick a different model in Settings.";
             SetInitStatus(CleanupStatus.Unavailable, new CleanupReason(
                 $"{neither} {cpuFailure.Reason.Diagnostic}".TrimEnd(),
                 $"{neither} {cpuFailure.Reason.Display}".TrimEnd()));

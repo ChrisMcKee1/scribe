@@ -23,6 +23,8 @@ public sealed class TranscriptionService : ITranscriptionService
 
     private readonly Func<ISpeechRecognizer> _load;
     private readonly ILogger<TranscriptionService> _logger;
+    private readonly IMaiTranscribeClient? _maiClient;
+    private readonly Func<MaiTranscribeOptions?>? _maiOptions;
 
     // Every native call happens under this gate: load, warm-up, decode, unload and dispose. Holding it across
     // ensure-ready AND use is what stops an idle Unload from landing between the two, and holding it in Dispose is
@@ -35,18 +37,29 @@ public sealed class TranscriptionService : ITranscriptionService
     public TranscriptionService(
         ModelLocator locator,
         IOptions<TranscriptionOptions> options,
-        ILogger<TranscriptionService> logger)
+        ILogger<TranscriptionService> logger,
+        IMaiTranscribeClient? maiClient = null,
+        Func<MaiTranscribeOptions?>? maiOptions = null,
+        Diagnostics.PerfFlags? perfFlags = null)
     {
         var resolved = options.Value;
         _logger = logger;
-        _load = () => LoadSherpaRecognizer(locator, resolved);
+        _maiClient = maiClient;
+        _maiOptions = maiOptions;
+        _load = () => LoadSherpaRecognizer(locator, resolved, perfFlags);
     }
 
     /// <summary>Test seam: supplies the recognizer instead of loading sherpa-onnx.</summary>
-    internal TranscriptionService(Func<ISpeechRecognizer> load, ILogger<TranscriptionService> logger)
+    internal TranscriptionService(
+        Func<ISpeechRecognizer> load,
+        ILogger<TranscriptionService> logger,
+        IMaiTranscribeClient? maiClient = null,
+        Func<MaiTranscribeOptions?>? maiOptions = null)
     {
         _load = load;
         _logger = logger;
+        _maiClient = maiClient;
+        _maiOptions = maiOptions;
     }
 
     public bool IsReady => Volatile.Read(ref _recognizer) is not null;
@@ -74,9 +87,17 @@ public sealed class TranscriptionService : ITranscriptionService
         return Stopwatch.GetElapsedTime(started);
     }
 
-    private ISpeechRecognizer LoadSherpaRecognizer(ModelLocator locator, TranscriptionOptions options)
+    private ISpeechRecognizer LoadSherpaRecognizer(
+        ModelLocator locator,
+        TranscriptionOptions options,
+        Diagnostics.PerfFlags? perfFlags = null)
     {
         var model = TranscriptionModelCatalog.Resolve(options.ModelId);
+        if (model.IsCloud)
+        {
+            model = TranscriptionModelCatalog.Resolve(TranscriptionModelCatalog.DefaultId);
+        }
+
         var models = locator.ResolveOrDefault(model, out var usedFallback);
         if (!models.AsrComplete)
         {
@@ -100,6 +121,15 @@ public sealed class TranscriptionService : ITranscriptionService
             _logger.LogWarning(
                 "Decoding method {Requested} is not safe for {Model}; decoding greedily instead.",
                 options.DecodingMethod, model.DisplayName);
+        }
+
+        if (InstallerFeatureGate.CanUseExperimentalCopilotPlusNpuSpeech(
+                WindowsPackageIdentity.IsPackaged(),
+                perfFlags,
+                Diagnostics.ComputeCapabilityReport.Detect()))
+        {
+            _logger.LogInformation(
+                "Experimental Copilot+ PC NPU speech flag is active; keeping CPU transducer as the verified recognizer.");
         }
 
         var config = new OfflineRecognizerConfig();
@@ -193,6 +223,23 @@ public sealed class TranscriptionService : ITranscriptionService
         if (audio.IsEmpty) return TranscriptionResult.Empty;
 
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (_maiClient is not null && _maiOptions?.Invoke() is { Enabled: true } maiOptions)
+        {
+            var maiAttempt = _maiClient.TryTranscribeAsync(audio, maiOptions, cancellationToken).GetAwaiter().GetResult();
+            if (maiAttempt.Succeeded)
+            {
+                return new TranscriptionResult(
+                    maiAttempt.Text,
+                    audio.Duration,
+                    maiAttempt.Elapsed,
+                    TranscriptionModelCatalog.MaiTranscribe2Id);
+            }
+
+            _logger.LogWarning(
+                "MAI-Transcribe-2 was unavailable ({Reason}); using the speech model on this PC.",
+                maiAttempt.DiagnosticReason);
+        }
 
         var waitStarted = Stopwatch.GetTimestamp();
         lock (_gate)

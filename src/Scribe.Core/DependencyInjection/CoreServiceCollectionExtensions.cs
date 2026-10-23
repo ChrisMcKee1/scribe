@@ -44,7 +44,28 @@ public static class CoreServiceCollectionExtensions
                 options.ModelId = loaded.TranscriptionModelId;
                 options.NumThreads = loaded.DecodeThreads;
             });
-        services.AddSingleton<ITranscriptionService, TranscriptionService>();
+        services.AddSingleton<IMaiTranscribeClient>(sp => new MaiTranscribeClient(
+            sp.GetRequiredService<ILogger<MaiTranscribeClient>>(),
+            sp.GetRequiredService<Scribe.Core.Diagnostics.PerfFlags>()));
+        services.AddSingleton<ITranscriptionService>(sp =>
+        {
+            var settingsRepo = sp.GetRequiredService<ISettingsRepository>();
+            var dictionaryRepo = sp.GetRequiredService<IDictionaryRepository>();
+            var librarySource = sp.GetRequiredService<ILibraryVocabularySource>();
+            var perfFlags = sp.GetRequiredService<Scribe.Core.Diagnostics.PerfFlags>();
+            return new TranscriptionService(
+                sp.GetRequiredService<ModelLocator>(),
+                sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<TranscriptionOptions>>(),
+                sp.GetRequiredService<ILogger<TranscriptionService>>(),
+                sp.GetRequiredService<IMaiTranscribeClient>(),
+                () => MaiTranscribeOptions.FromSettings(
+                    settingsRepo.Load(),
+                    WindowsPackageIdentity.IsPackaged(),
+                    perfFlags,
+                    dictionaryRepo.GetAll(),
+                    librarySource),
+                perfFlags);
+        });
 
         services.AddSingleton<IAudioCaptureService, AudioCaptureService>();
         services.AddSingleton<IHotkeyService, HotkeyService>();

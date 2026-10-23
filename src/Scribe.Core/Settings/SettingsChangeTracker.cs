@@ -183,6 +183,8 @@ public static class SettingsChangeTracker
         AddIf(SettingsPage.Advanced,
             baseline.DecodeThreads != draft.DecodeThreads ||
             !Same(baseline.TranscriptionModelId, draft.TranscriptionModelId) ||
+            !Same(baseline.MaiTranscribeEndpoint, draft.MaiTranscribeEndpoint) ||
+            baseline.MaiTranscribeStyle != draft.MaiTranscribeStyle ||
             baseline.ReleaseModelsAfterIdleMinutes != draft.ReleaseModelsAfterIdleMinutes ||
             baseline.UseVoiceActivityDetection != draft.UseVoiceActivityDetection ||
             baseline.MaxDictationMinutes != draft.MaxDictationMinutes ||

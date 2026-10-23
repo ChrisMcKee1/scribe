@@ -1,9 +1,10 @@
-# Scribe AI Cleanup: Model Leaderboard
+# Scribe AI Cleanup & Speech: Model Leaderboard
 
-Updated October 21, 2026. Speed and quality benchmark of cloud frontier models (Microsoft Foundry
-in South Central US and GitHub Copilot) against the top local models on this PC. For the full
-40+ model local comparison across Ollama, TensorSharp, LM Studio and Foundry Local, see the
-[Local AI Cleanup Benchmark](local-model-benchmark.md).
+Updated October 23, 2026. Speed and quality benchmark of cloud frontier models (Microsoft Foundry
+in South Central US and GitHub Copilot) against the top local models on this PC, plus speech
+recognition benchmarks comparing local **Parakeet TDT 0.6B v3** against **MAI-Transcribe-2** on
+Microsoft Foundry. For the full 40+ model local comparison across Ollama, TensorSharp, LM Studio
+and Foundry Local, see the [Local AI Cleanup Benchmark](local-model-benchmark.md).
 
 ## TL;DR: What to Use
 
@@ -16,7 +17,10 @@ in South Central US and GitHub Copilot) against the top local models on this PC.
 | **Cloud, budget / minimum latency** | **`gpt-5.4-mini`** | Microsoft Foundry (`DataZoneStandard`, South Central US) | **87.9** | **0.98 s** | **1.30 s** | Tightest latency tail in the cloud; ideal for quick everyday dictation. |
 | **Local, 16 GB GPU (#1 overall)** | **`gemma4:26b-a4b-iq3s`** | Ollama (`32K` context, MTP draft head) | **93.4 to 94.1** | **0.46 s** | **1.04 s** | Matches cloud frontier quality in under half a second with zero token cost. |
 | **Local, 16 GB GPU (TensorSharp)** | **`Gemma 4 26B-A4B (`UD-IQ3_S`)`** | TensorSharp (`ggml_cuda`, `16K` context) | **93.7** | **1.09 s** | **1.56 s** | Persistent disk-backed Radix prefix cache; 3.4x faster than LM Studio. |
+| **Local, Copilot+ PC NPU** | **`phi-4-mini` / `qwen2.5-1.5b`** | Foundry Local + Windows ML (`QNN`, `OpenVINO`, `Vitis AI`) | **78.7 / 74.0** | **NPU / 0.37 s** | 1.12 s | Selected automatically on Copilot+ PC NPUs with automatic `-npu` to CPU fallback. |
 | **Local, zero external install** | **`qwen2.5-7b` / `qwen2.5-1.5b`** | Foundry Local (built in) | **85.4 / 74.0** | **0.74 s / 0.37 s** | 1.12 s / 0.64 s | Automatic TensorRT-RTX / CUDA hardware selection with nothing else to install. |
+| **Speech, offline default** | **`Parakeet TDT 0.6B v3 (INT8)`** | On this PC (`sherpa-onnx` CPU) | **97.7% word cov.** | **0.12 s** (4 s clip) | **0.64 s** (23 s clip) | ~25x realtime across 25 European languages; zero network dependency. |
+| **Speech, 60-language cloud** | **`MAI-Transcribe-2`** | Microsoft Foundry (`transcriptions:transcribe` REST) | **60 languages + bias** | **0.71 s** (4 s clip) | **1.57 s** (23 s clip) | Built-in `phraseList` vocabulary biasing, `clean`/`verbatim` style, and offline Parakeet fallback. |
 
 ---
 
@@ -83,6 +87,57 @@ median (8.52 s p95). `gpt-5.6-luna` scored within 1.4 points at a 2.59 s median.
    Sending only the dictionary and word pack terms a dictation appears to mention (`VocabularyMentions`)
    reduced average cloud input from ~7,500 tokens to ~1,400 tokens per dictation while preserving
    100% vocabulary accuracy on frontier models.
+
+---
+
+## Speech Recognition Leaderboard: Local Parakeet vs. Microsoft Foundry (`MAI-Transcribe-2`)
+
+Measured on October 23, 2026 across all 14 speech fixtures in `tests/fixtures/speech/` (`1.92 s` to
+`23.26 s`), comparing Scribe's default on-device **Parakeet TDT 0.6B v3 (INT8)** (`8` CPU threads on
+Ryzen 9 9900X) against the **Microsoft Foundry Speech REST API**
+(`/speechtotext/transcriptions:transcribe?api-version=2025-10-15`, South Central US resource
+`foundry-cmckee` in tenant `12e59739-a641-4820-be41-4d20864d2db7`, with `phraseList` vocabulary
+biasing `["Azure DevOps", "Scribe", "GitHub Copilot", "Kubernetes"]`).
+
+| Speech Model & Configuration | Languages | Network | Median (P50) | P95 (23.3 s clip) | Mean RTF | Vocabulary Biasing | Offline Fallback |
+|---|---|---|---:|---:|---:|---|---|
+| **`Parakeet TDT 0.6B v3 (INT8)`** (`sherpa-onnx` CPU, default) | 25 European | None (100% offline) | **121 ms** | **638 ms** | **0.038** (~26x realtime) | Post-processing dictionary + word packs | Native offline |
+| **`MAI-Transcribe-2`** (`transcriptions:transcribe`, Microsoft Foundry) | 60 languages | HTTPS multipart WAV + JSON | **710 ms** | **1,571 ms** | **0.168** (~6x to 14.8x realtime) | Built-in `phraseList.phrases` (up to 500 terms) + post-processing | Automatic fallback to local Parakeet |
+
+### Per-Fixture Comparison (Local Parakeet CPU vs. Microsoft Foundry Cloud Speech)
+
+| Fixture | Audio (s) | Local Parakeet Decode (ms) | Local RTF | Foundry Speech Round-Trip (ms) | Foundry RTF | Raw Cloud Output with `phraseList` Biasing |
+|---|---:|---:|---:|---:|---:|---|
+| `snippet-address.wav` | 2.02 | 76 ms | 0.06 | 588 ms | 0.29 | `Insert my address.` |
+| `dict-scribe.wav` | 3.97 | 123 ms | 0.04 | 654 ms | 0.17 | `Scribe types whatever I say into the window that has focus.` |
+| `pangram.wav` | 3.38 | 135 ms | 0.05 | 657 ms | 0.20 | `The quick brown fox jumps over the lazy dog.` |
+| `sentence.wav` | 4.00 | 119 ms | 0.04 | 665 ms | 0.17 | `Please send the report to the team before Friday afternoon.` |
+| `dict-kubernetes.wav` | 4.14 | 129 ms | 0.04 | 669 ms | 0.16 | `The Cuba Ernets cluster restarted overnight after the upgrade.` (repaired by dictionary) |
+| `question.wav` | 3.72 | 109 ms | 0.04 | 674 ms | 0.18 | `Can you send me the latest version of the design document?` |
+| `snippet-signature.wav` | 1.92 | 76 ms | 0.06 | 686 ms | 0.36 | `Insert my signature.` |
+| `list.wav` | 5.07 | 139 ms | 0.03 | 710 ms | 0.14 | `We need milk, eggs, bread, coffee, and a bag of apples.` |
+| `dict-azure-devops.wav` | 4.56 | 137 ms | 0.04 | 716 ms | 0.16 | `We track every bug in Azure DevOps and review the board on Monday morning.` |
+| `dict-github-copilot.wav` | 3.99 | 117 ms | 0.04 | 740 ms | 0.18 | `Ask GitHub Copilot to explain why the build is failing.` |
+| `longer.wav` | 6.26 | 177 ms | 0.03 | 742 ms | 0.12 | `The engineer opened the laptop, checked the microphone, and started dictating a message.` |
+| `numbers-time.wav` | 6.10 | 159 ms | 0.03 | 775 ms | 0.13 | `The meeting moved to 330 on Tuesday, and 42 people signed up for the workshop.` |
+| `greeting.wav` | 4.16 | 121 ms | 0.04 | 805 ms | 0.19 | `Hello, this is a test of the Scribe dictation system.` |
+| `long-passage.wav` | 23.26 | 638 ms | 0.03 | 1,571 ms | 0.07 | `Good morning everyone. Before we start the planning meeting...` (100% match) |
+
+### Key Speech & Regional Findings
+
+- **Regional `enhancedMode` availability and automatic Fast Transcription fallback:**
+  Microsoft Learn documents `enhancedMode.model = "MAI-Transcribe-2"` as active in six LLM Speech
+  regions (`eastus`, `westus`, `westus2`, `northeurope`, `centralindia`, `southeastasia`). When a
+  user's Microsoft Foundry resource is in another Speech region (such as `southcentralus`), the first
+  request with `enhancedMode` returns HTTP 400 (`"Enhanced mode with model is currently not supported
+  yet."`). `MaiTranscribeClient` catches that regional 400, retries immediately with standard Azure
+  Fast Transcription and `phraseList` biasing on the same endpoint, and remembers the host for the
+  session so every subsequent dictation completes in a single request (~710 ms median).
+- **Negligible client overhead (`MaiTranscribeBenchmarks`):**
+  In-memory PCM16 WAV encoding (`MaiWavEncoder.EncodePcm16Wav`) takes **66.34 us** (`125.09 KB`) for
+  a 4-second clip and **463.91 us** (`718.93 KB`) for a 23-second passage; building the JSON
+  definition with 500 bias phrases takes **11.63 us** (`55.20 KB`). See
+  [mai-transcribe-setup.md](mai-transcribe-setup.md) for the step-by-step setup guide.
 
 ---
 

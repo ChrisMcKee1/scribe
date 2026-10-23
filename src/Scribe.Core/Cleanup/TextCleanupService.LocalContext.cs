@@ -1782,7 +1782,7 @@ internal sealed partial class TextCleanupService
             : CleanupPrompt.GlossaryTermBudget(options.PromptStyle, options.Provider, options.CustomEndpoint);
         return vocabulary.GlossaryFor(
             options.VocabularyMode, options.SendWholeVocabulary, readying ? null : dictation, budget, maxTerms,
-            compactAliases: options.SendWholeVocabulary && _perfFlags.IsOn(Diagnostics.PerfFlags.CompactLocalGlossary),
+            compactAliases: FitsLocalContext(options) && options.SendWholeVocabulary && _perfFlags.IsOn(Diagnostics.PerfFlags.CompactLocalGlossary),
             boundedPreparation: !_perfFlags.IsOn(Diagnostics.PerfFlags.UnboundedLocalPreparation));
     }
 

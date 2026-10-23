@@ -142,6 +142,11 @@ public sealed class SessionDiagnostics(
         {
             var configured = current?.TranscriptionModelId ?? TranscriptionModelCatalog.DefaultId;
             var model = TranscriptionModelCatalog.Resolve(configured);
+            if (model.IsCloud)
+            {
+                return $"id={model.Id} name='{model.DisplayName}' cloud=True";
+            }
+
             var set = models.Resolve();
 
             // "Which model is selected" and "is that model actually on disk" are different

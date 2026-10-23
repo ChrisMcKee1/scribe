@@ -225,6 +225,16 @@ the text is typed. You choose where it runs:
   the model not to spend time reasoning, which cleans a dictation faster at the same quality. Turning
   off **Let Microsoft Foundry cache what Scribe sends** asks Microsoft Foundry not to use its prompt cache
   for new cleanup requests (see [Privacy](#privacy)).
+  - In direct installs (`Scribe-win-x64-Setup.exe` and `Scribe-win-arm64-Setup.exe`, or with
+    `SCRIBE_PERF_FLAGS=MaiTranscribeSpeech`), you can also choose **MAI-Transcribe-2** under
+    **Settings > Advanced > Speech model** to run speech recognition across 60 languages through your
+    Microsoft Foundry connection with vocabulary biasing and automatic fallback to Parakeet on this PC.
+    See the **[MAI-Transcribe-2 setup walkthrough with screenshots](docs/mai-transcribe-setup.md)** for
+    step-by-step setup with Azure CLI or a service principal.
+  - On **Copilot+ PCs** with a Qualcomm Hexagon, Intel AI Boost or AMD XDNA NPU, Foundry Local runs
+    NPU-quantized models on the NPU via Windows ML (`QNN`, `OpenVINO`, `Vitis AI`), starts first-time
+    setup on `Phi-4 Mini` when no 8 GB+ NVIDIA RTX card is present, and automatically falls back from
+    any failed `-npu` build to its CPU counterpart.
 - **GitHub Copilot,** with your own Copilot subscription, through the GitHub Copilot command-line tool.
   Each cleanup uses a fresh session and attempts to delete its local session data afterward.
   This is best-effort and does not change GitHub's own retention policy.
