@@ -81,7 +81,7 @@ internal sealed class FakeFoundryModel : IModel
 {
     private readonly FakeFoundryState _state;
     private readonly List<FakeFoundryModel> _variants = [];
-    private readonly ModelInfo _info;
+    private ModelInfo _info;
     private FakeFoundryModel _selected;
 
     // Whether Info is the selected variant's, as the SDK's Model reports it; set for FamilyOn only, so every other family
@@ -136,6 +136,31 @@ internal sealed class FakeFoundryModel : IModel
     public string Id => _variants.Count == 0 ? Info.Id : _selected.Info.Id;
 
     public string Alias => Info.Alias;
+
+    public long? ContextLength
+    {
+        get => _info.ContextLength;
+        set
+        {
+            _info = WithContextLength(_info, value);
+            foreach (var variant in _variants)
+            {
+                variant._info = WithContextLength(variant._info, value);
+            }
+        }
+    }
+
+    private static ModelInfo WithContextLength(ModelInfo info, long? value) => new()
+    {
+        Id = info.Id,
+        Name = info.Name,
+        Alias = info.Alias,
+        ProviderType = info.ProviderType,
+        Uri = info.Uri,
+        ModelType = info.ModelType,
+        Runtime = info.Runtime,
+        ContextLength = value,
+    };
 
     public ModelInfo Info => _infoFollowsSelection ? _selected._info : _info;
 
@@ -276,7 +301,9 @@ internal sealed class FakeFoundryCatalog(FakeFoundryState state, IReadOnlyList<F
 {
     public string Name => "fake";
 
-    private IEnumerable<FakeFoundryModel> AllVariants => families.SelectMany(f => f.VariantModels);
+    public IReadOnlyList<FakeFoundryModel> Families => families;
+
+    public IEnumerable<FakeFoundryModel> AllVariants => families.SelectMany(f => f.VariantModels);
 
     public Task<List<IModel>> ListModelsAsync(CancellationToken? ct = null) =>
         Task.FromResult(families.Cast<IModel>().ToList());

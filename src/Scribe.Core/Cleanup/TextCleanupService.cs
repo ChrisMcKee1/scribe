@@ -2963,6 +2963,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
         AIAgent? agent = null;
         CleanupOptions options;
+        var useHighReasoning = PostProcessing.AiDictionarySuggester.IsDictionarySuggestionPrompt(systemPrompt);
         var outputCeiling = AuxiliaryCompletionMaxTokens;
         lock (_gate)
         {
@@ -2991,7 +2992,13 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             options = _options;
             var instructions = BuildAuxiliarySystemPrompt(options, systemPrompt);
-            if (FitsContext(options) && ContextTokensLocked(options) >= 32768 &&
+            if (useHighReasoning)
+            {
+                outputCeiling = FitsContext(options)
+                    ? Math.Clamp(ContextTokensLocked(options) / 4, AuxiliaryCompletionMaxTokens, PostProcessing.AiDictionarySuggester.FullContextMaxOutputTokens)
+                    : PostProcessing.AiDictionarySuggester.FullContextMaxOutputTokens;
+            }
+            else if (FitsContext(options) && ContextTokensLocked(options) >= 32768 &&
                 (options.SendWholeVocabulary || (!FitsLocalContext(options) && options.LocalContextTokens is > 0)))
             {
                 outputCeiling = Math.Clamp(ContextTokensLocked(options) / 8, AuxiliaryCompletionMaxTokens, PostProcessing.AiDictionarySuggester.FullContextMaxOutputTokens);
@@ -3035,12 +3042,33 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
             cts.CancelAfter(TimeSpan.FromSeconds(AuxiliaryCompletionTimeoutSeconds));
 
-            var chatOptions = new ChatOptions { MaxOutputTokens = outputCeiling };
-            ApplyOnThisPcGeneration(chatOptions, options);
-
+            var chatOptions = BuildAuxiliaryChatOptions(options, outputCeiling, highReasoning: useHighReasoning);
             var runOptions = new ChatClientAgentRunOptions(chatOptions);
-            var result = await agent.RunAsync(userMessage, options: runOptions, cancellationToken: cts.Token)
-                .ConfigureAwait(false);
+            AgentResponse result;
+            try
+            {
+                result = await agent.RunAsync(userMessage, options: runOptions, cancellationToken: cts.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception firstFailure) when (useHighReasoning && !cts.IsCancellationRequested && IsHighReasoningRejection(firstFailure))
+            {
+                var fallbackOptions = BuildAuxiliaryChatOptions(options, outputCeiling, highReasoning: false);
+                result = await agent.RunAsync(
+                    userMessage,
+                    options: new ChatClientAgentRunOptions(fallbackOptions),
+                    cancellationToken: cts.Token).ConfigureAwait(false);
+                useHighReasoning = false;
+            }
+
+            if (useHighReasoning && SanitizeAuxiliaryCompletion(result.Text) is null && !cts.IsCancellationRequested)
+            {
+                var fallbackOptions = BuildAuxiliaryChatOptions(options, outputCeiling, highReasoning: false);
+                result = await agent.RunAsync(
+                    userMessage,
+                    options: new ChatClientAgentRunOptions(fallbackOptions),
+                    cancellationToken: cts.Token).ConfigureAwait(false);
+            }
+
             NoteLocalModelUse(options);
 
             // Normalize here too: this is the path for the AI usage insight and AI dictionary
@@ -7450,12 +7478,55 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     internal static string BuildAuxiliarySystemPrompt(CleanupOptions options, string systemPrompt)
     {
         var prompt = systemPrompt;
-        if (IsQwen3Family(options) && !prompt.TrimEnd().EndsWith("/no_think", StringComparison.OrdinalIgnoreCase))
+        if (!PostProcessing.AiDictionarySuggester.IsDictionarySuggestionPrompt(systemPrompt) &&
+            IsQwen3Family(options) &&
+            !prompt.TrimEnd().EndsWith("/no_think", StringComparison.OrdinalIgnoreCase))
         {
             prompt += " /no_think";
         }
 
         return prompt;
+    }
+
+    private ChatOptions BuildAuxiliaryChatOptions(CleanupOptions options, int outputCeiling, bool highReasoning)
+    {
+        var chatOptions = new ChatOptions { MaxOutputTokens = outputCeiling };
+        if (ReasoningEffortOverride is { } overrideEffort)
+        {
+            chatOptions.Reasoning = new ReasoningOptions
+            {
+                Effort = overrideEffort,
+                Output = ReasoningOutput.None,
+            };
+        }
+        else if (highReasoning)
+        {
+            chatOptions.Reasoning = new ReasoningOptions
+            {
+                Effort = ReasoningEffort.High,
+                Output = ReasoningOutput.None,
+            };
+        }
+
+        ApplyOnThisPcGeneration(chatOptions, options);
+        return chatOptions;
+    }
+
+    private static bool IsHighReasoningRejection(Exception? exception)
+    {
+        for (var ex = exception; ex is not null; ex = ex.InnerException)
+        {
+            if (ex is ClientResultException { Status: 400 } ||
+                ex is HttpRequestException { StatusCode: System.Net.HttpStatusCode.BadRequest } ||
+                (ex is InvalidOperationException &&
+                 (ex.Message.Contains("reasoning", StringComparison.OrdinalIgnoreCase) ||
+                  ex.Message.Contains("effort", StringComparison.OrdinalIgnoreCase))))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     internal static string? SanitizeAuxiliaryCompletion(string? candidate)
@@ -7605,10 +7676,22 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             };
         }
 
+        var requestedTensorSharpEffort = chatOptions.Reasoning?.Effort switch
+        {
+            ReasoningEffort.Low => "low",
+            ReasoningEffort.Medium => "medium",
+            ReasoningEffort.High or ReasoningEffort.ExtraHigh => "high",
+            _ => null,
+        };
+        if (localApp == LocalServerApp.TensorSharp)
+        {
+            chatOptions.Reasoning = null;
+        }
+
         var maxTokens = plain ? null : chatOptions.MaxOutputTokens;
         var keepMinutes = LocalServerKeepAliveMinutes(options);
         var tensorSharpThinking = !plain && localApp == LocalServerApp.TensorSharp
-            ? LocalModelTuning.SanitizeTensorSharpReasoningEffort(options.TensorSharpReasoningEffort)
+            ? (requestedTensorSharpEffort ?? LocalModelTuning.SanitizeTensorSharpReasoningEffort(options.TensorSharpReasoningEffort))
             : null;
         if (maxTokens is int || keepMinutes is not null || tensorSharpThinking is not null)
         {

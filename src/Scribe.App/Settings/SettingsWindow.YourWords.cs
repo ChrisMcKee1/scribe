@@ -851,7 +851,7 @@ public partial class SettingsWindow
             return ContextBudget.Sanitize(chosenTokens);
         }
 
-        if (!useWholeVocabulary)
+        if (!useWholeVocabulary && (_cleanup.LocalContextTokens <= 0 || AiRequestConsent.IsNeeded(recipient, _savedAiProvider)))
         {
             return null;
         }
@@ -1066,8 +1066,20 @@ public partial class SettingsWindow
         {
             foreach (var (pattern, replacement) in entries)
             {
-                var row = new DictionaryRow { Pattern = pattern, Replacement = replacement };
-                _rows.Add(row);
+                var row = _rows.FirstOrDefault(r =>
+                    !string.IsNullOrWhiteSpace(r.Pattern) &&
+                    string.Equals(r.Pattern.Trim(), pattern.Trim(), StringComparison.OrdinalIgnoreCase));
+                if (row is not null)
+                {
+                    row.Replacement = replacement;
+                    row.Enabled = true;
+                }
+                else
+                {
+                    row = new DictionaryRow { Pattern = pattern, Replacement = replacement };
+                    _rows.Add(row);
+                }
+
                 first ??= row;
             }
         }

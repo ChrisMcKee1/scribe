@@ -261,11 +261,15 @@ public sealed class CleanupPromptTests
     }
 
     [Fact]
-    public void Qwen3_foundry_local_auxiliary_prompt_gets_the_no_think_directive()
+    public void Qwen3_foundry_local_auxiliary_prompt_gets_the_no_think_directive_except_for_dictionary_suggester()
     {
         var prompt = TextCleanupService.BuildAuxiliarySystemPrompt(Foundry("qwen3-1.7b"), "Return JSON only.");
+        var suggesterPrompt = TextCleanupService.BuildAuxiliarySystemPrompt(
+            Foundry("qwen3-1.7b"),
+            Scribe.Core.PostProcessing.AiDictionarySuggester.SystemPrompt);
 
         Assert.Equal("Return JSON only. /no_think", prompt);
+        Assert.DoesNotContain("/no_think", suggesterPrompt, StringComparison.Ordinal);
     }
 
     [Fact]

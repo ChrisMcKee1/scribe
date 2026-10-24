@@ -78,6 +78,33 @@ public sealed class AiDictionarySuggesterTests
     }
 
     [Fact]
+    public void ParseSuggestions_self_heals_existing_entries_when_written_form_or_casing_differs()
+    {
+        var json =
+            """
+            [
+              {"spoken":"azure","written":"Azure"},
+              {"spoken":"a p i m","written":"APIM"},
+              {"spoken":"kube control","written":"kubectl"}
+            ]
+            """;
+        var existing = new[]
+        {
+            DictionaryEntry.New("azure", "Azure"),
+            DictionaryEntry.New("a p i m", "Apim"),
+            DictionaryEntry.New("kube control", "KubeControl"),
+        };
+
+        var result = AiDictionarySuggester.ParseSuggestions(json, existing);
+
+        Assert.Equal(2, result.Count);
+        Assert.Equal("a p i m", result[0].Pattern);
+        Assert.Equal("APIM", result[0].Replacement);
+        Assert.Equal("kube control", result[1].Pattern);
+        Assert.Equal("kubectl", result[1].Replacement);
+    }
+
+    [Fact]
     public void ParseSuggestions_dedupes_by_spoken_form_and_skips_no_ops_and_blanks()
     {
         var json =
@@ -190,5 +217,138 @@ public sealed class AiDictionarySuggesterTests
         Assert.Contains("PersonalWritten0", request.SystemPrompt, StringComparison.Ordinal);
         Assert.Contains("PackWritten499", request.SystemPrompt, StringComparison.Ordinal);
         Assert.Contains($"Return at most {AiDictionarySuggester.FullContextMaxSuggestions} items, fewer is fine.", request.SystemPrompt, StringComparison.Ordinal);
+        Assert.True(AiDictionarySuggester.IsDictionarySuggestionPrompt(AiDictionarySuggester.SystemPrompt));
+        Assert.True(AiDictionarySuggester.IsDictionarySuggestionPrompt(request.SystemPrompt));
+        Assert.False(AiDictionarySuggester.IsDictionarySuggestionPrompt("Return JSON only."));
+    }
+
+    [Fact]
+    public async Task Learn_from_history_enables_high_reasoning_across_providers_and_falls_back_when_rejected()
+    {
+        var bodies = new List<System.Text.Json.JsonElement>();
+        var http = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var rawText = await request.Content!.ReadAsStringAsync(ct);
+            var body = System.Text.Json.JsonDocument.Parse(rawText).RootElement.Clone();
+            lock (bodies)
+            {
+                bodies.Add(body);
+            }
+
+            var isProbe = rawText.Contains("<transcript>\\nok\\n</transcript>", StringComparison.Ordinal);
+            var content = isProbe ? "ok" : """[{"spoken":"a p i m","written":"APIM"}]""";
+            var escaped = content.Replace("\"", "\\\"", StringComparison.Ordinal);
+            if (request.RequestUri!.AbsolutePath.EndsWith("/api/chat", StringComparison.Ordinal))
+            {
+                return ScriptedHttpHandler.Json(
+                    System.Net.HttpStatusCode.OK,
+                    $$"""{"model":"qwen3:4b","created_at":"2026-09-30T00:00:00Z","message":{"role":"assistant","content":"{{escaped}}"},"done":true,"done_reason":"stop"}""");
+            }
+
+            return ScriptedHttpHandler.ChatCompletion(escaped);
+        });
+
+        await using var harness = new CleanupHarness(http: http);
+        var svc = harness.Service;
+
+        // 1. Foundry Local sends reasoning_effort = "high" and omits /no_think for Learn from history
+        svc.Configure(CleanupHarness.FoundryOn());
+        await harness.WaitForStatusAsync(Scribe.Core.Cleanup.CleanupStatus.Ready);
+        var foundryCompletion = await svc.CompleteAsync(
+            AiDictionarySuggester.SystemPrompt,
+            "we deployed the a p i m gateway",
+            svc.Recipient!);
+        Assert.Equal(Scribe.Core.Cleanup.CompletionOutcome.Completed, foundryCompletion.Outcome);
+        System.Text.Json.JsonElement foundryBody;
+        lock (bodies)
+        {
+            foundryBody = bodies[^1];
+        }
+
+        Assert.Equal("high", foundryBody.GetProperty("reasoning_effort").GetString());
+        Assert.DoesNotContain("/no_think", foundryBody.GetProperty("messages")[0].GetProperty("content").GetString(), StringComparison.Ordinal);
+
+        // 2. Native Ollama (/api/chat) sends think = "high" for Learn from history
+        svc.Configure(CleanupHarness.Custom(Scribe.Core.Cleanup.LocalAiServer.OllamaAddress, "qwen3:4b") with
+        {
+            LocalContextTokens = 32768,
+        });
+        await harness.WaitForStatusAsync(Scribe.Core.Cleanup.CleanupStatus.Ready);
+        var ollamaCompletion = await svc.CompleteAsync(
+            AiDictionarySuggester.SystemPrompt,
+            "we deployed the a p i m gateway",
+            svc.Recipient!);
+        Assert.Equal(Scribe.Core.Cleanup.CompletionOutcome.Completed, ollamaCompletion.Outcome);
+        System.Text.Json.JsonElement ollamaBody;
+        lock (bodies)
+        {
+            ollamaBody = bodies[^1];
+        }
+
+        Assert.Equal("high", ollamaBody.GetProperty("think").GetString());
+
+        // 3. TensorSharp sends think = true and reasoning_effort = "high" for Learn from history even when dictation thinking is off
+        svc.Configure(CleanupHarness.Custom(Scribe.Core.Cleanup.LocalAiServer.TensorSharpAddress, "qwen3:4b"));
+        await harness.WaitForStatusAsync(Scribe.Core.Cleanup.CleanupStatus.Ready);
+        var tensorSharpCompletion = await svc.CompleteAsync(
+            AiDictionarySuggester.SystemPrompt,
+            "we deployed the a p i m gateway",
+            svc.Recipient!);
+        Assert.Equal(Scribe.Core.Cleanup.CompletionOutcome.Completed, tensorSharpCompletion.Outcome);
+        System.Text.Json.JsonElement tensorSharpBody;
+        lock (bodies)
+        {
+            tensorSharpBody = bodies[^1];
+        }
+
+        Assert.True(tensorSharpBody.GetProperty("think").GetBoolean());
+        Assert.Equal("high", tensorSharpBody.GetProperty("reasoning_effort").GetString());
+
+        // 4. GitHub Copilot forwards reasoningEffort = "high" on session.create for Learn from history
+        await using var copilotRuntime = new Scribe.Core.Tests.Vocabulary.FakeCopilotRuntime();
+        svc.CopilotRuntimeUrlForTesting = copilotRuntime.Url;
+        svc.Configure(Scribe.Core.Tests.Vocabulary.VocabularyHandOffTests.Copilot());
+        await harness.WaitForStatusAsync(Scribe.Core.Cleanup.CleanupStatus.Ready);
+        var copilotCompletion = await svc.CompleteAsync(
+            AiDictionarySuggester.SystemPrompt,
+            "we deployed the a p i m gateway",
+            svc.Recipient!);
+        Assert.Equal(Scribe.Core.Cleanup.CompletionOutcome.Completed, copilotCompletion.Outcome);
+        Assert.Equal("high", copilotRuntime.Creates[^1].Params.GetProperty("reasoningEffort").GetString());
+
+        // 5. Fallback when a non-reasoning model rejects reasoning_effort = "high" with HTTP 400
+        var rejectHighHttp = new ScriptedHttpHandler(async (request, ct) =>
+        {
+            var body = System.Text.Json.JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct)).RootElement.Clone();
+            lock (bodies)
+            {
+                bodies.Add(body);
+            }
+
+            if (body.TryGetProperty("reasoning_effort", out var effort) &&
+                string.Equals(effort.GetString(), "high", StringComparison.Ordinal))
+            {
+                return ScriptedHttpHandler.Json(
+                    System.Net.HttpStatusCode.BadRequest,
+                    """{"error":{"message":"Unsupported value: 'high' is not supported by this model."}}""");
+            }
+
+            var isProbe = body.GetProperty("messages")[1].GetProperty("content").GetString()!
+                .Contains("<transcript>\nok\n</transcript>", StringComparison.Ordinal);
+            return ScriptedHttpHandler.ChatCompletion(
+                isProbe ? "ok" : """[{\"spoken\":\"cosmos db\",\"written\":\"Cosmos DB\"}]""");
+        });
+
+        await using var fallbackHarness = new CleanupHarness(http: rejectHighHttp);
+        fallbackHarness.Service.Configure(CleanupHarness.Custom("https://api.example.invalid/v1", "non-reasoning-model") with { CustomApiKey = "sk-test" });
+        await fallbackHarness.WaitForStatusAsync(Scribe.Core.Cleanup.CleanupStatus.Ready);
+        var fallbackCompletion = await fallbackHarness.Service.CompleteAsync(
+            AiDictionarySuggester.SystemPrompt,
+            "we migrated to cosmos db",
+            fallbackHarness.Service.Recipient!);
+        Assert.Equal(Scribe.Core.Cleanup.CompletionOutcome.Completed, fallbackCompletion.Outcome);
+        var parsed = AiDictionarySuggester.ParseSuggestions(fallbackCompletion.Text, []);
+        Assert.Single(parsed);
+        Assert.Equal("Cosmos DB", parsed[0].Replacement);
     }
 }

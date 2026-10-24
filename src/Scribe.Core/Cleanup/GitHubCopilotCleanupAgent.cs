@@ -107,6 +107,18 @@ internal sealed class GitHubCopilotCleanupAgent : AIAgent
         var sessionId = Guid.NewGuid().ToString();
         config.SessionId = sessionId;
         config.Streaming = _sessionConfig.Streaming ?? true;
+        if (options is ChatClientAgentRunOptions { ChatOptions.Reasoning.Effort: { } effort })
+        {
+            config.ReasoningEffort = effort switch
+            {
+                ReasoningEffort.Low => "low",
+                ReasoningEffort.Medium => "medium",
+                ReasoningEffort.High => "high",
+                ReasoningEffort.ExtraHigh => "xhigh",
+                _ => config.ReasoningEffort,
+            };
+        }
+
         var streaming = config.Streaming.Value;
 
         // The client was started when the provider was set up, so this carries nothing and returns at once; it keeps the

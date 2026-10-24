@@ -66,8 +66,11 @@ public static class AiDictionarySuggester
         "- Only include terms that actually appear in the sample (either as the spoken mishearing or the written term).\n" +
         "- Prefer high-value, unambiguous terms backed by the surrounding context. Skip ordinary English " +
         "words, full sentences, and anything you are unsure about.\n" +
-        "- If existing vocabulary rules are listed below, use them as domain context and skip spoken " +
-        "forms already covered by those rules.\n" +
+        "- If existing vocabulary rules are listed below, use them as supporting evidence for the user's " +
+        "domain to infer what a failed or mis-rewritten dictation in the sample was meant to say. Do not " +
+        "assume every existing rule is accurate: if an existing rule maps a spoken form to the wrong written " +
+        "term or casing in context, include that spoken form with the corrected written form so the " +
+        "dictionary can self-heal; skip only spoken forms whose existing written replacement is already right.\n" +
         "- \"spoken\" must be lowercase, and \"spoken\" must not be identical to \"written\".\n" +
         "- Return at most 25 items, fewer is fine.\n" +
         "- Output ONLY a JSON array of objects, each with exactly the keys \"spoken\" and \"written\". " +
@@ -75,6 +78,11 @@ public static class AiDictionarySuggester
         "Example output:\n" +
         "[{\"spoken\":\"a p i m\",\"written\":\"APIM\"},{\"spoken\":\"cosmos db\",\"written\":\"Cosmos DB\"}," +
         "{\"spoken\":\"post gres\",\"written\":\"PostgreSQL\"}]";
+
+    /// <summary>True when <paramref name="systemPrompt"/> is the Learn from history dictionary suggestion prompt.</summary>
+    public static bool IsDictionarySuggestionPrompt(string? systemPrompt) =>
+        systemPrompt is not null &&
+        systemPrompt.AsSpan().TrimStart().StartsWith("You help build a personal dictation dictionary.", StringComparison.Ordinal);
 
     /// <summary>
     /// A full-context Learn from history request fitted into a model's context window: the system prompt
@@ -249,12 +257,16 @@ public static class AiDictionarySuggester
     {
         ArgumentNullException.ThrowIfNull(existing);
 
-        var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var knownWrittenBySpoken = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in existing)
         {
-            if (!string.IsNullOrWhiteSpace(entry.Pattern))
+            if (entry is not null && !string.IsNullOrWhiteSpace(entry.Pattern))
             {
-                known.Add(entry.Pattern.Trim());
+                var pattern = Normalize(entry.Pattern);
+                if (pattern.Length > 0)
+                {
+                    knownWrittenBySpoken.TryAdd(pattern, Normalize(entry.Replacement));
+                }
             }
         }
 
@@ -276,10 +288,12 @@ public static class AiDictionarySuggester
                 continue;
             }
 
-            // Identical spoken/written is a no-op; a term already in the dictionary is a duplicate; a
+            // Identical spoken/written is a no-op; a term already in the dictionary with the same written
+            // replacement is a duplicate (whereas a different written replacement self-heals the rule); a
             // spoken form already accepted in this batch is a repeat.
             if (string.Equals(spoken, written, StringComparison.Ordinal) ||
-                known.Contains(spoken) ||
+                (knownWrittenBySpoken.TryGetValue(spoken, out var existingWritten) &&
+                 string.Equals(existingWritten, written, StringComparison.Ordinal)) ||
                 !takenSpoken.Add(spoken))
             {
                 continue;

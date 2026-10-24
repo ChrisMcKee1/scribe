@@ -627,6 +627,21 @@ public sealed class LocalContextServiceTests
     }
 
     [Fact]
+    public async Task Foundry_Local_prefers_SDK_ModelInfo_ContextLength_when_present()
+    {
+        await using var harness = new CleanupHarness();
+        foreach (var family in harness.Catalog.Families)
+        {
+            family.ContextLength = 65536;
+        }
+
+        harness.Service.Configure(CleanupHarness.FoundryOn());
+        await harness.WaitForStatusAsync(CleanupStatus.Ready);
+
+        Assert.Equal(65536, harness.Service.LocalContextTokens);
+    }
+
+    [Fact]
     public async Task A_cloud_service_has_no_context_on_this_PC()
     {
         await using var harness = new CleanupHarness();

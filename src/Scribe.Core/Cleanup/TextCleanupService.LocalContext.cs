@@ -1875,6 +1875,30 @@ internal sealed partial class TextCleanupService
     {
         try
         {
+            if (model.Info?.ContextLength is > 0 and var infoTokens)
+            {
+                return (int)Math.Min(infoTokens, int.MaxValue);
+            }
+
+            if (model is Microsoft.AI.Foundry.Local.Model)
+            {
+                try
+                {
+                    using var session = new Microsoft.AI.Foundry.Local.ChatSession(model);
+                    using var request = new Microsoft.AI.Foundry.Local.Request()
+                        .AddItem(Microsoft.AI.Foundry.Local.MessageItem.User("ok"));
+                    var preflight = await session.PreflightRequestAsync(request, ct).ConfigureAwait(false);
+                    if (preflight is { ContextLimitTokens: > 0 and var preflightTokens })
+                    {
+                        return (int)Math.Min(preflightTokens, int.MaxValue);
+                    }
+                }
+                catch (Exception) when (!ct.IsCancellationRequested)
+                {
+                    // Non-chat models that do not back a chat session fall back to genai_config.json.
+                }
+            }
+
             var path = await model.GetPathAsync(ct).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(path))
             {
