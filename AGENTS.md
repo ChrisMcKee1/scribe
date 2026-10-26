@@ -2583,14 +2583,20 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   stacks are still needed. Which part of a dictation breaks it (the indicator's window, the microphone, the hotkey or
   the typing) is not yet separated: Settings, Dictation, "Preview on screen" shows the indicator with no microphone,
   hotkey or typing (two rounds did not break it), and a dictation with the indicator turned off, after Scribe restarts
-  so the helper never starts, keeps everything else. The 0.3.12 bisection (snips work until the window has been shown)
-  points at the window, but the 0.5.8 change, layered only while shown, did not fix it, and the `SCRIBE_OVERLAY_DIAG_*`
-  switches above are the next rungs. The graphics device outage the same day (14:35 to 14:38, six fresh helpers exiting
-  with `0x8898008D` in `SetBorderAndTitleBar`) is a separate failure. `d3d10warp.dll` in a crash report means nothing on
-  its own: about 28 healthy processes on that PC, the overlay among them, load it beside the NVIDIA driver, and the
-  broken Snipping Tool instance had the NVIDIA driver and not WARP. When someone reports screenshots failing while
-  Scribe runs, have them check `Get-Process SnippingTool` (one still running while no snip is open is the stuck one, and
-  ending it recovers) and look for `SnippingTool.exe` crashes (Application log, event 1000).
+  so the helper never starts, keeps everything else. Later rounds that day (single dictations into Claude, GitHub
+  Copilot and Microsoft 365, each snip cancelled with Esc) did not reproduce it. Each of the three breaks that day
+  followed a dictation whose paste check found something other than text on the clipboard (`Clipboard paste
+  NonTextContent`, most likely an earlier snip); that check only opens the clipboard, counts its formats, asks for
+  `CF_UNICODETEXT` and closes it, so it is a difference to test, not a cause. The launches that fail fast while a copy
+  is stuck throw `E_OUTOFMEMORY` (`0x8007000E`, as `std::bad_alloc`) from Snipping Tool's own code (four crash dumps),
+  so they are a symptom of the stuck copy. The 0.3.12 bisection (snips work until the window has been shown) points at
+  the window, but the 0.5.8 change, layered only while shown, did not fix it, and the `SCRIBE_OVERLAY_DIAG_*` switches
+  above are the next rungs. The graphics device outage the same day (14:35 to 14:38, six fresh helpers exiting with
+  `0x8898008D` in `SetBorderAndTitleBar`) is a separate failure. `d3d10warp.dll` in a crash report means nothing on its
+  own: about 28 healthy processes on that PC, the overlay among them, load it beside the NVIDIA driver, and the broken
+  Snipping Tool instance had the NVIDIA driver and not WARP. When someone reports screenshots failing while Scribe runs,
+  have them check `Get-Process SnippingTool` (one still running while no snip is open is the stuck one, and ending it
+  recovers) and look for `SnippingTool.exe` crashes (Application log, event 1000).
 - **For comparison, Handy's overlay (REA research, 2026-10-23).** REA's `inspect-managed-members` on the shipped 0.5.12
   `Overlay\Scribe.Overlay.dll` finds the `SetLayered` strings, so the 0.5.8 change shipped. Handy (cjpais/Handy 0.9.8,
   MIT), which has no Snipping Tool report in its tracker, has the same lifecycle (one overlay window created hidden at
