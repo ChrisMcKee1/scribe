@@ -2565,34 +2565,27 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   were reviewed for 0.5.8 and found no other cause. `OverlayLayeredWhileShownSourceTests` pins the source. Whenever
   the style changes the log shows `OverlayWindow.SetLayered on before show` or `off after hide`, and every state line
   shows `layered=`.
-- **Field evidence, 2026-10-26 (0.5.15 Store build, Windows 26300): the Win+Shift+S failure on Chris's PC was a
-  stuck Snipping Tool instance, not the recording indicator.** While screenshots failed (a busy pointer, the screen
-  never dimmed), Scribe was running and its indicator showed. Three `SnippingTool.exe` processes the shortcut had launched
-  (`ms-screenclip:///?source=HotKey`, Snipping Tool 11.2608.41.0) had been running since Oct 21 and Oct 22: one with 34
-  threads and no window, two with 4 threads each. Every new press started a pair of processes that ended seconds later,
-  because Snipping Tool keeps one instance and a new launch hands its request to it. Ending only `SnippingTool.exe`
-  (`Stop-Process -Name SnippingTool`), with Scribe and its indicator still running, brought screenshots back at once;
-  quitting Scribe at 14:10 and 14:19 that day had not. The two processes that start and exit are the signature the
-  0.3.12 bisection recorded, so that bisection, and the 0.5.8 layered-while-shown change built on it, may have measured
-  this Snipping Tool state rather than anything Scribe's window does. Nothing in Scribe's log lines up with the stuck
-  instances' start times (on Oct 22 Scribe logged nothing from 16:55 to 16:58, and on Oct 21 at 15:30 the indicator was
-  hidden), and every fade in seven days of logs completed with the window hidden, so the indicator was never left on
-  screen. The same day's log does show a graphics device outage: from 14:35 to 14:38 six freshly started helpers, with
-  Scribe just restarted, hung 5 to 12 s in `SetBorderAndTitleBar` and exited with `0x8898008D`
-  (`MILERR_NO_HARDWARE_DEVICE`), and the seventh started normally at 14:39. A long-lived WinUI process such as Snipping
-  Tool's background instance may not recover from such an outage; that is not proven. Windows' own crash reports from
-  that PC (Oct 6 to Oct 26) add three facts. Snipping Tool itself crashed 49 times, each with `0xC0000602`
-  (STATUS_FAIL_FAST_EXCEPTION) in `combase.dll` within about a second of the shortcut launching it, across Snipping Tool
-  11.2607.23.0 and 11.2608.41.0 and Windows builds 26200 and 26300; one of them, at 14:26 on Oct 26, came while Scribe
-  was not running (its sessions ended at 14:19 and began again at 14:35), so the crash does not need Scribe. Seven of
-  Scribe's session ends in that time came 4 to 14 s after such a crash, which is where the impression that quitting
-  Scribe fixes screenshots comes from. And none of the 49 Snipping Tool reports, nor any of the overlay's 68
-  `0x8898008D` reports, lists an NVIDIA driver module, while all 68 and 47 of the 49 list Windows' software renderer
-  (`d3d10warp.dll`): new processes may not have been able to get the graphics card then. That is not confirmed until
-  a working Snipping Tool's modules are compared (`tasklist /m nvwgf2umx.dll`, `tasklist /m d3d10warp.dll`). When
-  someone reports screenshots failing while Scribe runs, have them check `Get-Process SnippingTool` for an instance from
-  an earlier day and end it, and look for `SnippingTool.exe` crashes (Application log, event 1000), before anything in
-  the overlay changes.
+- **Field evidence, 2026-10-26 (0.5.15 Store build, Windows 26300): one dictation breaks Win+Shift+S, and Snipping Tool
+  stays broken until its own process is ended.** On Chris's PC, ending `SnippingTool.exe` (`Stop-Process -Name
+  SnippingTool`) brings screenshots back at once, a test snip works, and one push-to-talk dictation with the recording
+  indicator showing breaks them again (reproduced that day; one `Scribe.Overlay.exe` process ran throughout, so nothing
+  relaunched). Broken means a busy pointer and a screen that never dims, while a background `SnippingTool.exe` from
+  before the dictation keeps running. Snipping Tool keeps one instance and hands each new launch to it, and each press
+  then starts a process that either fails fast within a second (`0xC0000602` in `combase.dll`: 49 Windows crash reports
+  from Oct 6 to Oct 26, on Snipping Tool 11.2607.23.0 and 11.2608.41.0 and Windows 26200 and 26300) or waits (two from
+  Oct 22 were still running on Oct 26). Quitting Scribe does not repair it: a crash at 14:26 came after Scribe had quit at
+  14:19, with the broken instance still running, and seven of Scribe's session ends that week came 4 to 14 s after such
+  a crash. Which part of a dictation breaks it (the indicator's window, the microphone, the hotkey or the typing) is not
+  yet separated: Settings, Dictation, "Preview on screen" shows the indicator with no microphone, hotkey or typing, and a
+  dictation with the indicator turned off, after Scribe restarts so the helper never starts, keeps everything else. The
+  0.3.12 bisection (snips work until the window has been shown) points at the window, but the 0.5.8 change, layered only
+  while shown, did not fix it, and the `SCRIBE_OVERLAY_DIAG_*` switches above are the next rungs. The graphics device
+  outage the same day (14:35 to 14:38, six fresh helpers exiting with `0x8898008D` in `SetBorderAndTitleBar`) is a
+  separate failure. `d3d10warp.dll` in a crash report means nothing on its own: about 28 healthy processes on that PC,
+  the overlay among them, load it beside the NVIDIA driver, and the broken Snipping Tool instance had the NVIDIA driver
+  and not WARP. When someone reports screenshots failing while Scribe runs, have them check `Get-Process SnippingTool`
+  for an instance older than the failure and end it to recover, and look for `SnippingTool.exe` crashes (Application
+  log, event 1000).
 - **For comparison, Handy's overlay (REA research, 2026-10-23).** REA's `inspect-managed-members` on the shipped 0.5.12
   `Overlay\Scribe.Overlay.dll` finds the `SetLayered` strings, so the 0.5.8 change shipped. Handy (cjpais/Handy 0.9.8,
   MIT), which has no Snipping Tool report in its tracker, has the same lifecycle (one overlay window created hidden at
