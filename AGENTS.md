@@ -2565,27 +2565,37 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   were reviewed for 0.5.8 and found no other cause. `OverlayLayeredWhileShownSourceTests` pins the source. Whenever
   the style changes the log shows `OverlayWindow.SetLayered on before show` or `off after hide`, and every state line
   shows `layered=`.
-- **Field report after 0.5.12 (2026-10-23): screenshots still break, so the layered style while hidden is not the
-  cause.** REA's `inspect-managed-members` on the shipped 0.5.12 `Overlay\Scribe.Overlay.dll` finds the `SetLayered`
-  strings (`on before show`, `off after hide`) and every DIAG switch, so the user ran the 0.5.8 change, and it still
-  works after a restart and breaks later, exactly as before. A press of Win+Shift+S that starts SnippingTool (the
-  bisection's two processes) means the shortcut reached Windows, so a stuck or swallowed key is not the mechanism, and a
-  key stuck in Windows' own state would not come back on quitting Scribe. Handy (cjpais/Handy 0.9.8, MIT), which has no
-  Snipping Tool report in its tracker, has the same lifecycle (one overlay window created hidden at startup, shown and
-  hidden per dictation, never destroyed) and also keeps a `WH_KEYBOARD_LL` and a `WH_MOUSE_LL` hook installed all the
-  time (the `handy-keys` crate), so neither the lifecycle nor the hooks are the difference. The difference is the window
-  itself: Handy's is a plain Win32 window from tao (`WS_EX_TOPMOST | WS_EX_NOACTIVATE`, transparency from
-  `DwmEnableBlurBehindWindow` with an empty region, content from a WebView2 child), never layered and never
-  click-through (it never calls `set_ignore_cursor_events`, and `handy.exe` imports neither `SetLayeredWindowAttributes`
-  nor `UpdateLayeredWindow`), while ours is a self-contained Windows App SDK window with lifted composition (the overlay
-  ships `dcompi.dll`, `dwmcorei.dll` and `DwmSceneI.dll`), a custom `SystemBackdrop`, `WS_EX_TRANSPARENT |
-  WS_EX_TOOLWINDOW` kept while hidden, and a layered child window WinUI creates itself (REA with Ghidra 12.1.4 on
-  `Microsoft.UI.Windowing.Core.dll`: `TitleBar.cxx` creates `ReunionWindowingCaptionControls` with
-  `WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP` and calls `SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)`). Which
-  part of the Windows App SDK window's state after its first show stops the snip is not known. The states known to work
-  are the ones the bisection and a fresh start produce: no overlay window, or a window created and never shown in a
-  helper that has never shown one. Before another fix ships, confirm on an affected PC that ending only
-  `Scribe.Overlay.exe` in Task Manager brings Win+Shift+S back.
+- **Field evidence, 2026-10-26 (0.5.15 Store build, Windows 26300): the Win+Shift+S failure on Chris's PC was a
+  stuck Snipping Tool instance, not the recording indicator.** While screenshots failed (a busy pointer, the screen
+  never dimmed), Scribe was running and its indicator showed. Three `SnippingTool.exe` processes the shortcut had launched
+  (`ms-screenclip:///?source=HotKey`, Snipping Tool 11.2608.41.0) had been running since Oct 21 and Oct 22: one with 34
+  threads and no window, two with 4 threads each. Every new press started a pair of processes that ended seconds later,
+  because Snipping Tool keeps one instance and a new launch hands its request to it. Ending only `SnippingTool.exe`
+  (`Stop-Process -Name SnippingTool`), with Scribe and its indicator still running, brought screenshots back at once;
+  quitting Scribe at 14:10 and 14:19 that day had not. The two processes that start and exit are the signature the
+  0.3.12 bisection recorded, so that bisection, and the 0.5.8 layered-while-shown change built on it, may have measured
+  this Snipping Tool state rather than anything Scribe's window does. Nothing in Scribe's log lines up with the stuck
+  instances' start times (on Oct 22 Scribe logged nothing from 16:55 to 16:58, and on Oct 21 at 15:30 the indicator was
+  hidden), and every fade in seven days of logs completed with the window hidden, so the indicator was never left on
+  screen. The same day's log does show a graphics device outage: from 14:35 to 14:38 six freshly started helpers, with
+  Scribe just restarted, hung 5 to 12 s in `SetBorderAndTitleBar` and exited with `0x8898008D`
+  (`MILERR_NO_HARDWARE_DEVICE`), and the seventh started normally at 14:39. A long-lived WinUI process such as Snipping
+  Tool's background instance may not recover from such an outage; that is not proven. When someone reports screenshots
+  failing while Scribe runs, have them check `Get-Process SnippingTool` for an instance from an earlier day and end it
+  before anything in the overlay changes.
+- **For comparison, Handy's overlay (REA research, 2026-10-23).** REA's `inspect-managed-members` on the shipped 0.5.12
+  `Overlay\Scribe.Overlay.dll` finds the `SetLayered` strings, so the 0.5.8 change shipped. Handy (cjpais/Handy 0.9.8,
+  MIT), which has no Snipping Tool report in its tracker, has the same lifecycle (one overlay window created hidden at
+  startup, shown and hidden per dictation, never destroyed) and keeps a `WH_KEYBOARD_LL` and a `WH_MOUSE_LL` hook
+  installed all the time (the `handy-keys` crate). Its window is a plain Win32 window from tao (`WS_EX_TOPMOST |
+  WS_EX_NOACTIVATE`, transparency from `DwmEnableBlurBehindWindow` with an empty region, content from a WebView2 child),
+  never layered and never click-through (`handy.exe` imports neither `SetLayeredWindowAttributes` nor
+  `UpdateLayeredWindow`). Ours is a self-contained Windows App SDK window with lifted composition (the overlay ships
+  `dcompi.dll`, `dwmcorei.dll` and `DwmSceneI.dll`), a custom `SystemBackdrop`, `WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW`
+  kept while hidden, and a layered child window WinUI creates in `SetBorderAndTitleBar` (REA with Ghidra 12.1.4 on
+  `Microsoft.UI.Windowing.Core.dll`: `TitleBar.cxx` creates `ReunionWindowingCaptionControls` with `WS_EX_LAYERED |
+  WS_EX_NOREDIRECTIONBITMAP` and calls `SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA)`), which is where the helpers
+  hung during the outage above. None of this is evidence that Scribe's window breaks screenshots.
 - **A new Windows App SDK feature needs its component package** in `Scribe.Overlay.csproj` (see the
   dependency rules above), or it is missing at runtime while the build stays clean.
 - If you change overlay behavior, verify with the live log: look for `installer layout`,
