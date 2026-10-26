@@ -2565,27 +2565,32 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   were reviewed for 0.5.8 and found no other cause. `OverlayLayeredWhileShownSourceTests` pins the source. Whenever
   the style changes the log shows `OverlayWindow.SetLayered on before show` or `off after hide`, and every state line
   shows `layered=`.
-- **Field evidence, 2026-10-26 (0.5.15 Store build, Windows 26300): one dictation breaks Win+Shift+S, and Snipping Tool
+- **Field evidence, 2026-10-26 (0.5.15 Store build, Windows 26300): dictation breaks Win+Shift+S, and Snipping Tool
   stays broken until its own process is ended.** On Chris's PC, ending `SnippingTool.exe` (`Stop-Process -Name
-  SnippingTool`) brings screenshots back at once, a test snip works, and one push-to-talk dictation with the recording
-  indicator showing breaks them again (reproduced that day; one `Scribe.Overlay.exe` process ran throughout, so nothing
-  relaunched). Broken means a busy pointer and a screen that never dims, while a background `SnippingTool.exe` from
-  before the dictation keeps running. Snipping Tool keeps one instance and hands each new launch to it, and each press
-  then starts a process that either fails fast within a second (`0xC0000602` in `combase.dll`: 49 Windows crash reports
-  from Oct 6 to Oct 26, on Snipping Tool 11.2607.23.0 and 11.2608.41.0 and Windows 26200 and 26300) or waits (two from
-  Oct 22 were still running on Oct 26). Quitting Scribe does not repair it: a crash at 14:26 came after Scribe had quit at
-  14:19, with the broken instance still running, and seven of Scribe's session ends that week came 4 to 14 s after such
-  a crash. Which part of a dictation breaks it (the indicator's window, the microphone, the hotkey or the typing) is not
-  yet separated: Settings, Dictation, "Preview on screen" shows the indicator with no microphone, hotkey or typing, and a
-  dictation with the indicator turned off, after Scribe restarts so the helper never starts, keeps everything else. The
-  0.3.12 bisection (snips work until the window has been shown) points at the window, but the 0.5.8 change, layered only
-  while shown, did not fix it, and the `SCRIBE_OVERLAY_DIAG_*` switches above are the next rungs. The graphics device
-  outage the same day (14:35 to 14:38, six fresh helpers exiting with `0x8898008D` in `SetBorderAndTitleBar`) is a
-  separate failure. `d3d10warp.dll` in a crash report means nothing on its own: about 28 healthy processes on that PC,
-  the overlay among them, load it beside the NVIDIA driver, and the broken Snipping Tool instance had the NVIDIA driver
-  and not WARP. When someone reports screenshots failing while Scribe runs, have them check `Get-Process SnippingTool`
-  for an instance older than the failure and end it to recover, and look for `SnippingTool.exe` crashes (Application
-  log, event 1000).
+  SnippingTool`) brings screenshots back at once, a test snip works, and push-to-talk dictation with the recording
+  indicator showing breaks them again, once after one dictation and once after two or three (reproduced that day; one
+  `Scribe.Overlay.exe` process ran throughout, so nothing relaunched). A healthy Snipping Tool exits once a snip is
+  taken or cancelled, so none is running during the dictation: the next Win+Shift+S starts a `SnippingTool.exe` that
+  never opens a window (a busy pointer, the screen never dims) and never exits. Snipping Tool keeps one instance and
+  hands each new launch to it, so every later press starts a process that either fails fast within a second
+  (`0xC0000602` in `combase.dll`: 49 Windows crash reports from Oct 6 to Oct 26, on Snipping Tool 11.2607.23.0 and
+  11.2608.41.0 and Windows 26200 and 26300) or waits (two from Oct 22 were still running on Oct 26). Quitting Scribe
+  does not repair it: a crash at 14:26 came after Scribe had quit at 14:19, with the broken instance still running, and
+  seven of Scribe's session ends that week came 4 to 14 s after such a crash. Windows' wait chain (`GetThreadWaitChain`,
+  following other processes, COM and locks) for every thread of both stuck processes ended at the thread itself: none
+  waited on another process through a window message, COM call, ALPC call or lock, so Scribe does not hold Snipping Tool
+  directly. A wait on an event, such as a WinRT async operation's, is invisible to it, so the stuck instance's thread
+  stacks are still needed. Which part of a dictation breaks it (the indicator's window, the microphone, the hotkey or
+  the typing) is not yet separated: Settings, Dictation, "Preview on screen" shows the indicator with no microphone,
+  hotkey or typing (two rounds did not break it), and a dictation with the indicator turned off, after Scribe restarts
+  so the helper never starts, keeps everything else. The 0.3.12 bisection (snips work until the window has been shown)
+  points at the window, but the 0.5.8 change, layered only while shown, did not fix it, and the `SCRIBE_OVERLAY_DIAG_*`
+  switches above are the next rungs. The graphics device outage the same day (14:35 to 14:38, six fresh helpers exiting
+  with `0x8898008D` in `SetBorderAndTitleBar`) is a separate failure. `d3d10warp.dll` in a crash report means nothing on
+  its own: about 28 healthy processes on that PC, the overlay among them, load it beside the NVIDIA driver, and the
+  broken Snipping Tool instance had the NVIDIA driver and not WARP. When someone reports screenshots failing while
+  Scribe runs, have them check `Get-Process SnippingTool` (one still running while no snip is open is the stuck one, and
+  ending it recovers) and look for `SnippingTool.exe` crashes (Application log, event 1000).
 - **For comparison, Handy's overlay (REA research, 2026-10-23).** REA's `inspect-managed-members` on the shipped 0.5.12
   `Overlay\Scribe.Overlay.dll` finds the `SetLayered` strings, so the 0.5.8 change shipped. Handy (cjpais/Handy 0.9.8,
   MIT), which has no Snipping Tool report in its tracker, has the same lifecycle (one overlay window created hidden at
