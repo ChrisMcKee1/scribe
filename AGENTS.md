@@ -2580,9 +2580,19 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   screen. The same day's log does show a graphics device outage: from 14:35 to 14:38 six freshly started helpers, with
   Scribe just restarted, hung 5 to 12 s in `SetBorderAndTitleBar` and exited with `0x8898008D`
   (`MILERR_NO_HARDWARE_DEVICE`), and the seventh started normally at 14:39. A long-lived WinUI process such as Snipping
-  Tool's background instance may not recover from such an outage; that is not proven. When someone reports screenshots
-  failing while Scribe runs, have them check `Get-Process SnippingTool` for an instance from an earlier day and end it
-  before anything in the overlay changes.
+  Tool's background instance may not recover from such an outage; that is not proven. Windows' own crash reports from
+  that PC (Oct 6 to Oct 26) add three facts. Snipping Tool itself crashed 49 times, each with `0xC0000602`
+  (STATUS_FAIL_FAST_EXCEPTION) in `combase.dll` within about a second of the shortcut launching it, across Snipping Tool
+  11.2607.23.0 and 11.2608.41.0 and Windows builds 26200 and 26300; one of them, at 14:26 on Oct 26, came while Scribe
+  was not running (its sessions ended at 14:19 and began again at 14:35), so the crash does not need Scribe. Seven of
+  Scribe's session ends in that time came 4 to 14 s after such a crash, which is where the impression that quitting
+  Scribe fixes screenshots comes from. And none of the 49 Snipping Tool reports, nor any of the overlay's 68
+  `0x8898008D` reports, lists an NVIDIA driver module, while all 68 and 47 of the 49 list Windows' software renderer
+  (`d3d10warp.dll`): new processes may not have been able to get the graphics card then. That is not confirmed until
+  a working Snipping Tool's modules are compared (`tasklist /m nvwgf2umx.dll`, `tasklist /m d3d10warp.dll`). When
+  someone reports screenshots failing while Scribe runs, have them check `Get-Process SnippingTool` for an instance from
+  an earlier day and end it, and look for `SnippingTool.exe` crashes (Application log, event 1000), before anything in
+  the overlay changes.
 - **For comparison, Handy's overlay (REA research, 2026-10-23).** REA's `inspect-managed-members` on the shipped 0.5.12
   `Overlay\Scribe.Overlay.dll` finds the `SetLayered` strings, so the 0.5.8 change shipped. Handy (cjpais/Handy 0.9.8,
   MIT), which has no Snipping Tool report in its tracker, has the same lifecycle (one overlay window created hidden at
