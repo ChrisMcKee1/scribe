@@ -153,6 +153,73 @@ public class Win32ClipboardTests
         Assert.Equal(ClipboardRestoreOutcome.Restored, restore);
     }
 
+    [Fact]
+    public void A_whole_clipboard_borrow_keeps_an_image_and_formatted_text_on_the_real_clipboard()
+    {
+        // Stages its own image and formatted text, which replaces whatever was on the clipboard, so it runs only on the CI
+        // runners. It measures what the fake cannot: the format list Windows hands back, the copy of each block, and their
+        // writes after an EmptyClipboard in a NULL-owner session.
+        if (Environment.GetEnvironmentVariable("GITHUB_ACTIONS") != "true")
+        {
+            return;
+        }
+
+        // A 1 x 1, 32-bit BITMAPINFOHEADER and its one pixel.
+        byte[] dib = [40, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 32, 0, 0, 0, 0, 0, 4, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x20, 0x40, 0x80, 0xFF];
+        byte[] html = "Version:0.9\r\nStartHTML:0\r\nEndHTML:0\r\n<b>formatted</b>\0"u8.ToArray();
+        const uint CF_DIB = 8;
+        ClipboardBorrowStatus status = default;
+        ClipboardRestoreOutcome restore = default;
+        string? pasted = null;
+        uint[]? kept = null;
+        uint htmlFormat = 0;
+        (byte[]? Dib, byte[]? Html, string? Text) after = default;
+
+        RunOnSta(() =>
+        {
+            var native = Win32Clipboard.Instance;
+            htmlFormat = native.RegisterFormat("HTML Format");
+            WhileOpen(native, () => native.Empty() && native.SetData(CF_DIB, dib) && native.SetData(htmlFormat, html)
+                && native.SetText("formatted"));
+
+            var borrower = new ClipboardBorrower(native, Thread.Sleep);
+            var borrow = borrower.TryBorrow(UnicodeFixture, keepWholeClipboard: true);
+            status = borrow.Status;
+            if (borrow.Lease is not { } lease)
+            {
+                return;
+            }
+
+            try
+            {
+                kept = lease.Kept?.Formats.Select(f => f.Format).ToArray();
+                pasted = Read(native).Text;
+            }
+            finally
+            {
+                restore = borrower.Restore(lease);
+            }
+
+            after = WhileOpen(native, () => (
+                native.TryCopyBlock(CF_DIB, long.MaxValue),
+                native.TryCopyBlock(htmlFormat, long.MaxValue),
+                native.TryReadText(out var text) ? text : null));
+        });
+
+        Assert.Equal(ClipboardBorrowStatus.Borrowed, status);
+        Assert.NotNull(kept);
+        Assert.Contains(CF_DIB, kept);
+        Assert.Contains(htmlFormat, kept);
+        Assert.Equal(UnicodeFixture, pasted);
+        Assert.Equal(ClipboardRestoreOutcome.Restored, restore);
+        Assert.Equal("formatted", after.Text);
+
+        // A global block can be larger than its owner asked for; what was written comes first.
+        Assert.Equal(dib, after.Dib![..dib.Length]);
+        Assert.Equal(html, after.Html![..html.Length]);
+    }
+
     private readonly record struct Snapshot(bool Empty, string? Text);
 
     // The test's own reads, which only observe what the borrow and the restore left: they keep asking for the clipboard

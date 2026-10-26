@@ -1023,7 +1023,7 @@
                                             <TextBlock x:Name="AppAwareFormattingTitle" Text="Use app-aware formatting" Style="{StaticResource CardTitle}"/>
                                         </CheckBox>
                                         <TextBlock x:Name="AppAwareFormattingHint" Margin="28,2,0,0" Style="{StaticResource CardDescription}"
-                                                   Text="Off by default. Pastes literal Markdown in known Markdown apps (such as GitHub Copilot, Visual Studio Code and Obsidian) so bullet lists don't double up, and lets app profiles choose a text format and typing method. When off, those choices are ignored; existing writing styles and line-break rules still apply. This never turns AI cleanup on."/>
+                                                   Text="On by default. Pastes literal Markdown in known Markdown apps (such as Claude, GitHub Copilot, Visual Studio Code and Obsidian) so bullet and numbered lists don't double up, and puts back what was on your clipboard, a screenshot or formatted text included. Also lets app profiles choose a text format and typing method. When off, those choices are ignored; existing writing styles and line-break rules still apply. This never turns AI cleanup on."/>
                                         <TextBlock x:Name="DefaultTextFormatTitle" Text="Default text format for app profiles" Style="{StaticResource CardTitle}" Margin="0,16,0,0"/>
                                         <ComboBox x:Name="DefaultTextFormatCombo" Margin="0,8,0,0" HorizontalAlignment="Stretch"
                                                   AutomationProperties.LabeledBy="{Binding ElementName=DefaultTextFormatTitle}"

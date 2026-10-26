@@ -1,12 +1,13 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
 using static Scribe.Core.TextInjection.InjectionNativeMethods;
 
 namespace Scribe.Core.TextInjection;
 
 /// <summary>
-/// Win32 implementation of <see cref="IClipboardNative"/>: Unicode text (CF_UNICODETEXT) plus the small
-/// registered-format blobs Scribe writes as privacy markers and borrow receipts. Preserving non-text
-/// formats (images, files) is intentionally out of scope for v1; only text is round-tripped.
+/// Win32 implementation of <see cref="IClipboardNative"/>: Unicode text (CF_UNICODETEXT), the small
+/// registered-format blobs Scribe writes as privacy markers and borrow receipts, and the whole-clipboard copy a
+/// formatting paste keeps (global memory blocks and enhanced metafiles, which <see cref="ClipboardBorrower"/> chooses).
 /// All members must be called on an STA thread that owns a message queue.
 /// </summary>
 /// <remarks>
@@ -91,6 +92,102 @@ internal sealed class Win32Clipboard : IClipboardNative
     {
         nint handle = GetClipboardData(format);
         return handle != 0 && TryReadBlock(handle, destination);
+    }
+
+    public IReadOnlyList<uint>? ListFormats()
+    {
+        var formats = new List<uint>();
+        uint format = 0;
+        while (true)
+        {
+            format = EnumClipboardFormats(format);
+            if (format == 0)
+            {
+                // ERROR_SUCCESS marks the end of the list; any other code means it stopped short.
+                return Marshal.GetLastPInvokeError() == 0 ? formats : null;
+            }
+
+            formats.Add(format);
+        }
+    }
+
+    public byte[]? TryCopyBlock(uint format, long maxBytes)
+    {
+        nint handle = GetClipboardData(format);
+        return handle == 0 ? null : CopyBlock(handle, maxBytes);
+    }
+
+    public byte[]? TryCopyEnhancedMetafile(long maxBytes)
+    {
+        // The clipboard owns this handle, so it is read and never deleted here.
+        nint metafile = GetClipboardData(CF_ENHMETAFILE);
+        if (metafile == 0)
+        {
+            return null;
+        }
+
+        uint size = GetEnhMetaFileBits(metafile, 0, null);
+        if (size == 0 || size > maxBytes)
+        {
+            return null;
+        }
+
+        var bits = new byte[size];
+        return GetEnhMetaFileBits(metafile, size, bits) == size ? bits : null;
+    }
+
+    public bool SetEnhancedMetafile(ReadOnlySpan<byte> bits)
+    {
+        nint metafile = SetEnhMetaFileBits((uint)bits.Length, bits.ToArray());
+        if (metafile == 0)
+        {
+            return false;
+        }
+
+        if (SetClipboardData(CF_ENHMETAFILE, metafile) == 0)
+        {
+            // Ownership only transfers to the system on success.
+            DeleteEnhMetaFile(metafile);
+            return false;
+        }
+
+        return true;
+    }
+
+    public bool OwnerResponds(uint timeoutMs)
+    {
+        nint owner = GetClipboardOwner();
+        return owner == 0
+            || SendMessageTimeoutNoText(owner, WM_NULL, 0, 0, SMTO_BLOCK | SMTO_ABORTIFHUNG, timeoutMs, out _) != 0;
+    }
+
+    /// <summary>
+    /// A copy of a whole global memory block, or null when it is empty, larger than <paramref name="maxBytes"/>, or cannot
+    /// be locked. The block's allocated size can exceed what its owner asked for; the copy keeps all of it, as the
+    /// clipboard handed it out, so whatever the format records about its own length stays true.
+    /// </summary>
+    internal static unsafe byte[]? CopyBlock(nint handle, long maxBytes)
+    {
+        nuint size = GlobalSize(handle);
+        if (size == 0 || maxBytes <= 0 || size > (nuint)maxBytes || size > int.MaxValue)
+        {
+            return null;
+        }
+
+        nint pointer = GlobalLock(handle);
+        if (pointer == 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            return new ReadOnlySpan<byte>((void*)pointer, (int)size).ToArray();
+        }
+        finally
+        {
+            GlobalUnlock(handle);
+        }
     }
 
     /// <summary>

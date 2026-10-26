@@ -22,7 +22,7 @@ public sealed class AppAwareFormattingTests
             .Select(value => new object[] { value });
 
     [Fact]
-    public void Missing_fields_keep_all_existing_installs_opted_out_and_profiles_inheriting()
+    public void Missing_fields_read_as_on_for_every_install_and_profiles_inheriting()
     {
         using var db = ScribeDatabase.CreateInMemory();
         var repository = new SettingsRepository(db);
@@ -30,13 +30,14 @@ public sealed class AppAwareFormattingTests
         var settings = repository.Load();
 
         Assert.False(repository.LastLoadFailed);
-        Assert.False(settings.AppAwareFormattingEnabled);
+        Assert.True(settings.AppAwareFormattingEnabled);
+        Assert.False(settings.HasTurnedOnAppAwareFormatting);
         Assert.Equal(DictationTextFormat.Plain, settings.DefaultTextFormat);
         Assert.Null(settings.Profiles[0].TextFormat);
         Assert.Null(settings.Profiles[0].InjectionMethod);
         Assert.Null(settings.Profiles[0].ShiftEnterLineBreaks);
-        Assert.False(AppSettings.CreateDefault().AppAwareFormattingEnabled);
-        Assert.False(AppSettings.CreateForExistingInstall().AppAwareFormattingEnabled);
+        Assert.True(AppSettings.CreateDefault().AppAwareFormattingEnabled);
+        Assert.True(AppSettings.CreateForExistingInstall().AppAwareFormattingEnabled);
     }
 
     [Theory]
@@ -58,7 +59,7 @@ public sealed class AppAwareFormattingTests
         Assert.False(repository.LastLoadFailed);
         Assert.Equal(3, settings.DecodeThreads);
         Assert.False(settings.AddSpaceAfterDictation);
-        Assert.Equal(value == "true", settings.AppAwareFormattingEnabled);
+        Assert.Equal(value != "false", settings.AppAwareFormattingEnabled);
         Assert.Equal(DictationTextFormat.Plain, settings.DefaultTextFormat);
         var profile = Assert.Single(settings.Profiles);
         Assert.Equal("Kept", profile.Name);
@@ -74,10 +75,11 @@ public sealed class AppAwareFormattingTests
     [InlineData("\"false\"")]
     [InlineData("1")]
     [InlineData("0")]
-    public void A_string_or_number_cannot_opt_an_install_in(string value)
+    public void A_string_or_number_never_turns_it_off(string value)
     {
         var settings = JsonSerializer.Deserialize<AppSettings>($$"""{"appAwareFormattingEnabled":{{value}}}""", Json)!;
-        Assert.False(settings.AppAwareFormattingEnabled);
+        Assert.True(settings.AppAwareFormattingEnabled);
+        Assert.False(JsonSerializer.Deserialize<AppSettings>("""{"appAwareFormattingEnabled":false}""", Json)!.AppAwareFormattingEnabled);
     }
 
     [Fact]
@@ -179,7 +181,8 @@ public sealed class AppAwareFormattingTests
         Assert.Equal(settings.Profiles[0].WritingStyle, old.Profiles[0].WritingStyle);
         Assert.Equal(settings.Profiles[0].NewlineHandling, old.Profiles[0].NewlineHandling);
         var reread = JsonSerializer.Deserialize<AppSettings>(JsonSerializer.Serialize(old, Json), Json)!;
-        Assert.False(reread.AppAwareFormattingEnabled);
+        // The old re-save drops the switch, which then reads as the default again: on.
+        Assert.True(reread.AppAwareFormattingEnabled);
         Assert.Equal(DictationTextFormat.Plain, reread.DefaultTextFormat);
         Assert.Null(reread.Profiles[0].TextFormat);
         Assert.Null(reread.Profiles[0].InjectionMethod);
@@ -238,6 +241,7 @@ public sealed class AppAwareFormattingTests
             Assert.Equal(DictationFormatDecision.FormattingOff, plan.Decision);
             Assert.Equal(DictationTextFormat.Plain, plan.TextFormat);
             Assert.Equal(method, plan.InjectionMethod);
+            Assert.False(plan.KeepsWholeClipboard);
             Assert.Equal(shift, plan.ShiftEnterLineBreaks);
             Assert.Equal(legacyNewlines, plan.NewlineHandling);
             Assert.False(settings.EnableAiCleanup);
@@ -309,17 +313,20 @@ public sealed class AppAwareFormattingTests
         Assert.Equal(DictationTextFormat.MarkdownSource, plan.TextFormat);
         Assert.Equal(InjectionMethod.ClipboardPaste, plan.InjectionMethod);
         Assert.True(plan.ShiftEnterLineBreaks);
+        Assert.True(plan.KeepsWholeClipboard);
 
         var plainOnce = DictationFormatPlan.Capture(settings, process, plainOnce: true);
         Assert.Equal(DictationFormatDecision.PlainOnce, plainOnce.Decision);
         Assert.Equal(DictationTextFormat.Plain, plainOnce.TextFormat);
         Assert.Equal(InjectionMethod.UnicodeType, plainOnce.InjectionMethod);
+        Assert.False(plainOnce.KeepsWholeClipboard);
 
         settings.NewlineHandling = NewlineInjectionMode.AlwaysFlatten;
         var flattened = DictationFormatPlan.Capture(settings, process);
         Assert.Equal(DictationFormatDecision.NoMatchingProfile, flattened.Decision);
         Assert.Equal(DictationTextFormat.Plain, flattened.TextFormat);
         Assert.Equal(InjectionMethod.UnicodeType, flattened.InjectionMethod);
+        Assert.False(flattened.KeepsWholeClipboard);
     }
 
     [Fact]

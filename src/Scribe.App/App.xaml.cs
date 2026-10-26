@@ -382,6 +382,9 @@ public partial class App : Application
             // needing an execution provider this PC never had. Scribe now avoids that up front, so the
             // saved markers only pin cleanup to the CPU for no reason.
             FoundryDemotionReset.Apply(settingsRepository, services.GetRequiredService<AppPaths>(), log);
+
+            // Earlier builds saved app-aware formatting off for everyone; it is now on by default, turned on once here.
+            Scribe.Core.Settings.AppAwareFormattingRollout.Apply(settingsRepository, log);
         }
 
         StartupStages?.Mark("seed");

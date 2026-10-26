@@ -1487,7 +1487,8 @@ internal sealed class DictationController : IDisposable
                 settings.AddSpaceAfterDictation,
                 _lastTranscript,
                 typed => _injector.Inject(
-                    typed, session.Formatting.InjectionMethod, session.TargetWindow, session.Formatting.ShiftEnterLineBreaks, targetApp),
+                    typed, session.Formatting.InjectionMethod, session.TargetWindow, session.Formatting.ShiftEnterLineBreaks, targetApp,
+                    session.Formatting.KeepsWholeClipboard),
                 cancellationToken);
             injectionTimer.Stop();
             var injection = insertion.Injection;

@@ -19,9 +19,12 @@ internal static class InjectionNativeMethods
     internal const ushort VK_RETURN = 0x0D;
 
     internal const uint EM_REPLACESEL = 0x00C2;
+    internal const uint SMTO_BLOCK = 0x0001;
     internal const uint SMTO_ABORTIFHUNG = 0x0002;
+    internal const uint WM_NULL = 0x0000;
 
     internal const uint CF_UNICODETEXT = 13;
+    internal const uint CF_ENHMETAFILE = 14;
     internal const uint GMEM_MOVEABLE = 0x0002;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -93,6 +96,11 @@ internal static class InjectionNativeMethods
     internal static extern nint SendMessageTimeout(
         nint hWnd, uint msg, nint wParam, string lParam, uint flags, uint timeout, out nint result);
 
+    // WM_NULL carries nothing, so this overload passes the parameters as numbers.
+    [DllImport("user32.dll", SetLastError = true, EntryPoint = "SendMessageTimeoutW")]
+    internal static extern nint SendMessageTimeoutNoText(
+        nint hWnd, uint msg, nint wParam, nint lParam, uint flags, uint timeout, out nint result);
+
     [DllImport("user32.dll")]
     internal static extern uint GetClipboardSequenceNumber();
 
@@ -151,6 +159,24 @@ internal static class InjectionNativeMethods
     // Does not require OpenClipboard; returns 0 when the clipboard is empty.
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern int CountClipboardFormats();
+
+    // Requires OpenClipboard. 0 ends the list: with GetLastError ERROR_SUCCESS at its end, anything else on failure.
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern uint EnumClipboardFormats(uint format);
+
+    // The window that last emptied the clipboard, or 0 when no window owns it.
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nint GetClipboardOwner();
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    internal static extern uint GetEnhMetaFileBits(nint hEMF, uint nSize, byte[]? lpData);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    internal static extern nint SetEnhMetaFileBits(uint nSize, byte[] pb);
+
+    [DllImport("gdi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool DeleteEnhMetaFile(nint hmf);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     internal static extern nint GlobalAlloc(uint uFlags, nuint dwBytes);

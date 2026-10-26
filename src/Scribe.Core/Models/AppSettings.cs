@@ -440,11 +440,18 @@ public sealed class AppSettings
     public bool AddSpaceAfterDictation { get; set; } = true;
 
     /// <summary>
-    /// Opt in to app profiles' text-format and delivery preferences. Off ignores all of those new overrides, without
-    /// changing the existing writing-style or newline rules. No AI cleanup is enabled by this setting.
+    /// App profiles' text-format and delivery preferences, and the Markdown paste for known Markdown apps. Off ignores all
+    /// of those, without changing the existing writing-style or newline rules. No AI cleanup is enabled by this setting.
     /// </summary>
+    /// <remarks>
+    /// On for every install, new or upgraded (the maintainer's decision, after lists typed into Markdown apps doubled
+    /// their markers): the property initializer, so a document written before the setting existed reads as on, and
+    /// <see cref="Settings.AppAwareFormattingRollout"/> turns on, once, a stored value that earlier builds wrote as off by
+    /// default. After that the user's choice stands. Only a JSON <c>false</c> reads as off; any other shape reads as the
+    /// default.
+    /// </remarks>
     [JsonConverter(typeof(AppAwareFormattingJsonConverter))]
-    public bool AppAwareFormattingEnabled { get; set; }
+    public bool AppAwareFormattingEnabled { get; set; } = true;
 
     /// <summary>
     /// The format a matching app profile inherits. Unmatched apps always use Plain. MarkdownSource preserves characters
@@ -498,6 +505,13 @@ public sealed class AppSettings
     /// re-probed every time.
     /// </summary>
     public bool HasResetFoundryDemotions { get; set; }
+
+    /// <summary>
+    /// Set once app-aware formatting has been turned on as the default for an existing install
+    /// (<see cref="Settings.AppAwareFormattingRollout"/>). Earlier builds saved it off for everyone, so the stored value
+    /// cannot tell a choice from the old default; the gate turns it on once and then leaves it to the user.
+    /// </summary>
+    public bool HasTurnedOnAppAwareFormatting { get; set; }
 
     /// <summary>
     /// A settings object for a brand new install. Distinct from <c>new AppSettings()</c>: this is

@@ -17,6 +17,40 @@ public sealed class LiteralFormattingDeliveryTests
         "<b>literal, not HTML</b> [given link](https://example.test/path) \u2014 \u2013";
     private const nint Target = 0x4242;
 
+    [Fact]
+    public void A_screenshot_on_the_clipboard_is_kept_and_the_markdown_is_still_pasted_whole()
+    {
+        var rig = new DeliveryRig();
+        byte[] screenshot = [40, 0, 0, 0, 7, 7, 7];
+        rig.Clipboard.SeedContent((TextInjectionFakes.CF_DIB, screenshot));
+        var plan = DictationFormatPlan.Capture(Settings(DictationTextFormat.MarkdownSource, InjectionMethod.ClipboardPaste, true), "Code");
+        Assert.True(plan.KeepsWholeClipboard);
+
+        var insertion = rig.Insert(plan.Represent(Source), plan);
+
+        Assert.True(insertion.Injection.Succeeded);
+        Assert.Equal(PasteDelivery.ChordInserted, insertion.Injection.Paste);
+        Assert.Equal(ClipboardRestoreOutcome.Restored, insertion.Injection.ClipboardRestore);
+        Assert.Equal(Source + " ", rig.Pasted);
+        Assert.Equal(screenshot, rig.Clipboard.DataOf(TextInjectionFakes.CF_DIB));
+        Assert.Null(rig.Clipboard.Text);
+        Assert.DoesNotContain(rig.Platform.Batches.SelectMany(batch => batch), input => input.U.ki.wVk == VK_RETURN);
+    }
+
+    [Fact]
+    public void A_plain_paste_still_types_rather_than_keep_a_screenshot()
+    {
+        var rig = new DeliveryRig();
+        rig.Clipboard.SeedContent((TextInjectionFakes.CF_DIB, [40, 0, 0, 0]));
+        var plan = DictationFormatPlan.Capture(Settings(DictationTextFormat.Plain, InjectionMethod.ClipboardPaste, true), "Code");
+        Assert.False(plan.KeepsWholeClipboard);
+
+        var insertion = rig.Insert(plan.Represent(Source), plan);
+
+        Assert.Equal(PasteDelivery.NonTextContent, insertion.Injection.Paste);
+        Assert.Equal(0, rig.Platform.CtrlVChords);
+    }
+
     [Theory]
     [InlineData(DictationTextFormat.Plain)]
     [InlineData(DictationTextFormat.MarkdownSource)]
@@ -63,7 +97,8 @@ public sealed class LiteralFormattingDeliveryTests
     public void Paste_refusal_falls_back_to_typing_the_same_R_never_reformatting_or_flattening_it()
     {
         var rig = new DeliveryRig();
-        rig.Clipboard.SeedFormats(TextInjectionFakes.CF_DIB);
+        // A private format's handle can be anything, so even the whole-clipboard borrow refuses it.
+        rig.Clipboard.SeedFormats(TextInjectionFakes.CF_DIB, 0x0200);
         var plan = DictationFormatPlan.Capture(Settings(DictationTextFormat.MarkdownSource, InjectionMethod.ClipboardPaste, true), "Code");
         var represented = plan.Represent(Source);
         var insertion = rig.Insert(represented, plan);
@@ -280,7 +315,8 @@ public sealed class LiteralFormattingDeliveryTests
             return DictationInsertion.Insert(represented, addSpace, Recovery, typed =>
             {
                 HandedToInjector.Add(typed);
-                return injector.Inject(typed, plan.InjectionMethod, Target, plan.ShiftEnterLineBreaks, plan.TargetProcessName);
+                return injector.Inject(
+                    typed, plan.InjectionMethod, Target, plan.ShiftEnterLineBreaks, plan.TargetProcessName, plan.KeepsWholeClipboard);
             }, token);
         }
 

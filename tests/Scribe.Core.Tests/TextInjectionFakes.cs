@@ -12,8 +12,12 @@ namespace Scribe.Core.Tests;
 /// </summary>
 internal static class TextInjectionFakes
 {
+    internal const uint CF_BITMAP = 2;
     internal const uint CF_DIB = 8;
+    internal const uint CF_DIBV5 = 17;
+    internal const uint CF_HDROP = 15;
     internal const uint CF_LOCALE = 16;
+    internal const uint CF_METAFILEPICT = 3;
     internal const uint CF_OEMTEXT = 7;
     internal const uint CF_TEXT = 1;
 
@@ -59,6 +63,17 @@ internal static class TextInjectionFakes
         public Func<uint, bool>? SetDataSucceeds { get; set; }
 
         public bool ReadTextFails { get; set; }
+
+        /// <summary>Whether the clipboard's owner answers a WM_NULL in time. Default: it does.</summary>
+        public bool OwnerResponding { get; set; } = true;
+
+        public bool ListFormatsFails { get; set; }
+
+        /// <summary>Decides each block or metafile copy by its format. Default: every one succeeds.</summary>
+        public Func<uint, bool>? CopySucceeds { get; set; }
+
+        /// <summary>Decides each write of a kept format by its format. Default: every one succeeds.</summary>
+        public Func<uint, bool>? RestoreWriteSucceeds { get; set; }
 
         public bool EmptyFails { get; set; }
 
@@ -160,7 +175,7 @@ internal static class TextInjectionFakes
         {
             RequireHeld();
             Trace.Add("set-data:" + NameOf(format));
-            if (!(SetDataSucceeds?.Invoke(format) ?? true))
+            if (!(SetDataSucceeds?.Invoke(format) ?? true) || !(RestoreWriteSucceeds?.Invoke(format) ?? true))
             {
                 return false;
             }
@@ -169,6 +184,11 @@ internal static class TextInjectionFakes
             _changedInSession = true;
             return true;
         }
+
+        private byte[]? Copy(uint format, long maxBytes) =>
+            Find(format) is { } data && data.Length <= maxBytes && (CopySucceeds?.Invoke(format) ?? true)
+                ? data.ToArray()
+                : null;
 
         public bool TryReadData(uint format, Span<byte> destination)
         {
@@ -182,6 +202,63 @@ internal static class TextInjectionFakes
             data.AsSpan(0, destination.Length).CopyTo(destination);
             return true;
         }
+
+        /// <summary>Every format on the clipboard and a copy of its data, in the order Windows would list them.</summary>
+        public IReadOnlyList<(uint Format, byte[] Data)> Content => [.. _formats.Select(f => (f.Format, f.Data.ToArray()))];
+
+        public byte[]? DataOf(uint format) => Find(format)?.ToArray();
+
+        public IReadOnlyList<uint>? ListFormats()
+        {
+            RequireHeld();
+            Trace.Add("list-formats");
+            return ListFormatsFails ? null : [.. _formats.Select(f => f.Format)];
+        }
+
+        public byte[]? TryCopyBlock(uint format, long maxBytes)
+        {
+            RequireHeld();
+            Trace.Add("copy:" + NameOf(format));
+            return Copy(format, maxBytes);
+        }
+
+        public byte[]? TryCopyEnhancedMetafile(long maxBytes)
+        {
+            RequireHeld();
+            Trace.Add("copy-emf");
+            return Copy(CF_ENHMETAFILE, maxBytes);
+        }
+
+        public bool SetEnhancedMetafile(ReadOnlySpan<byte> bits)
+        {
+            RequireHeld();
+            Trace.Add("set-emf");
+            if (!(RestoreWriteSucceeds?.Invoke(CF_ENHMETAFILE) ?? true))
+            {
+                return false;
+            }
+
+            Put(CF_ENHMETAFILE, bits.ToArray());
+            _changedInSession = true;
+            return true;
+        }
+
+        public bool OwnerResponds(uint timeoutMs)
+        {
+            RequireHeld();
+            Trace.Add("owner-responds");
+            return OwnerResponding;
+        }
+
+        /// <summary>Puts formats and their data on the clipboard, in order, as another application's copy.</summary>
+        public void SeedContent(params (uint Format, byte[] Data)[] formats) => AsOtherApp(() =>
+        {
+            ClearAndMove();
+            foreach (var (format, data) in formats)
+            {
+                Put(format, data);
+            }
+        });
 
         /// <summary>Puts content on the clipboard as if the user had copied it before the dictation.</summary>
         public void SeedText(string text) => AsOtherApp(() =>
@@ -332,7 +409,7 @@ internal static class TextInjectionFakes
             }
         }
 
-        private static byte[] Encode(string text) => Encoding.Unicode.GetBytes(text + "\0");
+        internal static byte[] Encode(string text) => Encoding.Unicode.GetBytes(text + "\0");
 
         private static string Decode(byte[] data)
         {

@@ -68,6 +68,15 @@ public sealed record DictationFormatPlan(
         "Logseq",
     };
 
+    /// <summary>
+    /// Whether this plan's paste keeps everything on the clipboard (an image, formatted text, copied files) and puts it
+    /// back, rather than typing when the clipboard holds more than plain text. Only literal Markdown source pasted asks
+    /// for it: typed line by line, that text makes a Markdown app continue each list with a marker of its own ("2. 2."),
+    /// so a screenshot left on the clipboard must not turn the paste into typing.
+    /// </summary>
+    public bool KeepsWholeClipboard =>
+        TextFormat == DictationTextFormat.MarkdownSource && InjectionMethod == InjectionMethod.ClipboardPaste;
+
     /// <summary>True when <paramref name="processName"/> is a known Markdown-aware desktop application.</summary>
     public static bool IsMarkdownProcess(string? processName)
     {

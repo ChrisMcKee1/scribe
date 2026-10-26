@@ -48,6 +48,39 @@ internal readonly struct ClipboardBorrowResult
     public ClipboardRestoreOutcome Rollback { get; }
 }
 
+/// <summary>One clipboard format a whole-clipboard borrow copied, and its data as Windows held it.</summary>
+internal readonly struct KeptFormat
+{
+    internal KeptFormat(uint format, byte[] data)
+    {
+        Format = format;
+        Data = data;
+    }
+
+    public uint Format { get; }
+
+    /// <summary>The user's content. Never logged.</summary>
+    public byte[] Data { get; }
+}
+
+/// <summary>
+/// Everything a whole-clipboard borrow copied, in the order Windows listed it, so the restore puts the most descriptive
+/// format back first, as the application that copied it did. A plain class for the lease's reason: it holds the user's
+/// content, and nothing may print it.
+/// </summary>
+internal sealed class KeptClipboard
+{
+    internal KeptClipboard(IReadOnlyList<KeptFormat> formats, long bytes)
+    {
+        Formats = formats;
+        Bytes = bytes;
+    }
+
+    public IReadOnlyList<KeptFormat> Formats { get; }
+
+    public long Bytes { get; }
+}
+
 /// <summary>
 /// What one borrow must remember to restore safely. A plain class rather than a record on purpose: it
 /// holds the user's previous clipboard text, and a generated ToString would print that into any log
@@ -55,10 +88,12 @@ internal readonly struct ClipboardBorrowResult
 /// </summary>
 internal sealed class ClipboardLease
 {
-    internal ClipboardLease(bool wasEmpty, string? previous, string injected, byte[] receipt, uint sequence)
+    internal ClipboardLease(
+        bool wasEmpty, string? previous, KeptClipboard? kept, string injected, byte[] receipt, uint sequence)
     {
         WasEmpty = wasEmpty;
         Previous = previous;
+        Kept = kept;
         Injected = injected;
         Receipt = receipt;
         Sequence = sequence;
@@ -69,6 +104,12 @@ internal sealed class ClipboardLease
 
     /// <summary>The user's text before the borrow. Never logged.</summary>
     public string? Previous { get; }
+
+    /// <summary>
+    /// Every format the clipboard held before a whole-clipboard borrow (an image, formatted text, copied files), or
+    /// null when the borrow kept plain text alone in <see cref="Previous"/>. Never logged.
+    /// </summary>
+    public KeptClipboard? Kept { get; }
 
     /// <summary>The text Scribe wrote. Never logged.</summary>
     public string Injected { get; }
@@ -134,6 +175,14 @@ internal sealed class ClipboardLease
 /// in the same session and reports <see cref="ClipboardBorrowStatus.ReceiptFailed"/>, and the caller
 /// types instead.
 /// </para>
+/// <para>
+/// By default a borrow keeps plain text only, and refuses a clipboard holding anything else, so the caller types instead
+/// and the user's screenshot or formatted copy survives. A borrow asked to keep the whole clipboard
+/// (<see cref="TryBorrow(string, bool)"/>) is made when typing would get the text wrong: literal Markdown typed line by
+/// line makes a Markdown app continue each list with markers of its own. It copies every format it can put back exactly
+/// (see <see cref="TryKeepWholeClipboard"/>) in the same open session as the replacement, and restores all of them by the
+/// same receipt rule, so a newer copy the user makes during the paste is still never overwritten.
+/// </para>
 /// </remarks>
 internal sealed class ClipboardBorrower
 {
@@ -141,6 +190,32 @@ internal sealed class ClipboardBorrower
     internal const int OpenRetryDelayMs = 15;
     internal const int ReceiptBytes = 16;
     internal const string ReceiptFormatName = "Scribe.ClipboardReceipt";
+
+    /// <summary>
+    /// The most a whole-clipboard borrow copies. A full-screen snip of a 4K display is about 33 MB as a bitmap plus its
+    /// PNG; anything larger is left alone and the caller types instead.
+    /// </summary>
+    internal const long MaxKeptBytes = 128L * 1024 * 1024;
+
+    /// <summary>How long the clipboard's owner has to answer before a whole-clipboard borrow asks it for any data.</summary>
+    internal const uint OwnerResponseTimeoutMs = 250;
+
+    // Standard formats the whole-clipboard borrow treats by kind: families Windows converts between, handles, and data
+    // only an owner window can draw. See https://learn.microsoft.com/windows/win32/dataxchg/standard-clipboard-formats.
+    private const uint CF_TEXT = 1;
+    private const uint CF_BITMAP = 2;
+    private const uint CF_METAFILEPICT = 3;
+    private const uint CF_OEMTEXT = 7;
+    private const uint CF_DIB = 8;
+    private const uint CF_PALETTE = 9;
+    private const uint CF_DIBV5 = 17;
+    private const uint CF_OWNERDISPLAY = 0x0080;
+    private const uint CF_DSPTEXT = 0x0081;
+    private const uint CF_DSPBITMAP = 0x0082;
+    private const uint CF_DSPMETAFILEPICT = 0x0083;
+    private const uint CF_DSPENHMETAFILE = 0x008E;
+    private const uint CF_PRIVATEFIRST = 0x0200;
+    private const uint CF_PRIVATELAST = 0x02FF;
 
     // Scribe's long-standing heuristic for "plain text": at most four formats, which is CF_UNICODETEXT
     // plus the CF_LOCALE, CF_TEXT and CF_OEMTEXT companions a text copy typically shows. More suggests a
@@ -158,24 +233,33 @@ internal sealed class ClipboardBorrower
     // Everything Scribe adds to its own writes, discounted when judging what a restore would lose.
     private static readonly string[] OwnFormats = [.. PrivacyMarkerFormats, ReceiptFormatName];
 
+    // The registered formats OLE adds beside an OLE source's data: a marshaled reference to that application's live data
+    // object and its private bookkeeping. They describe the source, not the content, mean nothing once it no longer owns
+    // the clipboard, and are not what OleFlushClipboard leaves behind when the source goes, so a whole-clipboard borrow
+    // leaves them out, as the flush does, and keeps the rendered formats.
+    internal static readonly string[] OleSourceFormats = ["DataObject", "Ole Private Data"];
+
     // A serialized DWORD zero: "no" for the granular pair, and ignored by the blanket format.
     private static readonly byte[] MarkerPayload = new byte[sizeof(uint)];
 
     private readonly IClipboardNative _native;
     private readonly Action<int> _sleep;
+    private readonly long _maxKeptBytes;
 
-    internal ClipboardBorrower(IClipboardNative native, Action<int> sleep)
+    internal ClipboardBorrower(IClipboardNative native, Action<int> sleep, long maxKeptBytes = MaxKeptBytes)
     {
         _native = native;
         _sleep = sleep;
+        _maxKeptBytes = maxKeptBytes;
     }
 
     /// <summary>
     /// Snapshots the user's text and replaces it with <paramref name="text"/> in one open session, and
     /// records the receipt of that write before letting go. A borrow whose receipt cannot be written is
-    /// undone in that same session and refused.
+    /// undone in that same session and refused. With <paramref name="keepWholeClipboard"/>, a clipboard holding more
+    /// than plain text is copied whole instead of refused, unless something on it cannot be put back exactly.
     /// </summary>
-    public ClipboardBorrowResult TryBorrow(string text)
+    public ClipboardBorrowResult TryBorrow(string text, bool keepWholeClipboard = false)
     {
         if (!TryOpenWithRetries(out int attempts))
         {
@@ -185,7 +269,7 @@ internal sealed class ClipboardBorrower
         ClipboardBorrowResult result;
         try
         {
-            result = BorrowWhileHeld(text, attempts);
+            result = BorrowWhileHeld(text, attempts, keepWholeClipboard);
         }
         finally
         {
@@ -199,18 +283,24 @@ internal sealed class ClipboardBorrower
     }
 
     // Must be called while the clipboard is held open.
-    private ClipboardBorrowResult BorrowWhileHeld(string text, int attempts)
+    private ClipboardBorrowResult BorrowWhileHeld(string text, int attempts, bool keepWholeClipboard)
     {
         // Snapshot and replacement share this session, so what is remembered for the restore is
         // exactly what gets replaced; no other application can write in between.
+        KeptClipboard? kept = null;
         if (HasNonTextContent())
         {
-            return new(ClipboardBorrowStatus.NonTextContent, null, attempts, ClipboardRestoreOutcome.NotApplicable);
+            if (!keepWholeClipboard || TryKeepWholeClipboard() is not { } whole)
+            {
+                return new(ClipboardBorrowStatus.NonTextContent, null, attempts, ClipboardRestoreOutcome.NotApplicable);
+            }
+
+            kept = whole;
         }
 
         bool wasEmpty = _native.FormatCount == 0;
         string? previous = null;
-        if (!wasEmpty && !_native.TryReadText(out previous))
+        if (kept is null && !wasEmpty && !_native.TryReadText(out previous))
         {
             return new(ClipboardBorrowStatus.SnapshotUnreadable, null, attempts, ClipboardRestoreOutcome.NotApplicable);
         }
@@ -223,7 +313,7 @@ internal sealed class ClipboardBorrower
         if (!_native.SetText(text))
         {
             // The user's content is already freed, so put the snapshot back before letting go.
-            var rollback = WriteBack(wasEmpty, previous)
+            var rollback = WriteBack(wasEmpty, previous, kept)
                 ? ClipboardRestoreOutcome.Restored
                 : ClipboardRestoreOutcome.Failed;
             return new(ClipboardBorrowStatus.WriteFailed, null, attempts, rollback);
@@ -234,7 +324,7 @@ internal sealed class ClipboardBorrower
         {
             // No lease may exist without a receipt (see the class remarks), so the borrow is undone while
             // still held, exactly as a failed text write is: nobody else can have written in between.
-            var rollback = _native.Empty() && WriteBack(wasEmpty, previous)
+            var rollback = _native.Empty() && WriteBack(wasEmpty, previous, kept)
                 ? ClipboardRestoreOutcome.Restored
                 : ClipboardRestoreOutcome.Failed;
             return new(ClipboardBorrowStatus.ReceiptFailed, null, attempts, rollback);
@@ -242,7 +332,7 @@ internal sealed class ClipboardBorrower
 
         // Read while still held and after Scribe's last write, so no other application's change
         // can be taken for Scribe's.
-        var lease = new ClipboardLease(wasEmpty, previous, text, receipt, _native.SequenceNumber);
+        var lease = new ClipboardLease(wasEmpty, previous, kept, text, receipt, _native.SequenceNumber);
         return new(ClipboardBorrowStatus.Borrowed, lease, attempts, ClipboardRestoreOutcome.NotApplicable);
     }
 
@@ -289,8 +379,8 @@ internal sealed class ClipboardBorrower
     }
 
     /// <summary>
-    /// Puts the user's previous text (or emptiness) back, but only if the clipboard still holds
-    /// Scribe's write once it has been acquired.
+    /// Puts the user's previous text (or emptiness, or for a whole-clipboard borrow everything it kept) back, but only
+    /// if the clipboard still holds Scribe's write once it has been acquired.
     /// </summary>
     public ClipboardRestoreOutcome Restore(ClipboardLease lease)
     {
@@ -308,7 +398,7 @@ internal sealed class ClipboardBorrower
                 return ClipboardRestoreOutcome.Superseded;
             }
 
-            return _native.Empty() && WriteBack(lease.WasEmpty, lease.Previous)
+            return _native.Empty() && WriteBack(lease.WasEmpty, lease.Previous, lease.Kept)
                 ? ClipboardRestoreOutcome.Restored
                 : ClipboardRestoreOutcome.Failed;
         }
@@ -345,6 +435,116 @@ internal sealed class ClipboardBorrower
         return total - OwnFormatCount() > PlainTextFormatCount;
     }
 
+    /// <summary>
+    /// Copies every format on the clipboard that can be put back exactly, in the order Windows lists them, or returns
+    /// null so the caller types instead and the clipboard stays untouched. Must be called while the clipboard is held
+    /// open.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Formats Windows makes from another one are not copied, because they come back with it: of each family Windows
+    /// converts between (text, device-independent bitmaps, metafiles) the first one listed is the one the application
+    /// placed ("the system first enumerates the format that is on the clipboard, followed by the formats to which it can
+    /// be converted", Clipboard Formats), and CF_BITMAP and CF_PALETTE are drawn from the bitmap. Scribe's own markers and
+    /// receipt are written again by the restore, not copied, and OLE's reference to its source (<see cref="OleSourceFormats"/>)
+    /// is left out.
+    /// </para>
+    /// <para>
+    /// Refused, so the content is left as it is: data only its owner window can draw (CF_OWNERDISPLAY and the CF_DSP
+    /// formats), private formats (CF_PRIVATEFIRST to CF_PRIVATELAST), whose handles can be anything, a picture metafile
+    /// with no enhanced metafile beside it, a bitmap handle with no device-independent bitmap, more than
+    /// <see cref="MaxKeptBytes"/>, any format that cannot be read, and an owner that does not answer within
+    /// <see cref="OwnerResponseTimeoutMs"/>: reading a format it renders on request sends it WM_RENDERFORMAT and waits,
+    /// and Microsoft documents no bound on that wait, which would leave Scribe holding everyone's clipboard.
+    /// </para>
+    /// </remarks>
+    private KeptClipboard? TryKeepWholeClipboard()
+    {
+        if (!_native.OwnerResponds(OwnerResponseTimeoutMs) || _native.ListFormats() is not { } listed)
+        {
+            return null;
+        }
+
+        var own = new HashSet<uint>();
+        foreach (var name in OwnFormats.Concat(OleSourceFormats))
+        {
+            uint id = _native.RegisterFormat(name);
+            if (id != 0)
+            {
+                own.Add(id);
+            }
+        }
+
+        var kept = new List<KeptFormat>(listed.Count);
+        long bytes = 0;
+        bool text = false, bitmap = false, metafile = false, bitmapHandle = false;
+        foreach (uint format in listed)
+        {
+            if (own.Contains(format))
+            {
+                continue;
+            }
+
+            switch (format)
+            {
+                case CF_TEXT or CF_OEMTEXT or CF_UNICODETEXT:
+                    if (text)
+                    {
+                        continue;
+                    }
+
+                    text = true;
+                    break;
+                case CF_DIB or CF_DIBV5:
+                    if (bitmap)
+                    {
+                        continue;
+                    }
+
+                    bitmap = true;
+                    break;
+                case CF_BITMAP or CF_PALETTE:
+                    bitmapHandle = true;
+                    continue;
+                case CF_ENHMETAFILE or CF_METAFILEPICT:
+                    // Only the enhanced metafile can be copied as bits; the picture form holds a metafile handle.
+                    if (metafile)
+                    {
+                        continue;
+                    }
+
+                    if (format == CF_METAFILEPICT)
+                    {
+                        return null;
+                    }
+
+                    metafile = true;
+                    break;
+                case CF_OWNERDISPLAY or CF_DSPTEXT or CF_DSPBITMAP or CF_DSPMETAFILEPICT or CF_DSPENHMETAFILE:
+                case >= CF_PRIVATEFIRST and <= CF_PRIVATELAST:
+                    return null;
+            }
+
+            byte[]? data = format == CF_ENHMETAFILE
+                ? _native.TryCopyEnhancedMetafile(_maxKeptBytes - bytes)
+                : _native.TryCopyBlock(format, _maxKeptBytes - bytes);
+            if (data is null)
+            {
+                return null;
+            }
+
+            bytes += data.Length;
+            kept.Add(new KeptFormat(format, data));
+        }
+
+        if (bitmapHandle && !bitmap)
+        {
+            return null;
+        }
+
+        return kept.Count == 0 ? null : new KeptClipboard(kept, bytes);
+    }
+
     // Must be called while the clipboard is held open, because a true answer authorizes a paste or a
     // mutation.
     private bool HoldsLeasedWrite(ClipboardLease lease)
@@ -367,11 +567,16 @@ internal sealed class ClipboardBorrower
     }
 
     // Must be called while the clipboard is held open and just emptied.
-    private bool WriteBack(bool wasEmpty, string? previous)
+    private bool WriteBack(bool wasEmpty, string? previous, KeptClipboard? kept)
     {
         if (wasEmpty)
         {
             return true;
+        }
+
+        if (kept is not null)
+        {
+            return WriteBackKept(kept);
         }
 
         if (previous is null || !_native.SetText(previous))
@@ -381,6 +586,23 @@ internal sealed class ClipboardBorrower
 
         MarkPrivate();
         return true;
+    }
+
+    // Every kept format goes back even after one fails, because the rest are still the user's content; any failure
+    // makes the restore Failed. Marked private like a restored text, so the user's own item is not added to clipboard
+    // history a second time.
+    private bool WriteBackKept(KeptClipboard kept)
+    {
+        bool complete = true;
+        foreach (var format in kept.Formats)
+        {
+            complete &= format.Format == CF_ENHMETAFILE
+                ? _native.SetEnhancedMetafile(format.Data)
+                : _native.SetData(format.Format, format.Data);
+        }
+
+        MarkPrivate();
+        return complete;
     }
 
     /// <summary>

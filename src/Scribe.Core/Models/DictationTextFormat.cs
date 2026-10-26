@@ -68,12 +68,13 @@ internal sealed class ProfileTextFormatJsonConverter : JsonConverter<DictationTe
     }
 }
 
-// Opt-in requires a JSON true, never a loosely parsed string or number.
+// Only a JSON false turns it off; a loosely parsed string or number never decides it either way.
 internal sealed class AppAwareFormattingJsonConverter : JsonConverter<bool>
 {
     public override bool Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
-        var enabled = reader.TokenType == JsonTokenType.True;
+        // On is the default (AppSettings.AppAwareFormattingEnabled), so only an explicit false turns it off.
+        var enabled = reader.TokenType != JsonTokenType.False;
         FormattingJson.SkipValue(ref reader);
         return enabled;
     }

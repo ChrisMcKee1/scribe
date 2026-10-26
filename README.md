@@ -141,14 +141,24 @@ And a few more things:
 - **Your Windows settings.** Settings and the recording indicator follow your Windows text size, and the
   recording indicator follows your contrast theme and animation setting.
 
-### App-aware formatting on Windows (opt-in)
+### App-aware formatting on Windows
 
-In **Settings > Dictation**, **Use app-aware formatting** starts off, with **Plain text** as its
-default. Turning it on lets the first matching **App profile** inherit that format or choose Plain
-text or **Literal Markdown source**, plus its own typing method and typed Enter or Shift+Enter.
-Apps without a matching profile use plain text. Save applies these choices; Close, then Discard changes,
-drops unsaved edits.
-Turning it off ignores all of these new choices, not the existing writing styles or line-break rules.
+In **Settings > Dictation**, **Use app-aware formatting** is on, with **Plain text** as its default.
+It is on for every install: an install that had it off from an earlier version, when it started off,
+has it turned on once, and turning it off afterwards stays off.
+
+In apps Scribe knows write Markdown (such as Claude, ChatGPT, GitHub Copilot, Visual Studio Code,
+Obsidian, Notion, Slack and Teams) without an **App profile** of their own, Scribe pastes a dictation
+as literal Markdown in one go rather than typing it line by line, so the app does not continue a
+bullet or numbered list with markers of its own ("2. 2."). Whatever is on your clipboard, a screenshot,
+formatted text or copied files included, is kept in memory for the paste and put back afterwards. If
+something on it can't be put back exactly (content only the app that copied it can draw, or more than
+128 MB), Scribe leaves your clipboard alone and types the text instead.
+
+The first matching **App profile** can inherit the default format or choose Plain text or **Literal
+Markdown source**, plus its own typing method and typed Enter or Shift+Enter. Other apps use plain
+text. Save applies these choices; Close, then Discard changes, drops unsaved edits.
+Turning it off ignores all of these choices, not the existing writing styles or line-break rules.
 It never turns AI cleanup on.
 
 Literal Markdown source keeps characters already supplied by recognition, cleanup, your dictionary

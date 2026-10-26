@@ -18,14 +18,17 @@ public interface ITextInjector
     /// sent as Shift+Enter so they do not submit a chat message. <paramref name="targetProcessName"/> is the process that
     /// owned the focused window when the dictation started: a Remote Desktop or virtual machine client is always typed into,
     /// never pasted into, whatever <paramref name="method"/> asks, and the typing is paced for the remote session (see
-    /// <see cref="RemoteClientProcesses"/>).
+    /// <see cref="RemoteClientProcesses"/>). With <paramref name="keepWholeClipboard"/>, a paste keeps and puts back
+    /// everything on the clipboard it can restore exactly (an image, formatted text, copied files) instead of typing
+    /// when the clipboard holds more than plain text (see <see cref="DictationFormatPlan.KeepsWholeClipboard"/>).
     /// </summary>
     InjectionResult Inject(
         string text,
         InjectionMethod method = InjectionMethod.ClipboardPaste,
         nint expectedForegroundWindow = 0,
         bool shiftEnterLineBreaks = true,
-        string? targetProcessName = null);
+        string? targetProcessName = null,
+        bool keepWholeClipboard = false);
 }
 
 /// <summary>Outcome of placing text into the target application.</summary>

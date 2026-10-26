@@ -1718,14 +1718,22 @@ change the sums and needs a decision (and probably a flag) of its own.
 
 ## App-aware formatting (Windows, restricted literal-source MVP)
 
-- **Opt-in plumbing, not semantic formatting.** `AppSettings.AppAwareFormattingEnabled` starts off, and
-  `DefaultTextFormat` starts Plain. Off ignores all new format and delivery overrides and preserves the old profile
-  writing-style and newline behavior. On uses `AppProfileMatcher`'s first match; `AppProfile.TextFormat` null inherits
-  the default, and nullable `InjectionMethod` and `ShiftEnterLineBreaks` inherit their legacy globals. Without a
-  matching profile, known Markdown-aware desktop apps (`DictationFormatPlan.IsMarkdownProcess`, such as `github`,
-  `Code` and `Obsidian`) default to `MarkdownSource` and `ClipboardPaste` when line breaks are kept, so multi-line
-  bullet lists paste as a unit instead of triggering `Shift+Enter` list auto-continuation (`- - `); other unmatched
-  apps stay Plain. This never enables AI cleanup or changes a prompt.
+- **On for every install, not semantic formatting.** `AppSettings.AppAwareFormattingEnabled` is on: the maintainer
+  decided (2026-10-26) that it is on for everyone, after dictated lists typed into Markdown apps came out as "2. 2.".
+  That overrides pattern P-7 on purpose: the property initializer is true, so a document without the key reads as on;
+  the converter reads only a JSON `false` as off; and `AppAwareFormattingRollout`, at startup beside
+  `FoundryDemotionReset`, turns a stored off on once (gate `HasTurnedOnAppAwareFormatting`), since every earlier build
+  saved off for everyone and off cannot be told apart from a choice. After that the user's off stands. An older build
+  that drops the key hands back a document that reads as on again. `DefaultTextFormat` starts Plain. Off ignores all
+  new format and delivery overrides and preserves the old profile writing-style and newline behavior. On uses
+  `AppProfileMatcher`'s first match; `AppProfile.TextFormat` null inherits the default, and nullable `InjectionMethod`
+  and `ShiftEnterLineBreaks` inherit their legacy globals. Without a matching profile, known Markdown-aware desktop
+  apps (`DictationFormatPlan.IsMarkdownProcess`, such as `github`, `claude`, `Code` and `Obsidian`) default to
+  `MarkdownSource` and `ClipboardPaste` when line breaks are kept, so multi-line lists paste as a unit instead of
+  triggering `Shift+Enter` list auto-continuation (`- - `, `2. 2.`); other unmatched apps stay Plain. Such a paste keeps
+  the whole clipboard (`DictationFormatPlan.KeepsWholeClipboard`, see "Clipboard paste"), because a screenshot or
+  formatted text on the clipboard used to make the borrow refuse and the dictation was typed, list markers doubled.
+  This never enables AI cleanup or changes a prompt.
 - **A preference is not editor certification.** No website, title, control or field snooping, no password or IME
   safety claim, and no same-window field/tab detection. Teams, Copilot and Scout composers still need manual delivery
   checks. Use `InjectionTextFormatter` for terminal decisions, not another process list. Save validation blocks known
@@ -1802,8 +1810,25 @@ change the sums and needs a decision (and probably a flag) of its own.
   session (the snapshot is put back) and reported as `ClipboardBorrowStatus.ReceiptFailed`; the injector
   reports `PasteDelivery.ReceiptFailed`, logged at Warning, and types the text instead. There is no
   degraded mode that trusts sequence numbers alone.
+- **By default a borrow keeps plain text only; a formatting paste keeps the whole clipboard.** A clipboard holding
+  more than plain text (an image, files, formatted text: `HasNonTextContent`) is refused, untouched, and the
+  dictation is typed, so the user's content survives. `TryBorrow(text, keepWholeClipboard: true)`, which only
+  `DictationFormatPlan.KeepsWholeClipboard` (literal Markdown source, pasted) asks for, copies every format in the same
+  open session instead (`TryKeepWholeClipboard`) and restores them all by the same receipt rule, in the order Windows
+  listed them, marked private like a restored text. It skips what Windows synthesizes (the first of each text,
+  device-independent bitmap and metafile family listed is the one placed; CF_BITMAP and CF_PALETTE come from the
+  bitmap) and Scribe's own markers and receipt, copies enhanced metafiles as bits, and refuses, untouched, owner-drawn
+  and CF_DSP formats, the private range, a picture metafile or bitmap handle with nothing to rebuild it from, an
+  unreadable format, more than `MaxKeptBytes` (128 MB) and an owner that does not answer a WM_NULL within 250 ms:
+  reading a format the owner renders on request sends WM_RENDERFORMAT and waits, with no documented bound, while
+  Scribe holds everyone's clipboard. Reading such a format still makes its owner render it, and a "live" copy (an Office
+  or Excel copy that keeps a link to its source) comes back as a static one. Delayed rendering of Scribe's own write,
+  which would tell exactly when the target reads it, needs an owner window; the clipboard is opened with a NULL owner
+  (see `Win32Clipboard`'s remarks), so the restore still waits `PasteSettleDelayMs`. `WholeClipboardBorrowTests` pins
+  the rules on the fake; `Win32ClipboardTests` round-trips an image and HTML on the CI runners only (it replaces the
+  clipboard).
 - The paste log line carries enum names, counts and booleans only: nothing of the clipboard's content,
-  length or format names.
+  length or format names (for a whole-clipboard borrow, whether it was asked and how many formats it kept).
 - **A Remote Desktop or virtual machine client never reaches this path**: it is always typed into (see "Typing into a
   Remote Desktop or virtual machine session" below), because a remote session reads a pasted clipboard only when it
   pastes, which can be after the restore.

@@ -119,8 +119,12 @@ added, removed or found gone.
 
 If clipboard-paste injection is selected or used as a fallback, Scribe may
 temporarily read the existing text clipboard so it can restore that content
-after pasting the dictation. Scribe does not retain or transmit the previous
-clipboard content. Scribe restores your previous clipboard text only when it can
+after pasting the dictation. When app-aware formatting pastes Markdown into an
+app Scribe recognizes, Scribe also reads whatever else is on the clipboard, such
+as a screenshot, formatted text or copied files, keeps it in memory only for the
+paste, and puts it back; when something on it cannot be put back exactly, Scribe
+leaves the clipboard alone and types the text instead. Scribe does not retain or
+transmit the previous clipboard content. Scribe restores your previous clipboard text only when it can
 confirm the clipboard still holds what Scribe placed there, so anything you copy
 during a dictation is kept. Scribe's own clipboard item carries a small random
 marker so Scribe can recognize it; the marker contains no data.
