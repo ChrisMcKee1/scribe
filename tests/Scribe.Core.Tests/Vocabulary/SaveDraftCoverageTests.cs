@@ -59,6 +59,7 @@ public sealed class SaveDraftCoverageTests
         ["HasCompletedFirstRun"] = "the first-run welcome's one-time flag, set by the welcome, never by an editor in Settings",
         ["HasRetiredSeedVocabulary"] = "startup migration bookkeeping (SeedVocabularyRetirement), never shown in Settings",
         ["HasResetFoundryDemotions"] = "startup migration bookkeeping (FoundryDemotionReset), never shown in Settings",
+        ["HasTurnedOnAppAwareFormatting"] = "startup migration bookkeeping (AppAwareFormattingRollout), never shown in Settings",
         ["EnabledDictionaryLibraryIds"] =
             "word pack switches are stored by the library payload; a settings-only Save keeps the stored projection",
     };
