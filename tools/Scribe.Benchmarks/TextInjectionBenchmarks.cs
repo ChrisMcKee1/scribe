@@ -193,6 +193,16 @@ public class TextInjectionBenchmarks
         public bool SetData(uint format, ReadOnlySpan<byte> data) => false;
 
         public bool TryReadData(uint format, Span<byte> destination) => false;
+
+        public IReadOnlyList<uint>? ListFormats() => null;
+
+        public byte[]? TryCopyBlock(uint format, long maxBytes) => null;
+
+        public byte[]? TryCopyEnhancedMetafile(long maxBytes) => null;
+
+        public bool SetEnhancedMetafile(ReadOnlySpan<byte> bits) => false;
+
+        public bool OwnerResponds(uint timeoutMs) => false;
     }
 }
 

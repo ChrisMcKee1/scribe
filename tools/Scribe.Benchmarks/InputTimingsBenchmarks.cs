@@ -71,5 +71,10 @@ public class InputTimingsBenchmarks
         public bool SetText(string text) => throw new InvalidOperationException();
         public bool SetData(uint format, ReadOnlySpan<byte> data) => throw new InvalidOperationException();
         public bool TryReadData(uint format, Span<byte> destination) => throw new InvalidOperationException();
+        public IReadOnlyList<uint>? ListFormats() => throw new InvalidOperationException();
+        public byte[]? TryCopyBlock(uint format, long maxBytes) => throw new InvalidOperationException();
+        public byte[]? TryCopyEnhancedMetafile(long maxBytes) => throw new InvalidOperationException();
+        public bool SetEnhancedMetafile(ReadOnlySpan<byte> bits) => throw new InvalidOperationException();
+        public bool OwnerResponds(uint timeoutMs) => throw new InvalidOperationException();
     }
 }
