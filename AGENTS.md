@@ -2607,19 +2607,24 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   `D3D11CreateDevice` (hardware, BGRA) failed with `0x8007000E` too, so ending Snipping Tool no longer brought
   screenshots back. Then `dwm.exe` held 56,312 MB of dedicated graphics memory by the `GPU Process Memory` counters, on
   a 16 GB card that `nvidia-smi` showed 12,555 MB used, with 159 GB committed of a 247 GB limit; Scribe held 292 MB and
-  `Scribe.Overlay.exe` 32 MB. Which program's windows or surfaces that memory belongs to is not yet measured. Scribe is
-  on none of these stacks, and the stuck copy only waits (its UI thread in `GetMessageW`). On Oct 26 that copy started
-  at 17:22:10, a second after a dictation into Teams ended, and still served snips at 17:25; a press at 18:57:37 left no
-  crash, and presses at 21:00:52, 21:01:33 and 21:02:00 waited instead of crashing. The 0.3.12 bisection (snips work
-  until the window has been shown) points at the window, but the 0.5.8 change, layered only while shown, did not fix it,
-  and the `SCRIBE_OVERLAY_DIAG_*` switches above are the next rungs. The graphics device outage the same day (14:35 to
-  14:38, six fresh helpers exiting with `0x8898008D`, `MILERR_NO_HARDWARE_DEVICE`, in `SetBorderAndTitleBar`) was new
-  processes failing to get a graphics device too, so it may be the same failure seen from Scribe's side; nothing yet
-  shows which process, if any, uses up what the driver needs. `d3d10warp.dll` in a crash report means nothing on its
-  own: about 28 healthy processes on that PC, the overlay among them, load it beside the NVIDIA driver, and the broken
-  Snipping Tool instance had the NVIDIA driver and not WARP. When someone reports screenshots failing while Scribe runs,
-  the broken state shows as a press that crashes (Application log, event 1000, `SnippingTool.exe`) or a copy of a few
-  threads that never exits, not as an old copy with no window; ending every `SnippingTool.exe` recovers.
+  `Scribe.Overlay.exe` 32 MB. Quitting Scribe at about 20:31 brought device creation and snips back without restarting
+  anything, but `dwm.exe` stayed at 56,349 MB: the card's dedicated use fell by about 300 MB (what Scribe and its
+  indicator held) and committed memory by about 6 GB. So it is not memory `dwm.exe` still holds for Scribe's windows,
+  and the failure sits at a margin that freeing any few hundred MB crosses, which is why ending Snipping Tool's
+  background copy also helped; whether Scribe's indicator makes `dwm.exe` grow is not yet measured (an uptime of 11 days
+  put that growth at about 5 GB a day). Scribe is on none of these stacks, and the stuck copy only waits (its UI thread
+  in `GetMessageW`). On Oct 26 that copy started at 17:22:10, a second after a dictation into Teams ended, and still
+  served snips at 17:25; a press at 18:57:37 left no crash, and presses at 21:00:52, 21:01:33 and 21:02:00 waited
+  instead of crashing. The 0.3.12 bisection (snips work until the window has been shown) points at the window, but the
+  0.5.8 change, layered only while shown, did not fix it, and the `SCRIBE_OVERLAY_DIAG_*` switches above are the next
+  rungs. The graphics device outage the same day (14:35 to 14:38, six fresh helpers exiting with `0x8898008D`,
+  `MILERR_NO_HARDWARE_DEVICE`, in `SetBorderAndTitleBar`) was new processes failing to get a graphics device too, so it
+  may be the same failure seen from Scribe's side; nothing yet shows which process, if any, uses up what the driver
+  needs. `d3d10warp.dll` in a crash report means nothing on its own: about 28 healthy processes on that PC, the overlay
+  among them, load it beside the NVIDIA driver, and the broken Snipping Tool instance had the NVIDIA driver and not
+  WARP. When someone reports screenshots failing while Scribe runs, the broken state shows as a press that crashes
+  (Application log, event 1000, `SnippingTool.exe`) or a copy of a few threads that never exits, not as an old copy with
+  no window; ending every `SnippingTool.exe` recovers.
 - **For comparison, Handy's overlay (REA research, 2026-10-23).** REA's `inspect-managed-members` on the shipped 0.5.12
   `Overlay\Scribe.Overlay.dll` finds the `SetLayered` strings, so the 0.5.8 change shipped. Handy (cjpais/Handy 0.9.8,
   MIT), which has no Snipping Tool report in its tracker, has the same lifecycle (one overlay window created hidden at
