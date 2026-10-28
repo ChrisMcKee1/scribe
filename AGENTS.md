@@ -2590,15 +2590,26 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   check found something other than text on the clipboard (`Clipboard paste NonTextContent`, most likely an earlier
   snip), but the same check ran in about 30 later dictations with real snips, long and back-to-back dictations and
   formatted lists, and none broke it, so it is not the trigger. The launches that fail fast while a copy is stuck throw
-  `E_OUTOFMEMORY` (`0x8007000E`, as `std::bad_alloc`) from Snipping Tool's own code (four crash dumps), so they are a
-  symptom of the stuck copy. The 0.3.12 bisection (snips work until the window has been shown) points at the window, but
-  the 0.5.8 change, layered only while shown, did not fix it, and the `SCRIBE_OVERLAY_DIAG_*` switches above are the
-  next rungs. The graphics device outage the same day (14:35 to 14:38, six fresh helpers exiting with `0x8898008D` in
-  `SetBorderAndTitleBar`) is a separate failure. `d3d10warp.dll` in a crash report means nothing on its own: about 28
-  healthy processes on that PC, the overlay among them, load it beside the NVIDIA driver, and the broken Snipping Tool
-  instance had the NVIDIA driver and not WARP. When someone reports screenshots failing while Scribe runs, the broken
-  state shows as a press that crashes (Application log, event 1000, `SnippingTool.exe`) or a copy of a few threads that
-  never exits, not as an old copy with no window; ending every `SnippingTool.exe` recovers.
+  `E_OUTOFMEMORY` (`0x8007000E`, as `std::bad_alloc`) inside Snipping Tool, and it is not the hand-off running out of
+  room. The hand-off is Windows App SDK 2.5.1's `AppInstance` (open source: a shared list of 512 process ids, and a
+  queue of 4,096 hand-offs per copy, each failing with that code when full), and read live in the broken state on Oct 27
+  the list held 2 entries, the stuck copy's queue was empty and its key (`LaunchScreen|`) still held, and no process
+  held an exited copy open. With symbols (the Oct 27 dumps, one crash bucket, 2233907856084599971), the new copy's main
+  thread builds the snip overlay itself in a C++/WinRT coroutine (`SnippingTool+0xe5950`, which shows an existing
+  overlay window instead when there is one), awaits an inner coroutine of its own that ends with `E_OUTOFMEMORY`, and
+  `winrt::terminate` makes that the fail-fast (`RoFailFastWithErrorContext`). A minidump keeps too little memory to name
+  the call that failed inside it; that needs a debugger attached from the press's start. Scribe is on none of these
+  stacks, and the stuck copy only waits (its UI thread in `GetMessageW`). On Oct 26 that copy started at 17:22:10, a
+  second after a dictation into Teams ended, and still served snips at 17:25; a press at 18:57:37 left no crash, and
+  presses at 21:00:52, 21:01:33 and 21:02:00 waited instead of crashing. The 0.3.12 bisection (snips work until the
+  window has been shown) points at the window, but the 0.5.8 change, layered only while shown, did not fix it, and the
+  `SCRIBE_OVERLAY_DIAG_*` switches above are the next rungs. The graphics device outage the same day (14:35 to 14:38,
+  six fresh helpers exiting with `0x8898008D` in `SetBorderAndTitleBar`) is a separate failure. `d3d10warp.dll` in a
+  crash report means nothing on its own: about 28 healthy processes on that PC, the overlay among them, load it beside
+  the NVIDIA driver, and the broken Snipping Tool instance had the NVIDIA driver and not WARP. When someone reports
+  screenshots failing while Scribe runs, the broken state shows as a press that crashes (Application log, event 1000,
+  `SnippingTool.exe`) or a copy of a few threads that never exits, not as an old copy with no window; ending every
+  `SnippingTool.exe` recovers.
 - **For comparison, Handy's overlay (REA research, 2026-10-23).** REA's `inspect-managed-members` on the shipped 0.5.12
   `Overlay\Scribe.Overlay.dll` finds the `SetLayered` strings, so the 0.5.8 change shipped. Handy (cjpais/Handy 0.9.8,
   MIT), which has no Snipping Tool report in its tracker, has the same lifecycle (one overlay window created hidden at
