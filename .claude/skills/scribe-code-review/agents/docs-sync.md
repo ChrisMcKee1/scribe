@@ -222,8 +222,8 @@ change too:
   pinning `PlatformTarget`; exactly one sherpa-onnx native package selected by `ScribeNativeRid`;
   the overlay built with a matching `-p:Platform=`; `scripts/Payload-Architecture.ps1` asserting
   payload purity at pack time.
-- **Tech stack versions.** The prose names the Windows App SDK component packages at the 2.5.1
-  servicing level, sherpa-onnx 1.13.8, the .NET 10.0.12 libraries, and the deliberate `OpenAI` 2.12.0
+- **Tech stack versions.** The prose names the Windows App SDK component packages at the 2.6.4
+  servicing level, sherpa-onnx 1.13.8, the .NET 10.0.14 libraries, and the deliberate `OpenAI` 2.12.0
   hold, all of which are real values in `Directory.Packages.props` today. A version move in that file
   that leaves the prose behind is a finding at 🟡, and it is also an `Ask first` crossing that `merit`
   owns separately.

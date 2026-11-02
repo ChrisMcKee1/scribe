@@ -155,7 +155,7 @@ not the current macOS effort described here.
   blocks Windows 11 APIs and WinML hardware acceleration.
 - **App shell:** **WPF** tray app (`src/Scribe.App`), **`win-x64` and `win-arm64`**, self-contained.
 - **Recording overlay:** **WinUI 3 / Windows App SDK** (the WinUI, Foundation, InteractiveExperiences
-  and Base component packages at the 2.5.1 servicing level) as a *separate* unpackaged,
+  and Base component packages at the 2.6.4 servicing level) as a *separate* unpackaged,
   self-contained process (`src/Scribe.Overlay`, `Scribe.Overlay.exe`), built for the same
   architecture as the app. See
   [Overlay architecture](#overlay-architecture-read-before-touching-the-pill); it is not
@@ -167,7 +167,7 @@ not the current macOS effort described here.
 - **AI cleanup:** Microsoft **Agent Framework** (`AIAgent`), one code path for on‑device
   **Foundry Local** (`Microsoft.AI.Foundry.Local` 2.x, WinML built in) and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
-- **Hosting and platform libraries:** the .NET 10.0.12 servicing builds of `Microsoft.Extensions.*`,
+- **Hosting and platform libraries:** the .NET 10.0.14 servicing builds of `Microsoft.Extensions.*`,
   `Microsoft.Data.Sqlite` and `System.Security.Cryptography.ProtectedData`.
 - **Build system:** central package management (`Directory.Packages.props`), shared version
   in `Directory.Build.props`. Read `<VersionPrefix>` from that file rather than trusting a
@@ -188,10 +188,12 @@ not the current macOS effort described here.
   `Azure.AI.Projects`, removed in 0.4.3 together with `Microsoft.Agents.AI.Foundry`) did exactly that on
   2.12.0. `Microsoft.Extensions.AI.OpenAI` 10.9.0 also constrains `OpenAI` to `[2.12.0, 2.13.0)`, so
   2.13.0 alone breaks restore with NU1608. Move `OpenAI`, `Microsoft.Extensions.AI.*` and
-  `Microsoft.Agents.AI.*` together, to a set built against each other. The 0.5.6 set is OpenAI 2.14.0,
-  Extensions.AI 10.10.0 with Extensions.AI.OpenAI 10.10.1, and Agent Framework 1.24.0. OpenAI 2.14.0
-  must not use Extensions.AI.OpenAI 10.10.0, which references an experimental type 2.14.0 renamed;
-  10.10.1 fixes that binary mismatch.
+  `Microsoft.Agents.AI.*` together, to a set built against each other. The 0.5.6 set was OpenAI 2.14.0,
+  Extensions.AI 10.10.0 with Extensions.AI.OpenAI 10.10.1, and Agent Framework 1.24.0; the current set is
+  OpenAI 2.14.0, Extensions.AI and .OpenAI 10.11.0 (.Evaluation 10.10.0, the version Agent Framework 1.27.0
+  asks for and the app ships) and Agent Framework 1.27.0 (10.11.0 needs the 10.0.13 or later Extensions
+  libraries). OpenAI 2.14.0 must not use Extensions.AI.OpenAI 10.10.0,
+  which references an experimental type 2.14.0 renamed; 10.10.1 fixed that binary mismatch.
 - **AI SDK updates change privacy and lifetime too.** The maintainer approved the newer stack for 0.5.6.
   OpenAI adds six `X-Stainless-*` headers (client language/version, OS, architecture, runtime name/version)
   to requests, now disclosed in Settings, README and PRIVACY. They go to the request's service, not a
@@ -203,13 +205,13 @@ not the current macOS effort described here.
   `COPILOT_RUNTIME_PROCESS_FILE_LOGGING=1` for their default runtime mode after copying Scribe's child
   environment, overriding an inherited 0. Their packages do not establish the logs' contents or
   retention, and deleting a session does not prove process-level logs are gone. This was not part
-  of the approved header/session-cleanup change. Keep Framework 1.24.0's transitive 1.0.14 until
+  of the approved header/session-cleanup change. Keep the 1.0.14 Framework 1.27.0 resolves until
   that new behavior is understood and approved. The newer patches still provide no overall
   detach/StopAsync deadline, so they do not replace the bounded owner.
 - **The overlay references Windows App SDK component packages, not the metapackage.** A
   self-contained build ships every referenced component's runtime, and the pill needs only WinUI and
   what WinUI depends on, so `Scribe.Overlay.csproj` references `Microsoft.WindowsAppSDK.WinUI`,
-  `.Foundation`, `.InteractiveExperiences` and `.Base` at the versions the 2.5.1 metapackage lists.
+  `.Foundation`, `.InteractiveExperiences` and `.Base` at the versions the 2.6.4 metapackage lists.
   Dropping the AI, ML, Search, Widgets and DWriteCore components made the overlay payload about a
   quarter smaller. Move the four together to the set the next metapackage lists. **Adding a Windows
   App SDK feature means adding its component package**, or the feature is missing at runtime while
@@ -220,7 +222,10 @@ not the current macOS effort described here.
   2.x (0.5.2) that is `Microsoft.ML.OnnxRuntime` 1.30.0 from Foundry Local, not the 1.28.2 sherpa-onnx bundles, so a
   Foundry Local bump changes the ONNX Runtime speech runs on, and a sherpa-onnx bump that brings a newer one changes
   cleanup's. Either move needs `tools/Scribe.AsrCheck`, the scenario suite and a Foundry Local cleanup on both
-  architectures.
+  architectures, and the scenario report read scenario by scenario: sherpa-onnx 2.0.0 is held because it decodes
+  `B-48k-stereo-float-foreign-right` to empty text, which the suite only reports, so its exit code did not change.
+  Foundry Local 2.3.0 is held too: it no longer bundles CUDA and brings ONNX Runtime 1.31.0 (see
+  `Directory.Packages.props`).
 - **`Azure.Core`, not `Azure.Identity`, decides how the credentials behave.** `Azure.Identity`
   type-forwards `AzureCliCredential` and `ClientSecretCredential` to `Azure.Core`, whose version the
   `Azure.ResourceManager` packages lift transitively.

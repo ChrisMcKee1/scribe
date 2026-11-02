@@ -15,14 +15,18 @@
          The overlay references component packages instead of the Microsoft.WindowsAppSDK
          metapackage (supported since 1.8), because a self-contained build copies every referenced
          component and the pill only needs WinUI and what WinUI depends on. These four are the
-         versions the Microsoft.WindowsAppSDK 2.5.1 metapackage lists, so the pill gets the same
-         bits the metapackage would resolve. Move them together to the set the next metapackage
-         lists, InteractiveExperiences included, because WinUI alone would resolve it one patch
-         lower. -->
-    <PackageVersion Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK.Foundation" Version="2.3.12" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.9" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK.Base" Version="2.0.4" />
+         versions the Microsoft.WindowsAppSDK 2.6.4 metapackage lists (every component at 2.6.4), so
+         the pill gets the same bits the metapackage would resolve. Move them together to the set the
+         next metapackage lists, InteractiveExperiences included: it ships dwmcorei.dll (10.0.27200.1054
+         in 2.1.9, 12.6.4.0 in 2.6.4), the module Windows names for the helper's startup fail-fast
+         0x8898008D (MILERR_NO_HARDWARE_DEVICE) in SetBorderAndTitleBar. 2.6.4 does not fix it: with the
+         GPU unable to give a hardware device (2026-11-01, when Ollama and Foundry Local also crashed on
+         load), a standalone 2.1.9 helper exited 0x8898008D and a 2.6.4 one 0xC0000409, both at that call.
+         Read the overlay's startup lines in the log after any move. -->
+    <PackageVersion Include="Microsoft.WindowsAppSDK.WinUI" Version="2.6.4" />
+    <PackageVersion Include="Microsoft.WindowsAppSDK.Foundation" Version="2.6.4" />
+    <PackageVersion Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.6.4" />
+    <PackageVersion Include="Microsoft.WindowsAppSDK.Base" Version="2.6.4" />
 
     <!-- ASR engine: sherpa-onnx (Apache-2.0) + bundled ONNX Runtime. The native runtime is
          architecture-specific; Scribe.Core references both and selects by RuntimeIdentifier so
@@ -30,28 +34,39 @@
          together: the managed wrapper and the natives are built from the same release. The
          speech engine and Foundry Local's GenAI runtime load one onnxruntime.dll in-process,
          whichever has the higher file version. Foundry Local's 1.30.0 currently wins over the
-         natives' 1.28.2, so a move of either SDK can change the runtime both paths use. -->
+         natives' 1.28.2, so a move of either SDK can change the runtime both paths use.
+         Held at 1.13.8 although 2.0.0 is on the feed: with 2.0.0 the scenario suite's
+         B-48k-stereo-float-foreign-right (a left-channel phrase with a foreign voice on the right) decodes
+         to empty text on every run, 3 of 3 on 2026-11-01, where 1.13.8 decodes it word for word; an empty
+         decode of real speech loses the dictation. 2.0.0 also changed NeMo mel features to log(x + 2^-24)
+         instead of a hard floor (#3999), still bundles ONNX Runtime 1.28.2, and widened
+         SpeechSegment.Start to long (#4079), which VadService.SileroDetector would have to cast back. The
+         scenario only reports, so its suite still exits as before: read it, not the exit code. -->
     <PackageVersion Include="org.k2fsa.sherpa.onnx" Version="1.13.8" />
     <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-x64" Version="1.13.8" />
     <PackageVersion Include="org.k2fsa.sherpa.onnx.runtime.win-arm64" Version="1.13.8" />
 
     <!-- Audio capture. 3.1.0 fixes under-fed WDL resampling and native format marshalling.
          Its removed WaveFormat StructLayout and widened IsFormatSupported out parameter have
-         no Scribe callers; keep the capture/conversion suites and real WASAPI checks as gates. -->
-    <PackageVersion Include="NAudio" Version="3.1.0" />
+         no Scribe callers; keep the capture/conversion suites and real WASAPI checks as gates.
+         3.3.0 is one net9.0 metapackage (Core, Midi, WinMM, Wasapi; no Asio, Dmo or WinForms), adds
+         nullable annotations, throws ObjectDisposedException after Dispose and fixes WasapiCapture
+         restarting after a failed start. Reference only NAudio: NAudio.Wasapi 22.0.0 on the feed is not
+         part of this line. -->
+    <PackageVersion Include="NAudio" Version="3.3.0" />
 
     <!-- Persistence. SQLitePCLRaw.bundle_e_sqlite3 is pinned directly to pull a patched native
          e_sqlite3 and override Microsoft.Data.Sqlite's transitive 2.1.x bundle; the 2.1.11 bundle
          is flagged by CVE-2025-6965 (GHSA-2m69-gcr7-jv3q). Keep this pin at or above 3.0.3, and move
          ScribeDatabase.ExpectedSqliteVersion with it. -->
-    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.14" />
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
 
     <!-- Hosting / DI / logging / options -->
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.12" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.14" />
 
     <!-- Tray UI -->
     <PackageVersion Include="H.NotifyIcon.Wpf" Version="2.4.1" />
@@ -66,26 +81,39 @@
          reaches NPUs (Qualcomm QNN, AMD Vitis) and, since 2.x, the CUDA EP on NVIDIA. It brings
          Microsoft.ML.OnnxRuntime 1.30.0, whose onnxruntime.dll outranks the one sherpa-onnx bundles
          (1.28.2) on file version, so speech recognition runs on ONNX Runtime 1.30.0 too: move this
-         only with Scribe.AsrCheck and the scenario suite green on both architectures. -->
+         only with Scribe.AsrCheck and the scenario suite green on both architectures.
+         Held at 2.1.0 although 2.3.0 is on the feed (2.3.0 has no GitHub release or release notes): its
+         runtime brings ONNX Runtime 1.31.0, which speech recognition would then run on; it no longer
+         bundles CUDA (#1201: CUDA 12 and cuDNN 9 become the user's install), which would take the CUDA
+         builds away from stock NVIDIA PCs; and its .NET binding now reports a failed execution provider
+         that 2.1.0 reported as success (#1256), which changes when a 1.x demotion entry settles
+         (FoundryOutcomeConclusive). Move it with a decision on CUDA and those checks re-proven. -->
     <PackageVersion Include="Microsoft.AI.Foundry.Local" Version="2.1.0" />
     <!-- OpenAI client and provider-neutral chat abstractions used by Agent Framework. -->
     <!-- OpenAI moves in lockstep with Microsoft.Extensions.AI.OpenAI and Microsoft.Agents.AI.OpenAI:
          both are compiled against one OpenAI build and bind to its members at runtime, so an OpenAI
          that merely satisfies a declared range can still compile cleanly and throw
          MissingMethodException (Azure.AI.Extensions.OpenAI, since removed, did exactly that to the
-         ResponsesClient constructor on 2.12.0). The compatible set is OpenAI
-         2.14.0, Microsoft.Extensions.AI.OpenAI 10.10.1, AI/Evaluation 10.10.0 and Microsoft.Agents.AI.*
-         1.24.0: both OpenAI adapters reference OpenAI 2.14.0, and 10.10.1 uses its renamed experimental
-         MCP approval types (10.10.0 does not). The approved move includes disclosing OpenAI's
-         X-Stainless platform headers (OS, architecture and runtime), introduced in 2.13, and
-         adapting Copilot's per-dictation session deletion, below. -->
+         ResponsesClient constructor on 2.12.0). The current set is OpenAI 2.14.0, Microsoft.Extensions.AI
+         and .OpenAI 10.11.0 (.Evaluation 10.10.0, below) and Microsoft.Agents.AI.* 1.27.0: both OpenAI adapters reference
+         OpenAI 2.14.0 (10.11.0 and Agents.AI.OpenAI 1.27.0 each ask for at least 2.14.0), and 10.11.0
+         needs the 10.0.13 or later Extensions libraries (NU1605 against 10.0.12). Agent Framework 1.27.0
+         was built against 10.10.0/10.10.1 and declares only lower bounds; 10.11.0's changes (a direct
+         reasoning_content patch lookup, Responses image streaming, an MCP enum rename, Clone) touch
+         nothing Scribe calls, and the wire tests run every surface through the real ChatClientAgent.
+         Agents.AI.OpenAI 1.27.0 lifts System.ClientModel to 1.16.0. The approved 0.5.6 move included
+         disclosing OpenAI's X-Stainless platform headers (OS, architecture and runtime), introduced in
+         2.13, and adapting Copilot's per-dictation session deletion, below. -->
     <PackageVersion Include="OpenAI" Version="2.14.0" />
-    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.10.1" />
-    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.10.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.11.0" />
+    <PackageVersion Include="Microsoft.Extensions.AI" Version="10.11.0" />
     <!-- Microsoft.Extensions.AI.Evaluation is referenced directly only by the offline evals harness
          (tools/Scribe.Evals, PrivateAssets=all), but it ships with the app anyway: Microsoft.Agents.AI
          and Microsoft.Agents.AI.OpenAI both depend on it, so it is a runtime dependency of cleanup and
-         moves with the Microsoft.Extensions.AI set. -->
+         moves with the Microsoft.Extensions.AI set. The app ships the version Agent Framework asks for
+         (Scribe pins no transitive version), which is 10.10.0 for 1.27.0, so this stays there although
+         10.11.0 is out: a higher pin here reaches only the evals harness, and the test project, which
+         references both, then reports MSB3277 for the two versions. -->
     <PackageVersion Include="Microsoft.Extensions.AI.Evaluation" Version="10.10.0" />
 
     <!-- Microsoft Agent Framework (GA). Every cleanup provider is unified on its AIAgent primitive.
@@ -94,15 +122,18 @@
          URL, normalized to the account's /openai/v1/ inference endpoint) uses
          GetResponsesClient().AsAIAgent with a Chat Completions fallback, and Foundry Local and
          OpenAI-compatible endpoints use GetChatClient().AsAIAgent. -->
-    <PackageVersion Include="Microsoft.Agents.AI" Version="1.24.0" />
-    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.24.0" />
+    <PackageVersion Include="Microsoft.Agents.AI" Version="1.27.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.27.0" />
     <!-- The GitHub Copilot backend, so a user with a Copilot licence can bring their own model
          instead of standing up Azure. It drives the Copilot CLI rather than an HTTP endpoint, so
          Scribe detects that CLI before offering the provider (Cleanup/GitHubCopilotCli.cs), and
          every reference to its types stays inside one method so the .NET loader never loads the
          assembly for a user who does not select it. Its GitHub.Copilot.SDK dependency is transitive
-         and resolves to the lowest version the package allows. The 1.24.0 package requires
-         SDK 1.0.14, whose DisposeAsync sends session.detach (changed in 1.0.13), not session.destroy.
+         and resolves to the lowest version the package allows. The 1.27.0 package (source unchanged
+         from 1.24.0) still requires SDK 1.0.14, whose DisposeAsync sends session.detach (changed in
+         1.0.13), not session.destroy. SDK 1.0.28, the newest checked, still forces
+         COPILOT_RUNTIME_PROCESS_FILE_LOGGING=1 outside its Empty mode, still replaces the child
+         environment from a non-null Environment, and still detaches with no deadline.
          Both SDK versions document
          preserving session data on disk; permanent deletion is a separate DeleteSessionAsync
          call, not what session.destroy guaranteed. The approved move requires explicit deletion
@@ -111,7 +142,7 @@
          1.0.15 to 1.0.17 unconditionally enable runtime process-file logging after copying the child
          environment. Its content/retention needs a separate privacy decision; newer patches still
          have unbounded detach waits and do not replace Scribe's bounded owner. -->
-    <PackageVersion Include="Microsoft.Agents.AI.GitHub.Copilot" Version="1.24.0" />
+    <PackageVersion Include="Microsoft.Agents.AI.GitHub.Copilot" Version="1.27.0" />
 
     <!-- Ollama's own chat API, for the context size Scribe chooses
          (AppSettings.AiCleanupOllamaContextTokens; a size chosen is what selects it): Ollama's OpenAI-compatible API reads no num_ctx, so
@@ -141,15 +172,16 @@
     <!-- Observability: OpenTelemetry tracing of the dictation lifecycle (capture → VAD → decode →
          AI cleanup → inject). Always-on locally via a log-bridge processor; OTLP export is opt-in
          when OTEL_EXPORTER_OTLP_ENDPOINT is set (Aspire dashboard / Jaeger / any collector).
-         Move the three together. 1.19.1 keeps the ParentBasedSampler.ShouldSample implementation;
+         Move the three together. 1.20.1 keeps the ParentBasedSampler.ShouldSample implementation (its
+         ParentBasedSampler and AlwaysOnSampler sources are unchanged from 1.19.1);
          TraceLogBridgeTests still holds the lightweight path to the SDK actually resolved. -->
-    <PackageVersion Include="OpenTelemetry" Version="1.19.1" />
-    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.19.1" />
-    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.19.1" />
+    <PackageVersion Include="OpenTelemetry" Version="1.20.1" />
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.20.1" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.20.1" />
 
     <!-- DPAPI (Windows) to encrypt the optional Azure API key at rest so it never sits in the
          settings store in plaintext. -->
-    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.12" />
+    <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.14" />
 
     <!-- Test -->
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
@@ -157,6 +189,6 @@
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <!-- 4.x still runs xUnit.net v2 test projects; the major version is for v3 4.0 support. -->
-    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
   </ItemGroup>
 </Project>
