@@ -95,4 +95,25 @@ public sealed class PhaseThreeRulesTests
         Assert.Contains(choices, choice => choice.Label == "Moonshine Base, English only");
         Assert.Contains(choices, choice => choice.ShowInstall && choice.StatusText == string.Empty);
     }
+
+    [Fact]
+    public void Parakeet_Unified_is_offered_next_to_the_default_and_selectable_once_present()
+    {
+        var installed = new HashSet<string>
+        {
+            TranscriptionModelCatalog.DefaultId,
+            TranscriptionModelCatalog.ParakeetUnifiedEnglishId,
+        };
+
+        var choices = TranscriptionModelChoices.Build(TranscriptionModelCatalog.ParakeetUnifiedEnglishId, installed);
+
+        Assert.Equal(TranscriptionModelCatalog.ParakeetUnifiedEnglishId, choices[1].Id);
+        var unified = choices[1];
+        Assert.True(unified.IsSelected);
+        Assert.False(unified.ShowInstall);
+        Assert.Equal("Parakeet Unified, English only", unified.Label);
+        Assert.Contains("English only.", unified.Hint);
+        Assert.Contains("663 MB", unified.Hint);
+        Assert.False(choices[0].IsSelected);
+    }
 }

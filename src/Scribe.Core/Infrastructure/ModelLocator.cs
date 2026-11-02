@@ -96,6 +96,19 @@ public sealed class ModelLocator(AppPaths paths)
             }
         }
 
+        // A model that ships with the app sits in its own folder beside the default, found the way the default is.
+        if (model.BundledDirectory is { } folder)
+        {
+            foreach (var candidate in CandidateDirectories())
+            {
+                var set = ModelSet.ForDirectory(Path.Combine(candidate, folder), model.RequiredFiles);
+                if (set.AsrComplete)
+                {
+                    return set;
+                }
+            }
+        }
+
         return ModelSet.ForDirectory(
             Path.Combine(paths.ModelsDir, model.Id),
             model.RequiredFiles);

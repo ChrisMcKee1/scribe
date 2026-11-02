@@ -163,7 +163,9 @@ not the current macOS effort described here.
 - **ASR:** NVIDIA **Parakeet TDT 0.6b v3** (CC‑BY‑4.0) via **sherpa‑onnx 1.13.8**
   (Apache‑2.0) on CPU, running on the ONNX Runtime 1.30.0 that Foundry Local brings (it outranks the 1.28.2
   sherpa-onnx bundles; see the dependency rules). **VAD:** Silero (MIT). Native runtime is
-  per-architecture; see [Architecture support](#architecture-support-x64-and-arm64).
+  per-architecture; see [Architecture support](#architecture-support-x64-and-arm64). Since 0.5.17 the
+  English-only **Parakeet Unified 0.6B** (NVIDIA Open Model License) ships beside it as a choice; see
+  [Speech models that ship with the app](#speech-models-that-ship-with-the-app-read-before-adding-one).
 - **AI cleanup:** Microsoft **Agent Framework** (`AIAgent`), one code path for on‑device
   **Foundry Local** (`Microsoft.AI.Foundry.Local` 2.x, WinML built in) and cloud **Microsoft Foundry**.
 - **Persistence:** SQLite via `Microsoft.Data.Sqlite`. **Packaging/updates:** Velopack.
@@ -453,7 +455,7 @@ anything was dictated.
 ## Commands (run these, including the flags)
 
 ```powershell
-# One-time: download ASR + VAD models (~670 MB) into src/Scribe.App/models (gitignored)
+# One-time: download ASR + VAD models (about 1.2 GB) into src/Scribe.App/models (gitignored)
 pwsh ./scripts/Download-Models.ps1
 
 # Build the whole solution (9 projects: Core, App, Overlay, the tests and their log-append child, and four tools)
@@ -1118,6 +1120,31 @@ payload an addition passes on depends on the operand order the JIT picks, which 
 the same source. 0.5.1 backed these loops out over exactly that (an Arm64 failure on a NaN-payload input) and fixed the
 test; they returned once it passed on both architectures. SIMD, a reordered or parallel reduction, or pooling would
 change the sums and needs a decision (and probably a flag) of its own.
+
+## Speech models that ship with the app (read before adding one)
+
+- **The default sits at the root of `models`, every other bundled model in a folder of its own.** Parakeet Unified 0.6B
+  (English, `TranscriptionModelCatalog.ParakeetUnifiedEnglishId`, 0.5.17) has the default's file names and model type,
+  so it lives in `models\parakeet-unified-en-0.6b-int8\`. Its catalog entry names that folder (`BundledDirectory`), and
+  `ModelLocator.Resolve(model)` looks for it in every candidate models directory, exactly as it looks for the default,
+  before the download folder (`%LOCALAPPDATA%\ScribeData\models\<id>`). It keeps its pinned archive, so a source tree
+  without the folder can still download it from Settings; that is why it is not `IsBundled`, which means "cannot
+  download". The VAD always comes from the default's folder.
+- **`scripts/Model-Manifest.ps1` is the payload's single list.** Each file names its size and SHA-256, and a file that
+  comes out of a release archive names the archive (`$ScribeModelArchives`, pinned by size and SHA-256);
+  `Download-Models.ps1` fetches, checks, unpacks with Windows' own `tar.exe` and copies those files into the folder, and
+  `pack.ps1` and `pack-msix.ps1` refuse a payload that lacks one. CI's model cache is keyed on the manifest, so changing
+  it downloads afresh. `TranscriptionModelCatalogTests` holds the catalog's folder, files and size to the manifest.
+- **A model's license travels with it.** The NVIDIA Open Model License (section 3.1) requires every copy of Parakeet
+  Unified to carry the agreement and a Notice text file reading "Licensed by NVIDIA Corporation under the NVIDIA Open
+  Model License". Both are committed under `src/Scribe.App/ModelLicenses\<folder>\` (`models\` is gitignored), the app
+  project copies them into the model's folder, and the published-payload check (`Test-ScribeRuntimeModels
+  -RequireLicenses`) fails a release without them. The maintainer accepted that license for the publisher on
+  2026-11-02, indemnity (section 8) and Delaware law and Santa Clara County venue (section 10) included; bundling
+  another model under it, or under any license other than CC-BY-4.0, MIT or Apache-2.0, is the maintainer's call
+  again. README's attribution lists it.
+- **What it costs.** Every installer and both MSIX packages grow by about 663 MB uncompressed, and the update to 0.5.17
+  carries it once. The macOS port does not bundle it; its `PORTING-PLAN.md` speech model row may be stale.
 
 ## Transcription engine (one gate, cancellation, chunk seams)
 
@@ -3058,9 +3085,10 @@ store, GitHub signing secrets, or a publisher trust bundle.
   but keep the older `*-full.nupkg`s so the delta can build.
 - One Velopack channel per architecture, `win-x64` and `win-arm64`, so an install only ever
   receives updates built for its own silicon. The full nupkg is large (about 650 MB when last
-  measured, with the overlay adding about 90 MB self‑contained; 0.4.3 cut the overlay's uncompressed
-  payload from 224 to 169 MiB on x64 by referencing only the Windows App SDK components it uses); the
-  delta is small (~86 MB).
+  measured, before 0.5.17 added Parakeet Unified's 663 MB uncompressed, with the overlay adding about 90 MB
+  self‑contained; 0.4.3 cut the overlay's uncompressed payload from 224 to 169 MiB on x64 by referencing
+  only the Windows App SDK components it uses); the delta is small (~86 MB) unless a model changes. GitHub
+  refuses a release asset over 2 GiB, so watch the full nupkg and Setup.exe when adding a model.
 - **`vpk` is pinned to the Velopack package version**, as docs.velopack.io recommends. `pack.ps1` reads
   the `Velopack` version from `Directory.Packages.props` and calls `Sync-ScribeVelopackCli` from
   `scripts/Velopack-Cli.ps1` before anything else: the installed version is read with
@@ -3068,7 +3096,7 @@ store, GitHub signing secrets, or a publisher trust bundle.
   different version, so a machine that already has the right vpk can pack offline. Never go back to an
   unpinned `dotnet tool install -g vpk`, which on a clean runner takes whatever is newest.
 - Each release's notes live in `docs/release-notes-<version>.md` (this release:
-  `docs/release-notes-0.5.16.md`). Neither workflow reads the file; copy it into the GitHub release body.
+  `docs/release-notes-0.5.17.md`). Neither workflow reads the file; copy it into the GitHub release body.
 - The release workflow downloads the latest prior stable full nupkg before packing so a clean
   hosted runner can produce the delta package. `pack.ps1` requires the delta whenever a prior
   full package is present.
@@ -3170,7 +3198,8 @@ Constraints that are easy to trip over:
 - The app must already have **one completed manual submission**, including the age ratings
   questionnaire. Scribe satisfies this.
 - MSIX packages may be up to 25 GB, so our package is fine (~650 MB per architecture, ~1.3 GB for
-  the combined `.msixbundle` that actually gets uploaded), but the upload uses an Azure
+  the combined `.msixbundle` that actually gets uploaded, before 0.5.17 added about 663 MB per
+  architecture uncompressed for Parakeet Unified), but the upload uses an Azure
   blob SAS with its own expiry; a very slow upload needs a fresh submission GET rather than a retry.
 - **MSIX only.** The `api.store.microsoft.com` submission API documented for MSI/EXE apps does not
   handle MSIX, and the `microsoft/store-submission` action is unmaintained (still `node16`) and has

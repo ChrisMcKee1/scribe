@@ -45,6 +45,13 @@
     <None Include="models\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- A model's license files, committed because models\ is not, go into that model's folder: the NVIDIA Open Model
+       License requires every copy of Parakeet Unified to carry the agreement and a Notice text file. -->
+  <ItemGroup>
+    <None Remove="ModelLicenses\**" />
+    <None Include="ModelLicenses\**" Link="models\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <!-- Windows-version-specific TFM so the app can call WinRT (Windows.Services.Store) for

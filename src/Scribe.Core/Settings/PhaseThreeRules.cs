@@ -215,6 +215,7 @@ public static class TranscriptionModelChoices
     private static string LabelFor(TranscriptionModel model) => model.Id switch
     {
         TranscriptionModelCatalog.DefaultId => "Parakeet, 25 languages (recommended)",
+        TranscriptionModelCatalog.ParakeetUnifiedEnglishId => "Parakeet Unified, English only",
         "moonshine-base-en-int8" => "Moonshine Base, English only",
         "moonshine-tiny-en-int8" => "Moonshine Tiny, English only",
         TranscriptionModelCatalog.MaiTranscribe2Id => "MAI-Transcribe-2, 60 languages (Microsoft Foundry, preview)",
@@ -224,6 +225,8 @@ public static class TranscriptionModelChoices
     private static string HintFor(TranscriptionModel model) => model.Id switch
     {
         TranscriptionModelCatalog.DefaultId => "Understands about 25 European languages.",
+        TranscriptionModelCatalog.ParakeetUnifiedEnglishId =>
+            "Gets more English words right than the 25-language model, and adds less punctuation. English only.",
         "moonshine-base-en-int8" => "Smaller and fast. English only.",
         "moonshine-tiny-en-int8" => "Smallest and fastest. English only.",
         TranscriptionModelCatalog.MaiTranscribe2Id =>
