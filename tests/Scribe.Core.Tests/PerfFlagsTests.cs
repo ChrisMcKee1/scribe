@@ -25,6 +25,18 @@ public sealed class PerfFlagsTests
         Assert.Equal(1, flags.UnknownCount);
     }
 
+    [Fact]
+    public void The_cleanup_connection_flag_is_known_and_off_unless_named()
+    {
+        Assert.Contains(PerfFlags.KeepIdleCleanupConnections, PerfFlags.Known);
+        Assert.False(PerfFlags.None.IsOn(PerfFlags.KeepIdleCleanupConnections));
+        Assert.False(PerfFlags.Parse("CleanupPhaseTelemetry").IsOn(PerfFlags.KeepIdleCleanupConnections));
+
+        var on = PerfFlags.Parse("keepidlecleanupconnections");
+        Assert.True(on.IsOn(PerfFlags.KeepIdleCleanupConnections));
+        Assert.Equal("flags=KeepIdleCleanupConnections", on.Describe());
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
