@@ -232,8 +232,26 @@ internal sealed class VocabularyHandOffRefusedException : InvalidOperationExcept
 /// </summary>
 internal sealed class VocabularyHandOffHandler : DelegatingHandler
 {
-    private static readonly Lazy<HttpClientPipelineTransport> Shared = new(() =>
-        CreateTransport(new HttpClientHandler { AllowAutoRedirect = false }));
+    /// <summary>
+    /// How long <see cref="Diagnostics.PerfFlags.KeepIdleCleanupConnections"/> keeps an idle pooled connection, against
+    /// .NET's default of one minute, after which the next remote cleanup paid a new connection and TLS handshake (about
+    /// 300 ms to Microsoft Foundry). Measured on November 1, 2026, Microsoft Foundry's front end closes an idle
+    /// connection itself after about 130 s, with a FIN the pool sees, so a connection is kept until whichever side closes
+    /// it first; this is long enough that the client is never the one that closes first there.
+    /// </summary>
+    internal static readonly TimeSpan KeptIdleTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// How long any one connection serves under that flag, however busy it stays, so a front end the service's address
+    /// moved away from (its DNS answer changed) stops being used within this time. The old handler has no bound at all.
+    /// </summary>
+    internal static readonly TimeSpan KeptConnectionLifetime = TimeSpan.FromMinutes(15);
+
+    private static readonly Lazy<SharedHandOff> Shared =
+        new(() => SharedHandOff.Over(CreateNetworkHandler(keepIdleConnections: false)));
+
+    private static readonly Lazy<SharedHandOff> SharedKeepingIdle =
+        new(() => SharedHandOff.Over(CreateNetworkHandler(keepIdleConnections: true)));
 
     internal VocabularyHandOffHandler(HttpMessageHandler network)
         : base(network)
@@ -242,14 +260,43 @@ internal sealed class VocabularyHandOffHandler : DelegatingHandler
 
     /// <summary>
     /// The transport every cleanup client uses: System.ClientModel's own default (an <see cref="HttpClientHandler"/> that
-    /// follows no redirect, no client timeout since the pipeline times each attempt), with the hand-off in front of it.
-    /// One for the process, as the default is, so connections are pooled across reconfigurations as before.
+    /// follows no redirect, no client timeout since the pipeline times each attempt), with the hand-off in front of it, or,
+    /// with <paramref name="keepIdleConnections"/>, the same over a handler that keeps idle connections longer
+    /// (<see cref="CreateNetworkHandler"/>). One of each for the process, as the default is, so connections are pooled
+    /// across reconfigurations as before.
     /// </summary>
-    internal static HttpClientPipelineTransport SharedTransport => Shared.Value;
+    internal static HttpClientPipelineTransport SharedTransportFor(bool keepIdleConnections) =>
+        (keepIdleConnections ? SharedKeepingIdle : Shared).Value.Transport;
+
+    /// <summary>The network handler under <see cref="SharedTransportFor"/>'s transport, for tests to read its settings.</summary>
+    internal static HttpMessageHandler SharedNetworkFor(bool keepIdleConnections) =>
+        (keepIdleConnections ? SharedKeepingIdle : Shared).Value.Network;
+
+    /// <summary>
+    /// The handler a shared transport sends through. Off, exactly what every release before used. On
+    /// (<see cref="Diagnostics.PerfFlags.KeepIdleCleanupConnections"/>), a <see cref="SocketsHttpHandler"/>, which is what
+    /// <see cref="HttpClientHandler"/> runs on, with every default the same but the two pool times, which only it exposes:
+    /// a connection is kept for <see cref="KeptIdleTimeout"/> between requests instead of one minute, and retired after
+    /// <see cref="KeptConnectionLifetime"/>. No request is added: the connection is kept open, never kept busy.
+    /// </summary>
+    internal static HttpMessageHandler CreateNetworkHandler(bool keepIdleConnections) =>
+        keepIdleConnections
+            ? new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false,
+                PooledConnectionIdleTimeout = KeptIdleTimeout,
+                PooledConnectionLifetime = KeptConnectionLifetime,
+            }
+            : new HttpClientHandler { AllowAutoRedirect = false };
 
     /// <summary>A transport with the hand-off in front of <paramref name="network"/>; tests put a fake network there.</summary>
     internal static HttpClientPipelineTransport CreateTransport(HttpMessageHandler network) =>
         new(new HttpClient(new VocabularyHandOffHandler(network)) { Timeout = Timeout.InfiniteTimeSpan });
+
+    private sealed record SharedHandOff(HttpMessageHandler Network, HttpClientPipelineTransport Transport)
+    {
+        internal static SharedHandOff Over(HttpMessageHandler network) => new(network, CreateTransport(network));
+    }
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {

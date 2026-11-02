@@ -575,8 +575,9 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     // takes the hand-off out with it; InnerHttpHandlerForTesting keeps it.
     internal Action<OpenAIClientOptions>? OpenAIClientOptionsOverride { get; set; }
 
-    // Test-only: the network under the vocabulary hand-off handler, in place of the HttpClientHandler every client
-    // shares in production, so the canary tests run the production transport, admission point included, end to end.
+    // Test-only: the network under the vocabulary hand-off handler, in place of the network handler every client
+    // shares in production (VocabularyHandOffHandler.SharedTransportFor), so the canary tests run the production
+    // transport, admission point included, end to end.
     internal HttpMessageHandler? InnerHttpHandlerForTesting { get; set; }
 
     // How Scribe asks Ollama or LM Studio which model they hold and frees its memory (LocalServerClient). Settable so a
@@ -5571,11 +5572,14 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         OpenAIClientOptionsOverride?.Invoke(options);
     }
 
-    private HttpClientPipelineTransport HandOffTransport()
+    // PerfFlags.KeepIdleCleanupConnections chooses the shared transport whose connections outlast .NET's one-minute idle
+    // default, so a dictation after a pause reuses the connection instead of paying a new one and its TLS handshake.
+    internal HttpClientPipelineTransport HandOffTransport()
     {
         if (InnerHttpHandlerForTesting is not { } network)
         {
-            return VocabularyHandOffHandler.SharedTransport;
+            return VocabularyHandOffHandler.SharedTransportFor(
+                keepIdleConnections: _perfFlags.IsOn(Diagnostics.PerfFlags.KeepIdleCleanupConnections));
         }
 
         lock (_gate)

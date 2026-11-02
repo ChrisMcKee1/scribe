@@ -644,6 +644,28 @@ original request text. The maintainer approved this default after the quality ga
 context allocation or retention. `BoundedLocalPreparationTests` checks both routes and flag states, exact actual
 glossary text, prefix bounds and Never.
 
+`KeepIdleCleanupConnections` (off by default) keeps a remote cleanup's connection between dictations. Every OpenAI
+client shares one transport (`VocabularyHandOffHandler.SharedTransportFor`) over `HttpClientHandler`, whose pool closes a
+connection idle for .NET's default of one minute, so a dictation after a pause paid a new connection and TLS handshake:
+in 670 Microsoft Foundry cleanups (October 26 to November 1, 2026, the attempt line), the median request took 1,258 ms
+within 60 s of the previous one and about 1,600 ms at 60 to 120 s, with the same cached tokens. With the flag the
+transport sends through a `SocketsHttpHandler` (what `HttpClientHandler` runs on, every other setting the same, redirects
+still refused) with `PooledConnectionIdleTimeout` 5 minutes and `PooledConnectionLifetime` 15 minutes
+(`KeptIdleTimeout`, `KeptConnectionLifetime`); the old handler has no lifetime bound. The hand-off stays just in front of
+the network, nothing is added to or removed from any request, `store=false` and the prompt cache options are untouched,
+and no request is sent to keep a connection open (a readying request never goes to a remote service). Measured against a
+Microsoft Foundry resource on November 1, 2026: its front end closes an idle connection itself after about 130 s, HTTP/1.1
+and HTTP/2 alike, with a FIN the pool sees (the next request opens a new connection, about 300 ms slower, and fails
+nothing), and a reused connection answered an unauthenticated request in about 80 ms against 340 to 430 ms on a new one.
+So there the flag helps only a dictation 60 to about 130 s after the previous one (about one in six of those 670); past
+that the front end has closed the connection, and past about 30 minutes the prompt cache has expired too. It applies to
+every client of the shared transport (Foundry Local's loopback client and another AI service as well); Ollama's own API
+keeps its own handler. `CleanupConnectionPoolTests` pins both flag states: the handler and its settings, the service's
+choice, and, over a loopback server, the hand-off in front, no redirect followed and one connection reused. To judge it,
+bucket the single-request attempt lines by the time since the previous attempt ended (the line's time less its request
+time, against the previous line's time) and compare the 60 to 130 s bucket's median with and without the flag; with
+`CleanupPhaseTelemetry` on as well, its `headers N ms` holds the connection setup.
+
 The changes proven by an oracle need no flag: the phrase regexes built without `Compiled`
 (`UsageAnalyzerTests.Cheap_path_matches_legacy_terms_for_seeded_histories`,
 `UsageReportTests.Cheap_path_preserves_snapshot_and_scope`), the dictionary cleanup counting an ASCII term the same search

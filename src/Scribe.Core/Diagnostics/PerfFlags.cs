@@ -45,6 +45,7 @@ public sealed class PerfFlags
         HookRecoveryObservations,
         IncrementalWordPackRows,
         InputTimings,
+        KeepIdleCleanupConnections,
         LeanFooterRefresh,
         LightTraceBridge,
         MaiTranscribeSpeech,
@@ -93,6 +94,7 @@ public sealed class PerfFlags
     public const string HookRecoveryObservations = nameof(HookRecoveryObservations);
     public const string IncrementalWordPackRows = nameof(IncrementalWordPackRows);
     public const string InputTimings = nameof(InputTimings);
+    public const string KeepIdleCleanupConnections = nameof(KeepIdleCleanupConnections);
     public const string LeanFooterRefresh = nameof(LeanFooterRefresh);
     public const string LightTraceBridge = nameof(LightTraceBridge);
     public const string MaiTranscribeSpeech = nameof(MaiTranscribeSpeech);
