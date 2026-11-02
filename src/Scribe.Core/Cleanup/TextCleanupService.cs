@@ -7139,12 +7139,19 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     // inside the data root for an isolated one. It has to be in this, the first configuration, because
     // the manager is a process-wide singleton the SDK never lets be created again. Null (no resolvable
     // profile folder) leaves the SDK's own default in place.
+    //
+    // DisableNonessentialTelemetry, for the same reason in this first configuration: the SDK's telemetry is on unless
+    // asked ("Defaults to false (telemetry enabled)"). With it, Foundry Local 2.1.0's native core (sdk_v2/cpp/src/manager.cc
+    // and telemetry/one_ds_telemetry.cc at tag v2.1.0) sends no usage, download, catalog, hardware or session events, and
+    // still uploads one ProcessInfo event when the manager is created, which no setting stops. What it carries is in
+    // CleanupDisclosure.FoundryLocalStartupEvent and PRIVACY.md; recheck both against the SDK source on every bump.
     internal FoundryConfiguration CreateFoundryConfiguration() => new()
     {
         AppName = FoundryLocalStorage.AppName,
         AppDataDir = _foundryAppDataDir,
         LogLevel = FoundryLogLevel.Warning,
         Web = new FoundryConfiguration.WebService { Urls = "http://127.0.0.1:0" },
+        DisableNonessentialTelemetry = true,
     };
 
     // The manager only: no execution providers, no catalog, so nothing is downloaded. Serialized on

@@ -70,6 +70,71 @@ public sealed class CleanupDisclosureTests
         var privacy = File.ReadAllText(Path.Combine(RepositoryRoot(), "PRIVACY.md"));
         Assert.Contains("six `X-Stainless-*`", privacy, StringComparison.Ordinal);
         Assert.Contains("not to a separate telemetry service", privacy, StringComparison.Ordinal);
+
+        // Agent Framework names itself on an Azure address and would add its feature list there, which Scribe removes
+        // (FeatureUsageTokenHandler; FeatureUsageTokenWireTests pins both on the wire).
+        Assert.Contains("requests to Microsoft Foundry, or to any other Azure OpenAI address, also name Microsoft Agent Framework and its version", text, StringComparison.Ordinal);
+        var flatPrivacy = Flatten(privacy);
+        Assert.Contains("and the version of Microsoft.Extensions.AI as request headers", text, StringComparison.Ordinal);
+        foreach (var fact in new[]
+                 {
+                     "Their User-Agent header names the OpenAI client and Microsoft.Extensions.AI with their versions, and the .NET and Windows versions.",
+                     "(an `openai.azure.com`, `cognitiveservices.azure.com` or `services.ai.azure.com` address), also name Microsoft Agent Framework and its version in the User-Agent header",
+                     "Agent Framework would add a list of the framework features Scribe has used there too, as usage telemetry for Microsoft; Scribe removes it from every request before the request is sent.",
+                 })
+        {
+            Assert.Contains(fact, flatPrivacy, StringComparison.Ordinal);
+        }
+
+        var readme = Flatten(File.ReadAllText(Path.Combine(RepositoryRoot(), "README.md")));
+        Assert.Contains(
+            "Requests to Microsoft Foundry also name Microsoft Agent Framework and its version; Scribe removes the list of framework features Agent Framework would add to them.",
+            readme,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Foundry_Local_s_startup_event_is_disclosed_beside_the_promise_that_text_stays_on_this_PC()
+    {
+        // With non-essential telemetry off (FoundryLocalTelemetryTests), Foundry Local 2.1.0 still uploads one ProcessInfo
+        // event, with its telemetry's common context and the 1DS SDK's device identifier. Each field it carries is named.
+        var text = CleanupDisclosure.FoundryLocalStartupEvent;
+        Assert.Contains(text, CleanupDisclosure.WhatCleanupNeverSends, StringComparison.Ordinal);
+        foreach (var field in new[]
+                 {
+                     "Scribe turns off Foundry Local's optional telemetry",
+                     "the first time Scribe starts Foundry Local in a session",
+                     "sends Microsoft one startup event, which Scribe can't turn off",
+                     "Scribe and its version", "Foundry Local's version", "the Windows version",
+                     "the processor architecture and number of processors", "the amount of memory",
+                     "whether Scribe runs in a virtual machine or container", "the PC's maker and model",
+                     "an identifier that changes every session", "an identifier taken from the PC's first network adapter",
+                     "It carries none of your text, vocabulary or audio.",
+                 })
+        {
+            Assert.Contains(field, text, StringComparison.Ordinal);
+        }
+
+        var policy = Flatten(File.ReadAllText(Path.Combine(RepositoryRoot(), "PRIVACY.md")));
+        foreach (var fact in new[]
+                 {
+                     "Scribe turns off Foundry Local's non-essential telemetry, so it sends Microsoft no events about model use, model downloads, the model catalog, your hardware or sessions.",
+                     "Foundry Local still sends Microsoft one startup event, which no setting turns off, the first time Scribe starts its runtime in a session",
+                     "Scribe's name, version and program file name, Foundry Local's version, the Windows version and build, the processor architecture, the number of processors, the amount of memory, whether Scribe runs in a virtual machine, container or emulator, the PC's maker and model as Windows records them, an identifier that changes every session, and an identifier that Foundry Local's telemetry component takes from the PC's first network adapter.",
+                     "Microsoft also receives ordinary network information such as your IP address.",
+                     "The event carries no dictation, cleanup instructions, vocabulary, model output or audio.",
+                     "`%LOCALAPPDATA%\\Microsoft\\DeveloperTools\\.onnxruntime`",
+                     "Earlier versions of Scribe left Foundry Local's non-essential telemetry on",
+                 })
+        {
+            Assert.Contains(fact, policy, StringComparison.Ordinal);
+        }
+
+        var readme = Flatten(File.ReadAllText(Path.Combine(RepositoryRoot(), "README.md")));
+        Assert.Contains("Foundry Local still sends Microsoft one startup event a session, with none of your text", readme, StringComparison.Ordinal);
+        Assert.Contains("an identifier taken from the PC's first network adapter", readme, StringComparison.Ordinal);
+        Assert.DoesNotContain("On this PC. Fully offline.", readme, StringComparison.Ordinal);
+        Assert.DoesNotContain("everything stays on your PC", readme, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -164,6 +229,7 @@ public sealed class CleanupDisclosureTests
             CleanupDisclosure.WhatCleanupSends, CleanupDisclosure.WhatCleanupNeverSends, CleanupDisclosure.SuggestionConsentTitle,
             CleanupDisclosure.WhatTheServiceMayCache, CleanupDisclosure.PromptCachingTitle, CleanupDisclosure.PromptCachingTradeOff,
             CleanupDisclosure.CustomServiceCaching, CleanupDisclosure.CopilotCaching, PromptCachePolicy.Rejected.Display,
+            CleanupDisclosure.AiClientRequestMetadata, CleanupDisclosure.FoundryLocalStartupEvent,
         };
         texts.AddRange(Enum.GetValues<CleanupProvider>().Select(CleanupDisclosure.SuggestionConsentFor));
         texts.AddRange(Enum.GetValues<CleanupProvider>().Select(p => CleanupDisclosure.FullContextSuggestionConsentFor(p, 1_048_576)));

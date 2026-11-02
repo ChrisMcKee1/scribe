@@ -386,6 +386,24 @@ anything was dictated.
   asks for (Microsoft Foundry not to use its prompt cache for new cleanup requests, never that nothing is kept), that it
   works on GPT-5.6 and later models on Standard deployments, and that earlier models and provisioned deployments can't
   turn caching off. Another AI service and GitHub Copilot follow their own policy, and their panels say so. `CleanupDisclosureTests` holds the texts to those facts.
+- **Agent Framework's feature-usage token never leaves; its name and version do.** `AsAIAgent` registers User-Agent
+  policies (`OpenAIUserAgentPolicies`, unchanged 1.24.0 to 1.27.0) that, on HTTPS requests to `openai.azure.com`,
+  `cognitiveservices.azure.com` and `services.ai.azure.com` hosts, append `agent-framework-dotnet/<version>` and a
+  `(feat=v1.<hex>)` bitmask of the framework features the process used, usage telemetry per the framework's ADR 0033. Its
+  only switch is the process-wide `AGENT_FRAMEWORK_FEATURE_MASK_DISABLED`, read once and inherited by every child, so
+  `FeatureUsageTokenHandler`, in front of the hand-off in `VocabularyHandOffHandler.CreateTransport`, removes the token
+  with the framework's own `FeatureUsage.ApplyToUserAgent(ua, includeFeatureToken: false)`. The rest of the User-Agent
+  (OpenAI client, .NET and Windows versions, `MEAI/<version>`, Agent Framework's name and version) is disclosed in
+  `AiClientRequestMetadata`; `FeatureUsageTokenWireTests` reads it on the wire and pins that the packages add the token
+  on their own.
+- **Foundry Local's optional telemetry is off, and its startup event is disclosed.** The first `Configuration`
+  (`CreateFoundryConfiguration`) sets `DisableNonessentialTelemetry`. Foundry Local 2.1.0's native core then still uploads
+  one ProcessInfo event per process to Microsoft (sdk_v2/cpp/src/telemetry at tag v2.1.0): app name, version and exe name,
+  Foundry Local's version, OS, architecture, CPU count, memory, VM/container/emulator, a per-session GUID, and the 1DS
+  SDK's common context: device maker and model, and as device id the first network adapter's GUID, which 2.1.0 replaces
+  with its hashed id only while full telemetry is on (2.2.1 always hashes it). `CleanupDisclosure.FoundryLocalStartupEvent`,
+  `PRIVACY.md` and the README say so, and `FoundryLocalTelemetryTests` fails on any other Foundry Local version until
+  someone rereads that source.
 - If you change what a request carries (a new field, a relevance filter, a new provider), change
   `CleanupDisclosure`, `PRIVACY.md` and the tests in the same change, and note that the matching macOS
   disclosure may be stale.
