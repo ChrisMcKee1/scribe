@@ -107,8 +107,8 @@ internal static class TestVocabularies
     public static DictionaryEntry Entry(string spoken, string written) => DictionaryEntry.New(spoken, written);
 }
 
-/// <summary>One request that reached the fake network: its path, its body, and when it arrived.</summary>
-internal sealed record SentRequest(int Index, string Path, string Body)
+/// <summary>One request that reached the fake network: its path, its body, its User-Agent, and when it arrived.</summary>
+internal sealed record SentRequest(int Index, string Path, string Body, string? UserAgent = null)
 {
     // Letters and spaces only in every canary, so JSON escaping in a body can never hide one.
     public bool Carries(string canary) => Body.Contains(canary, StringComparison.Ordinal);
@@ -206,7 +206,8 @@ internal sealed class CanaryNetwork : HttpMessageHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
-        var sent = new SentRequest(Interlocked.Increment(ref _count), request.RequestUri!.AbsolutePath, body);
+        var userAgent = request.Headers.NonValidated.TryGetValues("User-Agent", out var values) ? string.Join(' ', values) : null;
+        var sent = new SentRequest(Interlocked.Increment(ref _count), request.RequestUri!.AbsolutePath, body, userAgent);
         _sent.Enqueue(sent);
         Arrived?.Invoke(sent);
         return await Respond(sent, cancellationToken);

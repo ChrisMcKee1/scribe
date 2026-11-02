@@ -18,9 +18,32 @@ public static class CleanupDisclosure
     /// <summary>The Add to dictionary line shown while AI cleanup is on.</summary>
     public const string AddToDictionaryVocabularyLine = "AI cleanup also receives your words and word pack words as vocabulary.";
 
+    /// <summary>
+    /// The headers the OpenAI client, Microsoft.Extensions.AI and Agent Framework add: the six <c>X-Stainless-*</c> headers, a
+    /// User-Agent naming the OpenAI client (with the .NET and Windows versions) and Microsoft.Extensions.AI, and on an Azure
+    /// address Agent Framework's name and version. Agent Framework's feature-usage token is removed
+    /// (<see cref="FeatureUsageTokenHandler"/>), so it is not listed. FeatureUsageTokenWireTests reads them on the wire.
+    /// </summary>
     public const string AiClientRequestMetadata =
         "Requests made through Scribe's OpenAI client also send its language and version, the operating system, " +
-        "processor architecture, and runtime name and version as request headers. These go to the same AI service.";
+        "processor architecture, runtime name and version, and the version of Microsoft.Extensions.AI as request headers, " +
+        "and requests to Microsoft Foundry, or to any other Azure OpenAI address, also name Microsoft Agent Framework and " +
+        "its version. These go to the same AI service.";
+
+    /// <summary>
+    /// What Foundry Local's runtime still sends Microsoft with its optional telemetry turned off
+    /// (<c>DisableNonessentialTelemetry</c> in <see cref="TextCleanupService.CreateFoundryConfiguration"/>), read from Foundry
+    /// Local 2.1.0's source: the ProcessInfo event its native core uploads once the runtime is created, and the fields its
+    /// telemetry adds to every event, including the device identifier the 1DS SDK reads from the first network adapter, which
+    /// 2.1.0 replaces with its own hashed one only while that telemetry is on. Declared before the card that quotes it.
+    /// </summary>
+    public static string FoundryLocalStartupEvent { get; } =
+        "Scribe turns off Foundry Local's optional telemetry, but the first time Scribe starts Foundry Local in a session " +
+        "(when you set it up, load a model, or use it for cleanup), Foundry Local sends Microsoft one startup event, which " +
+        "Scribe can't turn off. It names Scribe and its version, Foundry Local's version, the Windows version, the processor " +
+        "architecture and number of processors, the amount of memory, whether Scribe runs in a virtual machine or container, " +
+        "the PC's maker and model, an identifier that changes every session, and an identifier taken from the PC's first " +
+        "network adapter. It carries none of your text, vocabulary or audio.";
 
     /// <summary>
     /// The "What leaves this PC" card on the AI cleanup page: what every cleanup request carries, and
@@ -85,7 +108,7 @@ public static class CleanupDisclosure
         "Each time cleanup connects, for example when Scribe starts or you save a change to where AI cleanup " +
         "runs, it first sends a short test request holding the word \"ok\" and the same instructions, with " +
         "none of your vocabulary. " + WholeVocabularyOnThisPc + " " + ReadiesALocalServer + " " + ManagesALocalApp +
-        " Cleanup never sends your snippet templates, and audio never leaves this device. " +
+        " Cleanup never sends your snippet templates, and audio never leaves this device. " + FoundryLocalStartupEvent + " " +
         "GitHub Copilot sends all of this to GitHub under your own Copilot sign-in and GitHub's terms, and " +
         "listing its models contacts GitHub too.";
 

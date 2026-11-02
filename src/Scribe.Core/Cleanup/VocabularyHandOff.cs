@@ -247,9 +247,13 @@ internal sealed class VocabularyHandOffHandler : DelegatingHandler
     /// </summary>
     internal static HttpClientPipelineTransport SharedTransport => Shared.Value;
 
-    /// <summary>A transport with the hand-off in front of <paramref name="network"/>; tests put a fake network there.</summary>
+    /// <summary>
+    /// A transport with the hand-off in front of <paramref name="network"/>; tests put a fake network there. Agent Framework's
+    /// feature-usage token comes off the User-Agent before the hand-off (<see cref="FeatureUsageTokenHandler"/>), so the
+    /// hand-off stays the last step before the network.
+    /// </summary>
     internal static HttpClientPipelineTransport CreateTransport(HttpMessageHandler network) =>
-        new(new HttpClient(new VocabularyHandOffHandler(network)) { Timeout = Timeout.InfiniteTimeSpan });
+        new(new HttpClient(new FeatureUsageTokenHandler(new VocabularyHandOffHandler(network))) { Timeout = Timeout.InfiniteTimeSpan });
 
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {

@@ -187,10 +187,12 @@ AI cleanup is off until you turn it on. It fixes punctuation and capitalization,
 "um", keeps only what you meant when you correct yourself, and writes a list when you list things, before
 the text is typed. You choose where it runs:
 
-- **On this PC.** Fully offline. Choose how to run it:
+- **On this PC.** Your text stays on your PC. Choose how to run it:
   - **Let Scribe manage it,** with [Foundry Local](https://learn.microsoft.com/azure/ai-foundry/foundry-local/).
     Setting it up downloads the AI runtime for your PC and the model you pick, which can take several GB,
-    and Scribe removes them if you move AI cleanup elsewhere.
+    and Scribe removes them if you move AI cleanup elsewhere. Scribe turns off Foundry Local's optional
+    telemetry; Foundry Local still sends Microsoft one startup event a session, with none of your text (see
+    [Privacy](#privacy)).
   - **Ollama**, **LM Studio** or **TensorSharp**, if you already have one. Scribe lists the models you have in it and
     shows how much memory the loaded model uses. For Ollama and LM Studio, Scribe has the app free that memory after the
     time you set without a dictation, when you pause dictation, when AI cleanup stops using the model, and when you choose
@@ -254,7 +256,10 @@ the text is typed. You choose where it runs:
   responses.
 
 Requests using Scribe's OpenAI client also include client language/version, operating system,
-processor architecture and runtime name/version headers, sent to the same AI service.
+processor architecture, runtime name/version and Microsoft.Extensions.AI version headers, sent to the same AI
+service. Requests to
+Microsoft Foundry also name Microsoft Agent Framework and its version; Scribe removes the list of framework
+features Agent Framework would add to them.
 
 Settings doesn't recommend a model. The [local model benchmark](docs/local-model-benchmark.md) compares open
 models across Ollama, LM Studio, TensorSharp and Foundry Local, on a graphics card and on the processor
@@ -373,7 +378,7 @@ samples included, and how to reproduce them.
 - **Speech recognition is local:** Parakeet runs on your CPU through
   [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx).
 - **AI cleanup is optional, and goes where you choose.** On this PC, with Scribe's own model, Ollama, LM
-  Studio or TensorSharp, everything stays on your PC. With Microsoft Foundry, GitHub Copilot or another AI
+  Studio or TensorSharp, your text, instructions and vocabulary stay on your PC. With Microsoft Foundry, GitHub Copilot or another AI
   service, each cleanup request sends the text Scribe recognized for that dictation (never audio), Scribe's
   cleanup instructions with your writing style, and the words from your dictionary plus the word packs you
   let AI cleanup use that the dictation appears to mention (up to 5,000 words or phrases, or 80 with the
@@ -382,6 +387,11 @@ samples included, and how to reproduce them.
   signature, stays out. It goes only to the service you set up. With a server on your PC, starting a
   dictation also sends it the instructions with no dictated text, and none of your vocabulary unless you
   chose to send your whole vocabulary to it, so a model it unloaded is ready by the time you stop talking.
+- **Foundry Local's startup event.** Scribe turns off Foundry Local's optional telemetry, but the first time
+  Scribe starts Foundry Local in a session, Foundry Local sends Microsoft one startup event that no setting
+  turns off: Scribe's name and version, Foundry Local's version, the Windows version, the processor, the
+  amount of memory, the PC's maker and model, and an identifier taken from the PC's first network adapter.
+  It carries none of your text, vocabulary or audio.
 - **Microsoft Foundry.** Scribe asks Microsoft Foundry not to store the response, though Microsoft's abuse
   monitoring can still keep a sample of flagged prompts and responses for review, as its
   [data privacy page](https://learn.microsoft.com/azure/foundry/responsible-ai/openai/data-privacy)

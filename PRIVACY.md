@@ -1,6 +1,6 @@
 # Scribe AI Privacy Policy
 
-**Effective date:** October 8, 2026
+**Effective date:** November 1, 2026
 **Publisher:** Chris McKee
 
 This Privacy Policy applies to Scribe AI, also known as Scribe, a Windows voice
@@ -212,6 +212,29 @@ endpoint.
 AI features are optional. The default Foundry Local provider runs on the device,
 so the text it cleans, its instructions and your vocabulary stay on the device.
 
+Foundry Local's own runtime collects telemetry for Microsoft, which it turns on
+by default. Scribe turns off Foundry Local's non-essential telemetry, so it sends
+Microsoft no events about model use, model downloads, the model catalog, your
+hardware or sessions. Foundry Local still sends Microsoft one startup event,
+which no setting turns off, the first time Scribe starts its runtime in a
+session: when you set Foundry Local up, load a model, or use it for cleanup. That
+event carries Scribe's name, version and program file name, Foundry Local's
+version, the Windows version and build, the processor architecture, the number
+of processors, the amount of memory, whether Scribe runs in a virtual machine,
+container or emulator, the PC's maker and model as Windows records them, an
+identifier that changes every session, and an identifier that Foundry Local's
+telemetry component takes from the PC's first network adapter. Microsoft also
+receives ordinary network information such as your IP address. The event
+carries no dictation, cleanup instructions, vocabulary, model output or audio.
+Foundry Local keeps events it has not sent yet in
+`%LOCALAPPDATA%\Microsoft\DeveloperTools\.onnxruntime`, a folder other apps that
+use Foundry Local or ONNX Runtime can share, so Scribe does not remove it.
+Earlier versions of Scribe left Foundry Local's non-essential telemetry on, which
+also sends events about which models ran on which hardware, with token counts and
+timings, model downloads and catalog requests, with a hashed form of an
+identifier Foundry Local keeps in the Windows registry under
+`HKEY_CURRENT_USER\Software\Microsoft\DeveloperTools\.onnxruntime`.
+
 The native macOS app requires Foundry Local's reported cleanup address to be
 HTTP or HTTPS on literal loopback or `localhost`, without embedded credentials,
 query or fragment. It sends no text to an address outside that boundary.
@@ -400,9 +423,15 @@ setting does not change what Scribe sends to them.
 
 Requests made through Scribe's OpenAI client also include six `X-Stainless-*`
 headers: client language and version, operating system, processor architecture,
-and runtime name and version. These go to the same AI service as the request,
-not to a separate telemetry service. Connections using Ollama's own API or
-GitHub Copilot use those clients' own behavior instead.
+and runtime name and version. Their User-Agent header names the OpenAI client and
+Microsoft.Extensions.AI with their versions, and the .NET and Windows versions.
+Requests to an Azure OpenAI address, which is where Microsoft Foundry requests go (an `openai.azure.com`, `cognitiveservices.azure.com`
+or `services.ai.azure.com` address), also name Microsoft Agent Framework and its
+version in the User-Agent header. Agent Framework would add a list of the
+framework features Scribe has used there too, as usage telemetry for Microsoft;
+Scribe removes it from every request before the request is sent. These go to the
+same AI service as the request, not to a separate telemetry service. Connections
+using Ollama's own API or GitHub Copilot use those clients' own behavior instead.
 
 The GitHub Copilot provider differs from the others in how it connects. There is
 no endpoint you configure and no key Scribe stores. Scribe runs the GitHub
