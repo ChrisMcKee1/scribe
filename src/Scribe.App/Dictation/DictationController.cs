@@ -124,7 +124,9 @@ internal sealed class DictationController : IDisposable
         _log = log;
         _perfFlags = perfFlags ?? PerfFlags.None;
         _lifecycle = new DictationLifecycle<CaptureContext>(
-            () => ReleaseIdleModels(IdleReleaseTrigger.IdleDeadline), OnDurationLimitReached);
+            () => ReleaseIdleModels(IdleReleaseTrigger.IdleDeadline),
+            OnDurationLimitReached,
+            onAudioArrivalCheckDue: OnAudioArrivalCheckDue);
     }
 
     /// <summary>
@@ -837,6 +839,10 @@ internal sealed class DictationController : IDisposable
                 RaiseWarning(new DictationProblemReport(DictationProblem.MicrophoneMuted), id);
             }
 
+            // A microphone can open and then send nothing at all (a USB microphone unplugged and plugged back in has
+            // done it until it was unplugged again): checked a second in, so the user hears while still speaking.
+            _lifecycle.ArmAudioArrivalCheck(id, RecordingCapture.AudioArrivalWait);
+
             // Only for a toggle, judged by the binding that fired, and attached only while this recording is still the
             // live one: a fault or a pause can end it between its microphone opening and here, and a tracker attached
             // after that would be fed the next recording's levels. Whatever ends this recording drops its tracker.
@@ -1011,6 +1017,32 @@ internal sealed class DictationController : IDisposable
             // An exception on a timer thread terminates the process.
             TryLog(log => log.LogWarning(
                 "The dictation duration limit could not stop the recording ({Failure}).", FailureShape.Describe(ex)));
+        }
+    }
+
+    // Fired on a timer thread a second after a recording's microphone opened. A microphone that has sent no audio by then
+    // is reported while the recording goes on: audio that starts late is still recorded, and stopping would leave the
+    // user holding a shortcut that does nothing. It was not reopened either: in the report that prompted this, a fresh
+    // open after restarting Scribe sent nothing as well.
+    private void OnAudioArrivalCheckDue()
+    {
+        try
+        {
+            if (RecordingCapture.FindRecordingWithoutAudio(_lifecycle, _audio) is not { } id)
+            {
+                return;
+            }
+
+            _log.LogWarning(
+                "#{Id} the microphone '{Device}' has sent no audio {Ms} ms after it opened; still recording.",
+                id, _audio.LastDeviceName ?? "unknown", (long)RecordingCapture.AudioArrivalWait.TotalMilliseconds);
+            RaiseWarning(new DictationProblemReport(DictationProblem.MicrophoneNotSending), id);
+        }
+        catch (Exception ex)
+        {
+            // An exception on a timer thread terminates the process.
+            TryLog(log => log.LogWarning(
+                "The check that the microphone is sending audio failed ({Failure}).", FailureShape.Describe(ex)));
         }
     }
 

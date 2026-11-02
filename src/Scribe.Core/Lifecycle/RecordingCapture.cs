@@ -56,6 +56,36 @@ public readonly record struct RecordingOpen(
 public static class RecordingCapture
 {
     /// <summary>
+    /// How long after a recording's microphone opened it may still have sent no audio before the user is told. WASAPI
+    /// delivers a shared-mode packet every device period, normally 10 ms, and the first one comes within a few periods
+    /// of the stream starting; a second is many times that, and still tells the user while they are speaking rather
+    /// than after they let go. A muted microphone is not caught here: it sends packets of zeros.
+    /// </summary>
+    public static readonly TimeSpan AudioArrivalWait = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Answers the audio arrival check's tick (see <see cref="DictationLifecycle{TCapture}.ArmAudioArrivalCheck"/>): the
+    /// id of the recording it was armed for, when that recording is still live and its capture has delivered nothing
+    /// since its stream started, at most once per recording; null otherwise. The capture is asked outside the
+    /// lifecycle's gate, so a recording that ends between the two answers is caught by the warning's own revision.
+    /// </summary>
+    public static long? FindRecordingWithoutAudio<TCapture>(
+        DictationLifecycle<TCapture> lifecycle,
+        IAudioCaptureService audio)
+        where TCapture : class
+    {
+        ArgumentNullException.ThrowIfNull(lifecycle);
+        ArgumentNullException.ThrowIfNull(audio);
+
+        if (lifecycle.TryAcceptAudioArrivalCheck() is not { } dictationId)
+        {
+            return null;
+        }
+
+        return audio.GetAudioArrival(dictationId) == AudioArrival.NotYet ? dictationId : null;
+    }
+
+    /// <summary>
     /// Opens the capture for recording <paramref name="dictationId"/>, as its owner, then hands it over (see
     /// <see cref="HandOff{TCapture}"/>). Throws whatever the capture service's Start throws, in which case nothing was
     /// opened.
