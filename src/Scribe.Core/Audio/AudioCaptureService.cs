@@ -72,6 +72,11 @@ public sealed class AudioCaptureService : IAudioCaptureService
     // stop handshake; float writes are atomic so no extra locking is needed.
     private float _capturePeak;
 
+    // 1 once the live capture has delivered a packet with audio, always on (unlike CaptureTiming). Cleared under _sync
+    // before the stream starts, since the first packet can come before StartRecording returns; the capture thread only
+    // reads it and writes it once, with no lock, no log and no allocation. GetAudioArrival reads it.
+    private int _audioArrived;
+
     /// <summary>
     /// How long disposal waits for a device open in progress. Opens have been measured at over five seconds on the first
     /// press after launch; past this bound the capture endpoints are left for the process to release at exit, rather than
@@ -235,6 +240,8 @@ public sealed class AudioCaptureService : IAudioCaptureService
                     _captureFormat.Channels,
                     _captureFormat.BitsPerSample,
                     _captureFormat.Encoding);
+
+                Volatile.Write(ref _audioArrived, 0);
 
                 // Bound to this capture before its stream starts: NAudio starts the stream on its capture thread, whose
                 // first packet can come before StartRecording returns, and before _captureOwner below is assigned.
@@ -443,6 +450,24 @@ public sealed class AudioCaptureService : IAudioCaptureService
     /// </summary>
     public long ReleaseRetainedBuffers() => _buffers.ReleaseRetained() + _scratch.ReleaseRetained();
 
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Takes <c>_sync</c> only to read who owns the live capture, which the capture thread never takes. It is held for long
+    /// only by an open in progress, and the recording asking already has its microphone open.
+    /// </remarks>
+    public AudioArrival GetAudioArrival(long owner)
+    {
+        lock (_sync)
+        {
+            if (owner == 0 || !IsCapturing || _stopRequested || _captureOwner != owner)
+            {
+                return AudioArrival.Unknown;
+            }
+
+            return Volatile.Read(ref _audioArrived) != 0 ? AudioArrival.Arrived : AudioArrival.NotYet;
+        }
+    }
+
     /// <summary>
     /// About 30 s of the device's native format (11,520,000 bytes at 48 kHz stereo float), clamped
     /// to 64 KiB..32 MiB. Starting at a realistic capture length means a normal dictation never grows
@@ -528,6 +553,10 @@ public sealed class AudioCaptureService : IAudioCaptureService
         // PerfFlags.CaptureTimingDiagnostics: this capture's own record counts the packet and stamps the first one; with
         // the flag off there is no record.
         Volatile.Read(ref _timing)?.MarkPacket(sender);
+        if (Volatile.Read(ref _audioArrived) == 0)
+        {
+            Volatile.Write(ref _audioArrived, 1);
+        }
 
         // Peak is computed unconditionally (not just for the level meter): the running maximum is
         // what lets the pipeline tell "you spoke while muted" apart from "no speech in the audio".

@@ -20,6 +20,12 @@ public enum DictationProblem
     RecognitionFailed,
     ModelLoadFailed,
     FallbackMicrophone,
+
+    /// <summary>
+    /// The microphone opened but has delivered no audio at all since its stream started, which is what a device that
+    /// stopped working after it was unplugged and plugged back in does. Raised while the recording is still live.
+    /// </summary>
+    MicrophoneNotSending,
 }
 
 public sealed record DictationProblemReport(
@@ -49,7 +55,7 @@ public static class DictationProblemRouting
     {
         DictationProblem.NoSpeechModel or DictationProblem.FocusChanged or DictationProblem.TypingIncomplete => DictationProblemSurface.PillAndNotice,
         DictationProblem.MicrophoneDisconnected or DictationProblem.DurationLimit => DictationProblemSurface.Notice,
-        DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone =>
+        DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone or DictationProblem.MicrophoneNotSending =>
             recordingIndicatorOn ? DictationProblemSurface.RecordingPill : DictationProblemSurface.Notice,
         _ => recordingIndicatorOn ? DictationProblemSurface.PillOutcome : DictationProblemSurface.Notice,
     };
@@ -103,6 +109,7 @@ public static class DictationProblemText
             DictationProblem.RecognitionFailed => new("Dictation didn't finish", "Something went wrong while Scribe turned your speech into text. Try again. If it keeps happening, save diagnostics in Settings, Diagnostics.", TrayNoticeKind.Error, TrayNoticeAction.OpenSettingsDiagnostics),
             DictationProblem.ModelLoadFailed => new("Speech model didn't load", "Scribe tries again when you dictate. If dictation doesn't work, save diagnostics in Settings, Diagnostics and report the problem.", TrayNoticeKind.Warning, TrayNoticeAction.OpenSettingsDiagnostics),
             DictationProblem.FallbackMicrophone => new("Using another microphone", FallbackMicrophoneBody(chosenDevice, usedDevice), TrayNoticeKind.RecordingWarning),
+            DictationProblem.MicrophoneNotSending => new("Your microphone isn't sending sound", "Unplug it and plug it back in, or choose another from the Microphone menu. Scribe is still recording.", TrayNoticeKind.RecordingWarning),
             _ => new("Dictation didn't finish", "Try again.", TrayNoticeKind.Warning),
         };
     }
@@ -130,6 +137,7 @@ public static class DictationProblemText
         DictationProblem.RecognitionFailed => "Something went wrong",
         DictationProblem.ModelLoadFailed => "Speech model didn't load",
         DictationProblem.FallbackMicrophone => "Using the default mic",
+        DictationProblem.MicrophoneNotSending => "No sound from the mic",
         DictationProblem.MicrophoneDisconnected => null,
         _ => null,
     };

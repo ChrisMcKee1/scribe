@@ -31,6 +31,7 @@ public sealed class OverlayFeedbackTests
     [Theory]
     [InlineData(DictationProblem.MicrophoneMuted)]
     [InlineData(DictationProblem.FallbackMicrophone)]
+    [InlineData(DictationProblem.MicrophoneNotSending)]
     public void A_queued_warning_rechecks_both_availability_and_its_recording_revision(DictationProblem problem)
     {
         var ready = new OverlayAvailability(true, false, 1);

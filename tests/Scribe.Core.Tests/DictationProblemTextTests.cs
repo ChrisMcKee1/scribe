@@ -30,6 +30,7 @@ public sealed class DictationProblemTextTests
         yield return Row(DictationProblem.OnlySilenceFromDevice, "Jabra", null, null, 10, HotkeyMode.Hold, "Page Down", "Only silence recorded", "\"Jabra\" may be muted. Unmute it and try again.", TrayNoticeKind.Warning, false, TrayNoticeAction.None);
         yield return Row(DictationProblem.FallbackMicrophone, null, "Laptop", "Jabra", 10, HotkeyMode.Hold, "Page Down", "Using another microphone", "\"Laptop\" isn't available, so Scribe is recording from \"Jabra\", the Windows default. To choose another, right-click the Scribe icon and choose Microphone.", TrayNoticeKind.RecordingWarning, true, TrayNoticeAction.None);
         yield return Row(DictationProblem.FallbackMicrophone, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Using another microphone", "Your chosen microphone isn't available, so Scribe is recording from the Windows default microphone. To choose another, right-click the Scribe icon and choose Microphone.", TrayNoticeKind.RecordingWarning, true, TrayNoticeAction.None);
+        yield return Row(DictationProblem.MicrophoneNotSending, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Your microphone isn't sending sound", "Unplug it and plug it back in, or choose another from the Microphone menu. Scribe is still recording.", TrayNoticeKind.RecordingWarning, true, TrayNoticeAction.None);
     }
 
     public static IEnumerable<object?[]> PillRows()
@@ -51,6 +52,7 @@ public sealed class DictationProblemTextTests
         yield return Pill(DictationProblem.ModelLoadFailed, HotkeyMode.Hold, 10, "Speech model didn't load");
         yield return Pill(DictationProblem.FallbackMicrophone, HotkeyMode.Hold, 10, "Using the default mic");
         yield return Pill(DictationProblem.MicrophoneDisconnected, HotkeyMode.Hold, 10, null);
+        yield return Pill(DictationProblem.MicrophoneNotSending, HotkeyMode.Hold, 10, "No sound from the mic");
     }
 
     [Theory]
@@ -84,10 +86,10 @@ public sealed class DictationProblemTextTests
                 {
                     var line = DictationProblemText.PillLine(problem, mode, minutes);
                     if (line is null) continue;
-                    var budget = problem is DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone
+                    var budget = IsRecordingWarning(problem)
                         ? 134
                         : 150;
-                    var weight = problem is DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone
+                    var weight = IsRecordingWarning(problem)
                         ? FontWeights.SemiBold
                         : FontWeights.Normal;
                     var width = Measure(line, weight);
@@ -109,11 +111,17 @@ public sealed class DictationProblemTextTests
         Assert.Equal("See Settings, Diagnostics", PillOutcome.CleanupDidNotRun);
         Assert.Equal("Microphone muted", DictationProblemText.PillLine(DictationProblem.MicrophoneMuted));
         Assert.Equal("Using the default mic", DictationProblemText.PillLine(DictationProblem.FallbackMicrophone));
+        Assert.Equal("No sound from the mic", DictationProblemText.PillLine(DictationProblem.MicrophoneNotSending));
 
         Assert.True(Measure(PillOutcome.CleanupDidNotRun, FontWeights.Normal) <= 150);
         Assert.True(Measure("Microphone muted", FontWeights.SemiBold) <= 134);
         Assert.True(Measure("Using the default mic", FontWeights.SemiBold) <= 134);
+        Assert.True(Measure("No sound from the mic", FontWeights.SemiBold) <= 134);
     }
+
+    // Shown on the recording pill while the recording goes on, in the listening state's SemiBold status line.
+    private static bool IsRecordingWarning(DictationProblem problem) =>
+        problem is DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone or DictationProblem.MicrophoneNotSending;
 
     [Fact]
     public void The_processing_words_fit_beside_the_dots()
@@ -176,7 +184,7 @@ public sealed class DictationProblemTextTests
         {
             DictationProblem.NoSpeechModel or DictationProblem.FocusChanged or DictationProblem.TypingIncomplete => DictationProblemSurface.PillAndNotice,
             DictationProblem.MicrophoneDisconnected or DictationProblem.DurationLimit => DictationProblemSurface.Notice,
-            DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone =>
+            DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone or DictationProblem.MicrophoneNotSending =>
                 indicatorOn ? DictationProblemSurface.RecordingPill : DictationProblemSurface.Notice,
             _ => indicatorOn ? DictationProblemSurface.PillOutcome : DictationProblemSurface.Notice,
         };

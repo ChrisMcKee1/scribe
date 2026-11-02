@@ -226,6 +226,7 @@ public sealed class DictationLifecycle<TCapture>
     private readonly TimeProvider _time;
     private readonly ClosableTimer _idleReleaseTimer;
     private readonly ClosableTimer _durationLimitTimer;
+    private readonly ClosableTimer _audioArrivalTimer;
 
     private DictationPhase _phase = DictationPhase.Idle;
     private TCapture? _capture;
@@ -276,6 +277,12 @@ public sealed class DictationLifecycle<TCapture>
     private long _durationLimitDictationId;
     private TimeSpan _durationLimit;
 
+    // The recording the audio arrival check was armed for (0 once its one answer was taken or nothing is armed), when it
+    // was armed, and how long after that it may be answered.
+    private long _audioArrivalDictationId;
+    private long _audioArrivalArmedTimestamp;
+    private TimeSpan _audioArrivalWait;
+
     // The dictation admitted to processing and not yet ended, so a shutdown that outlives its wait can name it.
     private ProcessingAdmission<TCapture>? _active;
 
@@ -295,14 +302,23 @@ public sealed class DictationLifecycle<TCapture>
 
     /// <param name="onIdleReleaseDue">The idle release timer's callback. Runs on the thread pool, possibly after shutdown began.</param>
     /// <param name="onDurationLimitDue">The duration ceiling timer's callback. Same threading as the idle release.</param>
-    /// <param name="timeProvider">The clock behind both timers and the ceiling check; the system clock by default.</param>
-    public DictationLifecycle(Action onIdleReleaseDue, Action onDurationLimitDue, TimeProvider? timeProvider = null)
+    /// <param name="timeProvider">The clock behind the timers and the checks they ask for; the system clock by default.</param>
+    /// <param name="onAudioArrivalCheckDue">
+    /// The audio arrival check's callback (see <see cref="ArmAudioArrivalCheck"/>), nothing when null. Same threading as
+    /// the idle release. Created after the other two timers, so a test clock lists the timers in that order.
+    /// </param>
+    public DictationLifecycle(
+        Action onIdleReleaseDue,
+        Action onDurationLimitDue,
+        TimeProvider? timeProvider = null,
+        Action? onAudioArrivalCheckDue = null)
     {
         ArgumentNullException.ThrowIfNull(onIdleReleaseDue);
         ArgumentNullException.ThrowIfNull(onDurationLimitDue);
         _time = timeProvider ?? TimeProvider.System;
         _idleReleaseTimer = new ClosableTimer(onIdleReleaseDue, _time);
         _durationLimitTimer = new ClosableTimer(onDurationLimitDue, _time);
+        _audioArrivalTimer = new ClosableTimer(onAudioArrivalCheckDue ?? (static () => { }), _time);
     }
 
     /// <summary>True once shutdown has begun. Read without the gate, for paths that only need to stand down.</summary>
@@ -547,6 +563,8 @@ public sealed class DictationLifecycle<TCapture>
             _phase = DictationPhase.Idle;
             _capture = null;
             _silenceTracker = null;
+            _audioArrivalTimer.Cancel();
+            _audioArrivalDictationId = 0;
             MarkIdleSinceLocked();
             ScheduleIdleReleaseLocked(idleReleaseAfter);
             return new IdleReturn(
@@ -644,6 +662,50 @@ public sealed class DictationLifecycle<TCapture>
     }
 
     /// <summary>
+    /// Arms the check that recording <paramref name="dictationId"/>'s microphone is sending audio, due
+    /// <paramref name="wait"/> from now, if that recording is still the live one. Call it once the microphone has opened:
+    /// a stream that opens and then sends nothing at all is otherwise only found when the recording ends.
+    /// </summary>
+    public void ArmAudioArrivalCheck(long dictationId, TimeSpan wait)
+    {
+        lock (_gate)
+        {
+            if (_closing || _phase != DictationPhase.Recording || _dictationId != dictationId)
+            {
+                return;
+            }
+
+            _audioArrivalDictationId = dictationId;
+            _audioArrivalArmedTimestamp = _time.GetTimestamp();
+            _audioArrivalWait = wait;
+            _audioArrivalTimer.Schedule(wait);
+        }
+    }
+
+    /// <summary>
+    /// Decides whether an audio arrival check tick may ask about the live recording's microphone, returning that
+    /// recording's id once, or null: shutdown began, nothing is recording, the check was armed for an earlier recording
+    /// or already answered, or its wait has not passed yet (a tick queued for an earlier schedule).
+    /// </summary>
+    public long? TryAcceptAudioArrivalCheck()
+    {
+        lock (_gate)
+        {
+            if (_closing
+                || _phase != DictationPhase.Recording
+                || _audioArrivalDictationId == 0
+                || _dictationId != _audioArrivalDictationId
+                || _time.GetElapsedTime(_audioArrivalArmedTimestamp) < _audioArrivalWait)
+            {
+                return null;
+            }
+
+            _audioArrivalDictationId = 0;
+            return _dictationId;
+        }
+    }
+
+    /// <summary>
     /// Ends the live recording and admits it to processing, when a recording is live, shutdown has not begun, and it is
     /// the recording <paramref name="expectedDictationId"/> names (0 accepts whichever is live). Only the stop that is
     /// admitted disarms the duration ceiling, so a late or redundant stop cannot cancel the ceiling of a newer recording.
@@ -667,6 +729,8 @@ public sealed class DictationLifecycle<TCapture>
             }
 
             _durationLimitTimer.Cancel();
+            _audioArrivalTimer.Cancel();
+            _audioArrivalDictationId = 0;
             _phase = DictationPhase.Processing;
             _rejectedWhileProcessing = 0;
 
@@ -910,6 +974,7 @@ public sealed class DictationLifecycle<TCapture>
             [
                 new("close the idle release timer", _idleReleaseTimer.Close),
                 new("close the duration limit timer", _durationLimitTimer.Close),
+                new("close the audio arrival timer", _audioArrivalTimer.Close),
                 new("cancel processing", () => _lifetime.Cancel()),
                 .. stopInputs,
             ],

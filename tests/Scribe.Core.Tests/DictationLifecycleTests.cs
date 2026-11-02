@@ -17,6 +17,7 @@ public sealed class DictationLifecycleTests
 {
     private static readonly TimeSpan IdleDelay = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan Ceiling = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan ArrivalWait = TimeSpan.FromSeconds(1);
 
     // A silence tracker started at 0 that has heard no speech asks to stop once this much time has passed.
     private const long LeadInLimitMs = 10_000;
@@ -681,6 +682,91 @@ public sealed class DictationLifecycleTests
     }
 
     [Fact]
+    public void The_audio_arrival_check_answers_once_for_the_live_recording_once_its_wait_has_passed()
+    {
+        var loop = new Loop();
+        loop.Lifecycle.Start(IdleDelay);
+
+        var a = loop.Lifecycle.TryBeginRecording(() => loop.NewCapture("a"));
+        loop.Lifecycle.ArmAudioArrivalCheck(a.DictationId, ArrivalWait);
+        Assert.Equal("change:00:00:01", loop.AudioArrivalTimer.Events[^1]);
+
+        loop.Clock.Advance(ArrivalWait - TimeSpan.FromMilliseconds(1));
+        Assert.Null(loop.Lifecycle.TryAcceptAudioArrivalCheck()); // early: the wait has not passed
+
+        loop.Clock.Advance(TimeSpan.FromMilliseconds(1));
+        loop.AudioArrivalTimer.Fire();
+        Assert.Equal(1, loop.AudioArrivalTicks);
+        Assert.Equal(a.DictationId, loop.Lifecycle.TryAcceptAudioArrivalCheck());
+        Assert.Null(loop.Lifecycle.TryAcceptAudioArrivalCheck()); // once per recording
+
+        // The check only reports; the recording goes on.
+        Assert.Equal(DictationPhase.Recording, loop.Lifecycle.Phase);
+    }
+
+    /// <summary>
+    /// Recording A's check tick is queued when A stops and B starts and arms its own: the stale tick finds B, which has not
+    /// waited yet, and B's own check answers for B. A stop disarms the check with the recording it ends.
+    /// </summary>
+    [Fact]
+    public void An_audio_arrival_check_armed_for_one_recording_never_answers_for_the_next()
+    {
+        var loop = new Loop();
+        loop.Lifecycle.Start(IdleDelay);
+
+        var a = loop.Lifecycle.TryBeginRecording(() => loop.NewCapture("a"));
+        loop.Lifecycle.ArmAudioArrivalCheck(a.DictationId, ArrivalWait);
+        loop.Clock.Advance(ArrivalWait); // A's tick is due and queued, not yet delivered
+        var stopA = loop.Lifecycle.TryBeginProcessing();
+        Assert.Equal($"change:{Timeout.InfiniteTimeSpan}", loop.AudioArrivalTimer.Events[^1]);
+        Assert.Null(loop.Lifecycle.TryAcceptAudioArrivalCheck()); // A is no longer recording
+        loop.Lifecycle.ReturnToIdle(IdleDelay);
+        loop.Lifecycle.EndProcessing(stopA.Admission!);
+
+        var b = loop.Lifecycle.TryBeginRecording(() => loop.NewCapture("b"));
+        loop.Clock.Advance(ArrivalWait * 2);
+        Assert.Null(loop.Lifecycle.TryAcceptAudioArrivalCheck()); // B has not armed one: A's is not B's
+
+        loop.Lifecycle.ArmAudioArrivalCheck(b.DictationId, ArrivalWait);
+        loop.Clock.Advance(ArrivalWait / 2);
+        loop.AudioArrivalTimer.Fire(); // A's stale tick finally runs
+        Assert.Equal(0, loop.AudioArrivalTicks);
+        Assert.Null(loop.Lifecycle.TryAcceptAudioArrivalCheck());
+
+        loop.Clock.Advance(ArrivalWait / 2);
+        loop.AudioArrivalTimer.Fire(); // B's own tick
+        Assert.Equal(1, loop.AudioArrivalTicks);
+        Assert.Equal(b.DictationId, loop.Lifecycle.TryAcceptAudioArrivalCheck());
+    }
+
+    [Fact]
+    public void The_audio_arrival_check_is_armed_only_for_the_live_recording_and_never_once_shutdown_begins()
+    {
+        var loop = new Loop();
+        loop.Lifecycle.Start(IdleDelay);
+        var idleEvents = loop.AudioArrivalTimer.Events.Count;
+
+        loop.Lifecycle.ArmAudioArrivalCheck(1, ArrivalWait); // nothing is recording
+        var a = loop.Lifecycle.TryBeginRecording(() => loop.NewCapture("a"));
+        loop.Lifecycle.ArmAudioArrivalCheck(a.DictationId + 1, ArrivalWait); // not the live recording
+        Assert.Equal(idleEvents, loop.AudioArrivalTimer.Events.Count);
+
+        // A recording whose open failed goes back to idle and leaves no check behind for the next.
+        loop.Lifecycle.ArmAudioArrivalCheck(a.DictationId, ArrivalWait);
+        Assert.NotNull(loop.Lifecycle.TryAbandonRecording(a.DictationId, IdleDelay));
+        var b = loop.Lifecycle.TryBeginRecording(() => loop.NewCapture("b"));
+        loop.Clock.Advance(ArrivalWait);
+        Assert.Null(loop.Lifecycle.TryAcceptAudioArrivalCheck());
+
+        Assert.True(loop.Lifecycle.BeginShutdown());
+        var closingEvents = loop.AudioArrivalTimer.Events.Count;
+        loop.Lifecycle.ArmAudioArrivalCheck(b.DictationId, ArrivalWait);
+        Assert.Equal(closingEvents, loop.AudioArrivalTimer.Events.Count);
+        loop.Clock.Advance(ArrivalWait);
+        Assert.Null(loop.Lifecycle.TryAcceptAudioArrivalCheck());
+    }
+
+    [Fact]
     public void A_ceiling_armed_for_an_earlier_recording_is_never_honored_for_a_later_one()
     {
         var loop = new Loop();
@@ -939,6 +1025,7 @@ public sealed class DictationLifecycleTests
         Assert.Equal(1, writer.Completions);
         Assert.True(loop.IdleTimer.IsDisposed);
         Assert.True(loop.DurationTimer.IsDisposed);
+        Assert.True(loop.AudioArrivalTimer.IsDisposed);
     }
 
     [Fact]
@@ -962,15 +1049,20 @@ public sealed class DictationLifecycleTests
 
     private sealed record Capture(string Name);
 
-    // The controller's side of the lifecycle: a manual clock, and counters for the two timer callbacks.
+    // The controller's side of the lifecycle: a manual clock, and counters for the timer callbacks.
     private sealed class Loop
     {
         private readonly List<string> _captures = [];
         private int _ceilingTicks;
+        private int _audioArrivalTicks;
 
         public Loop()
         {
-            Lifecycle = new DictationLifecycle<Capture>(() => { }, () => Interlocked.Increment(ref _ceilingTicks), Clock);
+            Lifecycle = new DictationLifecycle<Capture>(
+                () => { },
+                () => Interlocked.Increment(ref _ceilingTicks),
+                Clock,
+                () => Interlocked.Increment(ref _audioArrivalTicks));
         }
 
         public ManualTimeProvider Clock { get; } = new();
@@ -982,7 +1074,11 @@ public sealed class DictationLifecycleTests
 
         public ManualTimer DurationTimer => Clock.Timers[1];
 
+        public ManualTimer AudioArrivalTimer => Clock.Timers[2];
+
         public int CeilingTicks => Volatile.Read(ref _ceilingTicks);
+
+        public int AudioArrivalTicks => Volatile.Read(ref _audioArrivalTicks);
 
         public IReadOnlyList<string> CapturesCreated => _captures;
 

@@ -93,6 +93,14 @@ public interface IAudioCaptureService : IDisposable
     /// </summary>
     long ReleaseRetainedBuffers() => 0;
 
+    /// <summary>
+    /// Whether the live capture recording <paramref name="owner"/> owns has delivered any audio since its stream started.
+    /// A packet of zeros counts as audio (a muted microphone still sends packets); only a stream that has sent nothing at
+    /// all is <see cref="AudioArrival.NotYet"/>. <see cref="AudioArrival.Unknown"/> when that recording owns no live
+    /// capture, its stop has been asked for, or the implementation does not track it. Never blocks on the capture thread.
+    /// </summary>
+    AudioArrival GetAudioArrival(long owner) => AudioArrival.Unknown;
+
     /// <summary>Normalized input level (0..1 peak) for the current buffer while recording.</summary>
     event EventHandler<float>? LevelChanged;
 
@@ -107,4 +115,17 @@ public interface IAudioCaptureService : IDisposable
     /// opened, and the next capture resolves its device afresh. Handlers must not block.
     /// </summary>
     event Action<IReadOnlyList<AudioDevice>>? InputDevicesChanged;
+}
+
+/// <summary>What <see cref="IAudioCaptureService.GetAudioArrival"/> found.</summary>
+public enum AudioArrival
+{
+    /// <summary>The recording owns no live capture, its stop was asked for, or the service does not track arrival.</summary>
+    Unknown,
+
+    /// <summary>At least one packet with audio has arrived since the stream started.</summary>
+    Arrived,
+
+    /// <summary>The stream started and is still live, but nothing has arrived.</summary>
+    NotYet,
 }

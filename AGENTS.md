@@ -1120,7 +1120,7 @@ change the sums and needs a decision (and probably a flag) of its own.
 
 - **`Scribe.Core.Lifecycle.DictationLifecycle` owns the controller's state.** One gate covers the
   phase, pause, closing, dictation id, activity epoch and idle-release claim, the rejected-activation
-  count, the duration ceiling, processing admission, both timers and the lifetime token, and the type
+  count, the duration ceiling, the audio arrival check, processing admission, its three timers and the lifetime token, and the type
   owns the shutdown order (begin shutdown, close timers, cancel, stop input, drain processing, complete
   the history writer, and dispose the token source only when processing drained). `DictationController`
   is a thin shell with no lock of its own. A change to admission, pause, timers or shutdown needs a test
@@ -1185,6 +1185,16 @@ change the sums and needs a decision (and probably a flag) of its own.
   tick re-arms for the time that remains, each schedule delivers at most one tick, and a schedule after
   close is a no-op. Platform timer ticks can arrive after their schedule was replaced, which is how a
   duration ceiling armed for one recording could end the next.
+- **A microphone that opens and sends nothing is reported a second in, and the recording goes on.** Once the microphone
+  has opened, the controller arms the lifecycle's audio arrival check (`ArmAudioArrivalCheck`, due
+  `RecordingCapture.AudioArrivalWait`, 1 s); its tick asks `RecordingCapture.FindRecordingWithoutAudio`, which takes the
+  lifecycle's one answer for the live recording, then asks the capture service outside the gate
+  (`IAudioCaptureService.GetAudioArrival`, owner-tagged). A found recording gets `DictationProblem.MicrophoneNotSending`
+  through the muted microphone's recording-warning path and a shape-only Warning. The capture service's flag is always on
+  and lock-free on the capture thread: cleared under its lock before the stream starts, set by the first packet with bytes
+  (zeros count, so a muted microphone is left to its own warning). Nothing is stopped or reopened: late audio is still
+  recorded, and in the report behind this (a USB microphone unplugged and plugged back in) a fresh open after a restart
+  sent nothing either. A stop admitted to processing, or an abandoned recording, disarms it; shutdown closes its timer.
 - **An idle release is decided when it is claimed, by its trigger** (0.5.2). A timer callback runs outside the gate, so
   a whole dictation, or a settings change, can come between the timer's tick and the claim. So the lifecycle keeps the
   countdown's own deadline (`_idleReleaseDue`, computed before the timer's, never later) and origin
