@@ -343,8 +343,8 @@ the destructive catch is on the overlay launch path; synthesis will dedup on roo
 - **Windows App SDK components.** The overlay references the four component packages rather than the
   `Microsoft.WindowsAppSDK` metapackage, because a self-contained build ships every referenced
   component's runtime and the pill needs only WinUI and what WinUI depends on. `Directory.Packages.props`
-  pins them to the set the 2.5.1 metapackage lists (WinUI 2.3.9, Foundation 2.3.12,
-  InteractiveExperiences 2.1.9, Base 2.0.4), and they move together. A diff that starts using a Windows
+  pins them to the set the 2.6.4 metapackage lists (WinUI, Foundation, InteractiveExperiences and Base
+  all at 2.6.4), and they move together. A diff that starts using a Windows
   App SDK feature from another component must add that component package, or the feature is missing at
   runtime while the build stays green. A version move is an `AGENTS.md` "Ask first" item; surface it for
   `maintainer-decision` rather than judging it here.
