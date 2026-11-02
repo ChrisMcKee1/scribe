@@ -186,7 +186,7 @@ function New-ScribeMsix {
     # The Store rejects a bundle whose declared architecture does not match its payload, and an
     # emulated package would pass certification while running slowly, so assert it here.
     Test-ScribePayloadArchitecture -PublishDir $publishDir -Runtime $Runtime
-    Test-ScribeRuntimeModels -ModelsDir (Join-Path $publishDir 'models') -VerifyHashes
+    Test-ScribeRuntimeModels -ModelsDir (Join-Path $publishDir 'models') -VerifyHashes -RequireLicenses
     Write-Host '==> Runtime model payload verified.' -ForegroundColor Green
 
     # --- 3. Stage the package layout ---------------------------------------------------------------

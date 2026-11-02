@@ -89,6 +89,12 @@ jobs:
         shell: pwsh
         run: dotnet run --project tools/Scribe.AsrCheck -c Release
 
+      # The English-only model ships in its own folder; this decodes the same fixtures with it, found the way the app
+      # finds it, and fails if the check fell back to the default because its files were missing.
+      - name: Transcribe fixtures with Parakeet Unified
+        shell: pwsh
+        run: dotnet run --project tools/Scribe.AsrCheck -c Release --no-build -- --model parakeet-unified-en-0.6b-int8
+
       # Plays the committed scenario fixtures through the production Core pipeline: device formats,
       # levels, noise, timing, long dictations and their chunk seams, silence auto-stop, post-processing,
       # engine lifecycle races and history storage. Quick mode leaves out the 60 s and longer dictations

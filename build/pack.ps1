@@ -180,7 +180,7 @@ function Invoke-ScribeArchitecture {
     Write-Host "==> Overlay bundled at: $overlayExe" -ForegroundColor Green
 
     $publishedModels = Join-Path $publishDir 'models'
-    Test-ScribeRuntimeModels -ModelsDir $publishedModels -VerifyHashes
+    Test-ScribeRuntimeModels -ModelsDir $publishedModels -VerifyHashes -RequireLicenses
     Write-Host '==> Published runtime model payload verified.' -ForegroundColor Green
 
     # --- 2. Pack with Velopack ---------------------------------------------------------------------

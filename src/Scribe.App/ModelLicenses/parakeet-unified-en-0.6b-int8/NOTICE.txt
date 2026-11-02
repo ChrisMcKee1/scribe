@@ -1,0 +1,10 @@
+Parakeet Unified 0.6B (English), the speech model in this folder
+
+Licensed by NVIDIA Corporation under the NVIDIA Open Model License
+
+The agreement is NVIDIA-Open-Model-License.pdf in this folder (version released October 24, 2025), also at
+https://www.nvidia.com/content/dam/en-zz/Solutions/license-agreements/enterprise-software/nvidia-open-model-license-agreements-24-10-2025.pdf
+
+Source model: https://huggingface.co/nvidia/parakeet-unified-en-0.6b
+Converted to ONNX (int8) by the sherpa-onnx project:
+https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models

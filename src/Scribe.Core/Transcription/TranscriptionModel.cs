@@ -18,7 +18,10 @@ public sealed record TranscriptionModel(
     Uri? DownloadUri = null,
     string? ArchiveSha256 = null,
     string? ArchiveDirectory = null,
-    IReadOnlyList<TranscriptionModelFile>? DownloadFiles = null)
+    IReadOnlyList<TranscriptionModelFile>? DownloadFiles = null,
+    // The folder under a models directory that holds this model when it ships with the app. Null for the default model,
+    // which sits at the root of that directory, and for a model that only downloads.
+    string? BundledDirectory = null)
 {
     public bool IsBundled => !IsCloud && DownloadUri is null && DownloadFiles is null;
 
@@ -34,6 +37,7 @@ public sealed record TranscriptionModelFile(
 public static class TranscriptionModelCatalog
 {
     public const string DefaultId = "parakeet-tdt-0.6b-v3-int8";
+    public const string ParakeetUnifiedEnglishId = "parakeet-unified-en-0.6b-int8";
     public const string MaiTranscribe2Id = "mai-transcribe-2";
     public const string MaiTranscribe2ModelName = "MAI-Transcribe-2";
     private const string ParakeetBaseUrl =
@@ -83,6 +87,23 @@ public static class TranscriptionModelCatalog
                     93_939,
                     "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d"),
             ]),
+        // Same file names and model type as the default (a NeMo transducer), so sherpa-onnx loads it unchanged. Measured
+        // against it on 2026-11-01 (AsrCheck and the scenario suite): more English words right, less punctuation, a
+        // decode within a few percent. English only, under the NVIDIA Open Model License rather than CC-BY-4.0, whose
+        // agreement and Notice ship beside it (src/Scribe.App/ModelLicenses). It ships with the app in its own folder,
+        // which scripts/Model-Manifest.ps1 lists; the archive is the fallback for a build without it.
+        new(
+            ParakeetUnifiedEnglishId,
+            "Parakeet Unified 0.6B (English)",
+            "English-only model. Gets more English words right, with less punctuation.",
+            "English",
+            663_043_117,
+            TranscriptionModelArchitecture.NemoTransducer,
+            TransducerFiles,
+            new Uri("https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming.tar.bz2"),
+            "99f63605b3a85a54c250c0869670a687b7d6598a47bf2421515e1f839a76e150",
+            "sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming",
+            BundledDirectory: ParakeetUnifiedEnglishId),
         new(
             "moonshine-base-en-int8",
             "Moonshine Base INT8",

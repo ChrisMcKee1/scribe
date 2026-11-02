@@ -25,7 +25,9 @@ Free · Signed by Microsoft · Updated by the Store · For Intel, AMD and Arm PC
   only if you turn on audio history, on your PC, for at most 7 days and 250 MB. There's no Scribe account
   and no advertising.
 - **Offline.** The speech model, NVIDIA Parakeet, comes with Scribe and recognizes about 25 European
-  languages without being told which one you're speaking. Dictation needs no internet connection.
+  languages without being told which one you're speaking. Dictation needs no internet connection. If you
+  dictate only in English, Parakeet Unified, which also comes with Scribe, gets more of your words right;
+  choose it in Settings, Advanced.
 - **Fast.** With the speech model already loaded, a four-second generated sample was recognized in about
   0.12 seconds on our Ryzen 9 9900X test PC. Settings, Diagnostics shows the times on your PC.
 - **Types where you work.** The text goes into the app you're using: email, chat, documents, browsers,
@@ -413,7 +415,7 @@ You'll need Windows 11 and the [.NET 10 SDK](https://dotnet.microsoft.com/downlo
 ```powershell
 git clone https://github.com/ChrisMcKee1/scribe.git
 cd scribe
-pwsh ./scripts/Download-Models.ps1   # one time: the speech model, about 670 MB
+pwsh ./scripts/Download-Models.ps1   # one time: the speech models, about 1.2 GB
 dotnet build Scribe.slnx -c Debug
 dotnet run --project src/Scribe.App
 ```
@@ -432,6 +434,9 @@ day, a star on this repository helps other people find it.
 Scribe is released under the [MIT License](LICENSE). It builds on excellent open work:
 
 - **Parakeet TDT 0.6b v3**: © NVIDIA, [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/)
+- **Parakeet Unified 0.6B (English)**: licensed by NVIDIA Corporation under the
+  [NVIDIA Open Model License](https://www.nvidia.com/content/dam/en-zz/Solutions/license-agreements/enterprise-software/nvidia-open-model-license-agreements-24-10-2025.pdf).
+  The agreement and its Notice ship beside the model, in `models\parakeet-unified-en-0.6b-int8`.
 - **Moonshine**: © Useful Sensors, MIT
 - **sherpa-onnx**: Apache-2.0 (Next-gen Kaldi / k2-fsa), with **ONNX Runtime**: © Microsoft, MIT
 - **Silero VAD**: MIT

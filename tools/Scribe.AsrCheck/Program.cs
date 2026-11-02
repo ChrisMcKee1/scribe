@@ -69,13 +69,18 @@ internal static class Program
         var decoding = ArgValue(args, "--decoding") ?? TranscriptionDecoding.Greedy;
         Console.WriteLine($"  decoding={decoding}");
 
+        // A catalog id, found as the app finds it (a bundled model in its own folder included). Only the fixture checks and
+        // what runs on their recognizer (--long-audio, --channel-mix, --degraded) use it; the sweeps load the default.
+        var model = TranscriptionModelCatalog.Resolve(ArgValue(args, "--model"));
+        Console.WriteLine($"  model={model.Id}");
+
         if (args.Contains("--resources"))
         {
             var clips = fixtures.Select(f => WavReader.ReadMonoFloat(f.Path, out _)).ToList();
             return ResourceSweep.Run(args, clips, decoding);
         }
 
-        var failures = RunEngineChecks(args, fixtures, decoding);
+        var failures = RunEngineChecks(args, fixtures, decoding, model);
 
         // After the checks' recognizer is disposed, so the sweep never holds two models at once.
         if (ArgValue(args, "--threads") is { } threadList)
@@ -91,12 +96,13 @@ internal static class Program
         return failures == 0 ? 0 : 1;
     }
 
-    private static int RunEngineChecks(string[] args, List<Fixture> fixtures, string decoding)
+    private static int RunEngineChecks(string[] args, List<Fixture> fixtures, string decoding, TranscriptionModel model)
     {
         using var service = new TranscriptionService(
             new ModelLocator(new AppPaths()),
             Options.Create(new TranscriptionOptions
             {
+                ModelId = model.Id,
                 DecodingMethod = decoding,
                 AllowUnsafeDecodingMethod = true,
             }),
@@ -115,7 +121,11 @@ internal static class Program
             var result = service.Transcribe(new CapturedAudio(samples, sampleRate));
 
             var overlap = WordOverlap(fixture.Text, result.Text);
-            var ok = overlap >= MinimumWordOverlap;
+            // The service falls back to the default when the selected model's files are missing, which would let a
+            // payload without them pass on the default's decode.
+            var decodedBy = result.ModelId ?? TranscriptionModelCatalog.DefaultId;
+            var rightModel = string.Equals(decodedBy, model.Id, StringComparison.OrdinalIgnoreCase);
+            var ok = overlap >= MinimumWordOverlap && rightModel;
             if (!ok) failures++;
 
             // RealTimeFactor is decode/audio, so invert it into the "x realtime" figure the
@@ -132,6 +142,11 @@ internal static class Program
                 result.AudioDuration.TotalSeconds,
                 result.DecodeDuration.TotalMilliseconds,
                 pace));
+            if (!rightModel)
+            {
+                Console.WriteLine($"       decoded by {decodedBy}, not {model.Id}: its files were not found.");
+            }
+
             Console.WriteLine();
         }
 
