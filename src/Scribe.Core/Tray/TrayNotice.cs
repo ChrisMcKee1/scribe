@@ -72,7 +72,13 @@ public static class TrayNotices
     public static TrayNotice CopiedRecentDictation() => new("Copied", "That dictation is on the clipboard. Press Ctrl+V to paste it.", TrayNoticeKind.Info);
     public static TrayNotice ClipboardBusy() => new("Couldn't copy", "Another app may be using the clipboard. Try again in a moment.", TrayNoticeKind.Error, TrayNoticeAction.RetryCopy);
     public static TrayNotice QuickAddOpenFailed() => new("Couldn't open Add to dictionary", "Try again, or add the word in Settings, Dictionary.", TrayNoticeKind.Error, TrayNoticeAction.OpenSettingsDictionary);
-    public static TrayNotice QuickAddSavedAndClosed() => new("Saved to your dictionary", "Scribe uses it from your next dictation.", TrayNoticeKind.Info);
+    // corrected: the save also fixed the tray's copy of the dictation the word came from.
+    public static TrayNotice QuickAddSavedAndClosed(bool corrected = false) => new(
+        "Saved to your dictionary",
+        corrected
+            ? "Scribe uses it from your next dictation, and copying that dictation from the tray now gives the fixed text."
+            : "Scribe uses it from your next dictation.",
+        TrayNoticeKind.Info);
     public static TrayNotice QuickAddSavedButNotReloaded() => new("Saved, but not in use yet", "Scribe saved your word but couldn't start using it. Quit and reopen Scribe to use it.", TrayNoticeKind.Warning);
     public static TrayNotice TypingFailed(bool incomplete) => new("Couldn't type your dictation", incomplete ? "This app didn't accept all of the text. Right-click the Scribe icon and choose Copy last dictation, then paste it." : "The window changed before Scribe finished typing. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, TrayNoticeAction.CopyLastDictation);
     public static TrayNotice SoundSettingsFailed() => new("Couldn't open sound settings", "Open Windows Settings > System > Sound.", TrayNoticeKind.Error);

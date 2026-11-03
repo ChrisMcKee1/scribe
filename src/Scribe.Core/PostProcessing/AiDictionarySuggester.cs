@@ -247,8 +247,9 @@ public static class AiDictionarySuggester
     /// Parses the model's response into dictionary entries (spoken form to written form), tolerating
     /// prose, code fences, or think-blocks around the JSON array. Entries are cleaned, de-duplicated by
     /// spoken form, filtered against <paramref name="existing"/> (so a term already in the dictionary is
-    /// never re-suggested), and capped at <paramref name="maxSuggestions"/>. Never throws; a response
-    /// that cannot be parsed yields an empty list.
+    /// never re-suggested, and nothing is suggested that writes a mistake an enabled entry fixes), and
+    /// capped at <paramref name="maxSuggestions"/>. Never throws; a response that cannot be parsed yields
+    /// an empty list.
     /// </summary>
     public static IReadOnlyList<DictionaryEntry> ParseSuggestions(
         string? response,
@@ -258,6 +259,12 @@ public static class AiDictionarySuggester
         ArgumentNullException.ThrowIfNull(existing);
 
         var knownWrittenBySpoken = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // History keeps every dictation as it was typed, including the ones a rule was added to fix, so a model reading
+        // it sees the mistake as one of the user's own terms and can suggest a rule that writes it back ("m c b" to "MCB"
+        // beside "MCB" to "MCP"). Only enabled entries count: a rule the user switched off no longer calls its spoken
+        // form a mistake.
+        var fixedAsByMistake = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var entry in existing)
         {
             if (entry is not null && !string.IsNullOrWhiteSpace(entry.Pattern))
@@ -265,7 +272,12 @@ public static class AiDictionarySuggester
                 var pattern = Normalize(entry.Pattern);
                 if (pattern.Length > 0)
                 {
-                    knownWrittenBySpoken.TryAdd(pattern, Normalize(entry.Replacement));
+                    var replacement = Normalize(entry.Replacement);
+                    knownWrittenBySpoken.TryAdd(pattern, replacement);
+                    if (entry.Enabled)
+                    {
+                        fixedAsByMistake.TryAdd(pattern, replacement);
+                    }
                 }
             }
         }
@@ -290,10 +302,14 @@ public static class AiDictionarySuggester
 
             // Identical spoken/written is a no-op; a term already in the dictionary with the same written
             // replacement is a duplicate (whereas a different written replacement self-heals the rule); a
-            // spoken form already accepted in this batch is a repeat.
+            // written form an enabled entry rewrites into something else is that entry's mistake, while one it
+            // writes exactly (a casing rule's own spelling) is fine; a spoken form already accepted in this
+            // batch is a repeat.
             if (string.Equals(spoken, written, StringComparison.Ordinal) ||
                 (knownWrittenBySpoken.TryGetValue(spoken, out var existingWritten) &&
                  string.Equals(existingWritten, written, StringComparison.Ordinal)) ||
+                (fixedAsByMistake.TryGetValue(written, out var fixedAs) &&
+                 !string.Equals(fixedAs, written, StringComparison.Ordinal)) ||
                 !takenSpoken.Add(spoken))
             {
                 continue;

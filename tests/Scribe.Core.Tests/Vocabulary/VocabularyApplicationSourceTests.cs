@@ -67,7 +67,7 @@ public sealed class VocabularyApplicationSourceTests
         // for it, off the dispatcher, before saying the change is in effect.
         var quickAdd = Body(app, "private async void OnQuickAddSaved(");
         var quickReload = quickAdd.IndexOf("var refresh = await Task.Run(() => controller.ReloadVocabulary());", StringComparison.Ordinal);
-        var saved = quickAdd.IndexOf("TrayNotices.QuickAddSavedAndClosed()", StringComparison.Ordinal);
+        var saved = quickAdd.IndexOf("TrayNotices.QuickAddSavedAndClosed(repaired)", StringComparison.Ordinal);
         Assert.True(quickReload > 0 && quickReload < saved, "Quick add says a rule was saved before dictation can use it.");
         Assert.Contains("if (!refresh.Applied)", quickAdd, StringComparison.Ordinal);
         Assert.Contains("TrayNotices.QuickAddSavedButNotReloaded()", quickAdd, StringComparison.Ordinal);

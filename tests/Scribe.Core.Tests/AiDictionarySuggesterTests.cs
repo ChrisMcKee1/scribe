@@ -104,6 +104,69 @@ public sealed class AiDictionarySuggesterTests
         Assert.Equal("kubectl", result[1].Replacement);
     }
 
+    // History keeps a dictation as it was typed even after a rule was added to fix it, so the model can read the
+    // mistake as one of the user's terms and suggest writing it back.
+    [Fact]
+    public void ParseSuggestions_drops_a_suggestion_that_writes_a_mistake_an_enabled_entry_fixes()
+    {
+        var json =
+            """
+            [
+              {"spoken":"m c b","written":"MCB"},
+              {"spoken":"em see bee","written":"mcb"},
+              {"spoken":"post gress","written":"post gres"},
+              {"spoken":"a k s","written":"AKS"}
+            ]
+            """;
+        var existing = new[]
+        {
+            DictionaryEntry.New("MCB", "MCP"),
+            DictionaryEntry.New("post gres", "PostgreSQL", wholeWord: false),
+        };
+
+        var result = AiDictionarySuggester.ParseSuggestions(json, existing);
+
+        var kept = Assert.Single(result);
+        Assert.Equal("a k s", kept.Pattern);
+        Assert.Equal("AKS", kept.Replacement);
+    }
+
+    [Fact]
+    public void ParseSuggestions_keeps_a_suggestion_that_writes_exactly_what_an_entry_writes()
+    {
+        var json =
+            """
+            [
+              {"spoken":"git hub","written":"GitHub"},
+              {"spoken":"get hub","written":"Github"},
+              {"spoken":"a i studio","written":"AI"}
+            ]
+            """;
+        var existing = new[]
+        {
+            DictionaryEntry.New("github", "GitHub"),
+            DictionaryEntry.New("AI", "AI"),
+        };
+
+        var result = AiDictionarySuggester.ParseSuggestions(json, existing);
+
+        Assert.Equal(new[] { "git hub", "a i studio" }, result.Select(entry => entry.Pattern));
+        Assert.Equal(new[] { "GitHub", "AI" }, result.Select(entry => entry.Replacement));
+    }
+
+    [Fact]
+    public void ParseSuggestions_does_not_treat_a_disabled_entry_s_spoken_form_as_a_mistake()
+    {
+        var json = """[{"spoken":"m c b","written":"MCB"}]""";
+        var existing = new[] { new DictionaryEntry(7, "MCB", "MCP", WholeWord: true, Enabled: false) };
+
+        var result = AiDictionarySuggester.ParseSuggestions(json, existing);
+
+        var kept = Assert.Single(result);
+        Assert.Equal("m c b", kept.Pattern);
+        Assert.Equal("MCB", kept.Replacement);
+    }
+
     [Fact]
     public void ParseSuggestions_dedupes_by_spoken_form_and_skips_no_ops_and_blanks()
     {
