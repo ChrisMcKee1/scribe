@@ -2585,7 +2585,6 @@ public partial class App : Application
             // stored now; it is said to be written only once that generation is what a dictation is given.
             var controller = _controller!;
             var refresh = await Task.Run(() => controller.ReloadVocabulary());
-            var corrected = repaired ? " Your last dictation was corrected to match." : string.Empty;
             if (!refresh.Applied)
             {
                 ShowTrayNotice(TrayNotices.QuickAddSavedButNotReloaded());
@@ -2594,7 +2593,8 @@ public partial class App : Application
 
             if (result.CloseAfterSaving)
             {
-                ShowTrayNotice(TrayNotices.QuickAddSavedAndClosed());
+                // With the window open, its own status already says the dictation was fixed; closed, only this can.
+                ShowTrayNotice(TrayNotices.QuickAddSavedAndClosed(repaired));
             }
         }
         catch (Exception ex)
