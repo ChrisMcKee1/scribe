@@ -2,6 +2,12 @@ import XCTest
 
 @testable import Scribe
 
+/// The formatting preferences a test changes while a model reads them.
+@MainActor
+private final class FormattingSettingsBox {
+    var value = DictationFormattingSettings()
+}
+
 final class SnippetAndProfileSettingsModelTests: XCTestCase {
     private var directory: StorageTestDirectory!
 
@@ -171,6 +177,68 @@ final class SnippetAndProfileSettingsModelTests: XCTestCase {
         await model.delete(profile)
         XCTAssertTrue(try store.fetchAppProfiles().isEmpty)
         XCTAssertEqual(refreshes.count, 2)
+    }
+
+    @MainActor
+    func testAProfileKeepsItsTextFormatAndTheDraftsGoBackToTheDefault() async throws {
+        let store = try makeStore()
+        let drafts = SettingsDrafts()
+        let model = AppProfileSettingsModel(
+            access: .live(store), drafts: drafts, formatting: { DictationFormattingSettings() }, onChanged: {})
+        drafts.profileName = "Chat"
+        drafts.profileBundleIdentifiers = "com.tinyspeck.slackmacgap"
+        drafts.profileNewlineMode = .keepNewlines
+        drafts.profileTextFormat = .markdownWithFormatting
+        XCTAssertEqual(drafts.unsavedSections, ["App profiles"])
+
+        await model.addFromDrafts()
+
+        XCTAssertEqual(try store.fetchAppProfiles().map(\.textFormat), [.markdownWithFormatting])
+        XCTAssertNil(drafts.profileTextFormat)
+        XCTAssertTrue(drafts.unsavedSections.isEmpty)
+    }
+
+    /// Markdown needs its line breaks, so a profile whose line-break rule takes them out is refused, as Windows' Save
+    /// refuses it, judged on the format the profile would use and only while app-aware formatting is on.
+    @MainActor
+    func testAMarkdownProfileWhoseLineBreakRuleUsesOneLineIsRefused() async throws {
+        let store = try makeStore()
+        let drafts = SettingsDrafts()
+        let settings = FormattingSettingsBox()
+        let model = AppProfileSettingsModel(
+            access: .live(store), drafts: drafts, formatting: { settings.value }, onChanged: {})
+        drafts.profileName = "Notes"
+        drafts.profileBundleIdentifiers = "md.obsidian"
+        drafts.profileTextFormat = .markdownSource
+
+        drafts.profileNewlineMode = .alwaysFlatten
+        XCTAssertTrue(model.hasNewlineConflict)
+        XCTAssertFalse(model.canAdd)
+
+        // Automatic flattens only in the known one-line apps, so it conflicts only when the profile lists one.
+        drafts.profileNewlineMode = .smartFlatten
+        XCTAssertFalse(model.hasNewlineConflict)
+        drafts.profileBundleIdentifiers = "md.obsidian, com.apple.Terminal"
+        XCTAssertTrue(model.hasNewlineConflict)
+
+        drafts.profileTextFormat = .plain
+        XCTAssertFalse(model.hasNewlineConflict)
+
+        // A profile that uses the default conflicts when the default is Markdown.
+        drafts.profileTextFormat = nil
+        XCTAssertFalse(model.hasNewlineConflict)
+        settings.value.defaultTextFormat = .markdownWithFormatting
+        XCTAssertTrue(model.hasNewlineConflict)
+
+        // With app-aware formatting off the format is ignored, so nothing conflicts.
+        settings.value.appAwareFormatting = false
+        XCTAssertFalse(model.hasNewlineConflict)
+        XCTAssertTrue(model.canAdd)
+
+        settings.value.appAwareFormatting = true
+        await model.addFromDrafts()
+        XCTAssertTrue(try store.fetchAppProfiles().isEmpty)
+        XCTAssertEqual(drafts.profileName, "Notes")
     }
 
     @MainActor

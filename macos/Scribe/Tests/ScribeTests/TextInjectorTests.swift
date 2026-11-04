@@ -174,7 +174,8 @@ final class InjectionHarness {
 
     init(
         operations: PasteboardOperations = .live,
-        method: InjectionMethod = .accessibilityThenPaste
+        method: InjectionMethod = .accessibilityThenPaste,
+        maximumKeptBytes: Int = PasteboardBorrower.maximumKeptBytes
     ) {
         let pasteboard = NSPasteboard(
             name: NSPasteboard.Name("com.scribe.macos.tests.injector.\(UUID().uuidString)"))
@@ -200,7 +201,8 @@ final class InjectionHarness {
         self.injector = TextInjector(
             system: system,
             pacer: pacer,
-            borrower: PasteboardBorrower(pasteboard: pasteboard, operations: operations),
+            borrower: PasteboardBorrower(
+                pasteboard: pasteboard, operations: operations, maximumKeptBytes: maximumKeptBytes),
             method: method,
             logSink: { line in log.lines.append(line) })
     }
@@ -221,6 +223,22 @@ final class InjectionHarness {
         item.setData(Data("<b>\(text)</b>".utf8), forType: .html)
         pasteboard.writeObjects([item])
     }
+
+    /// Two items, as an app copying an image and a file reference would leave them, with a type only that app
+    /// knows.
+    func copyItemsAsAnotherApplication() {
+        pasteboard.clearContents()
+        let image = NSPasteboardItem()
+        image.setData(InjectionHarness.imageBytes, forType: .png)
+        image.setString("Image caption", forType: .string)
+        let other = NSPasteboardItem()
+        other.setData(InjectionHarness.privateBytes, forType: InjectionHarness.privateType)
+        pasteboard.writeObjects([image, other])
+    }
+
+    static let imageBytes = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01])
+    static let privateBytes = Data("app state".utf8)
+    static let privateType = NSPasteboard.PasteboardType("com.example.other.private-state")
 
     func moveFocusToAnotherApplication() {
         system.focus = .element(otherField, processIdentifier: InjectionHarness.otherProcess)
@@ -737,6 +755,7 @@ final class TextInjectorTests: XCTestCase {
         XCTAssertEqual(level(InjectionResult(delivery: .targetChanged)).rawValue, OSLogType.default.rawValue)
         XCTAssertEqual(level(InjectionResult(delivery: .cancelled)).rawValue, OSLogType.default.rawValue)
         XCTAssertEqual(level(InjectionResult(delivery: .typedPartially)).rawValue, OSLogType.error.rawValue)
+        XCTAssertEqual(level(InjectionResult(delivery: .pastedWithoutSpace)).rawValue, OSLogType.error.rawValue)
         XCTAssertEqual(level(InjectionResult(delivery: .accessibilityUnconfirmed)).rawValue, OSLogType.error.rawValue)
         XCTAssertEqual(level(InjectionResult(delivery: .targetUnknown)).rawValue, OSLogType.error.rawValue)
         XCTAssertEqual(level(restoreFailed).rawValue, OSLogType.error.rawValue)
@@ -744,13 +763,13 @@ final class TextInjectorTests: XCTestCase {
 
     func testOnlyDeliveriesThatMayHaveLandedCountAsReachingTheTarget() {
         let reached: Set<InjectionDelivery> = [
-            .accessibility, .pasted, .typed, .typedPartially, .accessibilityUnconfirmed,
+            .accessibility, .pasted, .pastedWithoutSpace, .typed, .typedPartially, .accessibilityUnconfirmed,
         ]
         let complete: Set<InjectionDelivery> = [.accessibility, .pasted, .typed, .nothingToInsert]
         let all: [InjectionDelivery] = [
-            .accessibility, .pasted, .typed, .typedPartially, .accessibilityUnconfirmed, .nothingToInsert,
-            .targetChanged, .targetUnknown, .targetUnresponsive, .noFocusedElement, .accessibilityDenied, .cancelled,
-            .failed,
+            .accessibility, .pasted, .pastedWithoutSpace, .typed, .typedPartially, .accessibilityUnconfirmed,
+            .nothingToInsert, .targetChanged, .targetUnknown, .targetUnresponsive, .noFocusedElement,
+            .accessibilityDenied, .cancelled, .failed,
         ]
 
         for delivery in all {
@@ -761,7 +780,9 @@ final class TextInjectorTests: XCTestCase {
     }
 
     func testEveryBorrowRefusalIsReportedUnderItsOwnName() {
-        let refusals: [PasteboardBorrowRefusal] = [.nonTextContent, .unreadable, .contended, .writeFailed, .superseded]
+        let refusals: [PasteboardBorrowRefusal] = [
+            .nonTextContent, .unreadable, .contended, .writeFailed, .superseded, .tooLarge, .markedPrivate,
+        ]
 
         for refusal in refusals {
             XCTAssertEqual(ClipboardPasteOutcome(refusal).rawValue, refusal.rawValue)
@@ -1109,6 +1130,369 @@ final class TextInjectorTests: XCTestCase {
             await Task.yield()
         }
         XCTAssertTrue(condition(), "The awaited state was never reached.", file: file, line: line)
+    }
+
+    // MARK: - Markdown pastes (app-aware formatting)
+
+    private let markdownPaste = PasteRequest(keepsWholePasteboard: true, html: nil)
+
+    @MainActor
+    func testAMarkdownPasteGoesStraightToThePasteboardWithoutTheAccessibilityWrite() async {
+        for method in [InjectionMethod.unicodeTyping, .accessibilityThenPaste] {
+            let harness = InjectionHarness(method: method)
+            defer { harness.releasePasteboard() }
+            harness.copyAsAnotherApplication(usersText)
+            harness.system.accessibilityOutcome = .inserted
+            let observed = InjectionObservations()
+            harness.system.onPost = { _ in
+                observed.pastedTexts.append(harness.pasteboard.string(forType: .string))
+            }
+
+            let result = await harness.injector.inject(text: "- one\n- two", paste: markdownPaste)
+
+            XCTAssertEqual(result, InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored))
+            XCTAssertEqual(harness.system.accessibilityAttempts, 0)
+            XCTAssertEqual(harness.system.postedKeystrokes, [.paste])
+            XCTAssertEqual(observed.pastedTexts, ["- one\n- two"])
+            XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+        }
+    }
+
+    /// A screenshot or formatted text on the pasteboard no longer turns a Markdown paste into typing, which would
+    /// double every list marker: it is kept, every type of it, and put back once the paste has settled.
+    @MainActor
+    func testAMarkdownPasteKeepsARichPasteboardAndPutsEveryTypeBack() async throws {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyRichTextAsAnotherApplication(usersText)
+        let observed = InjectionObservations()
+        harness.system.onPost = { _ in
+            observed.pastedTexts.append(harness.pasteboard.string(forType: .string))
+            observed.pastedTypes.append(harness.pasteboard.pasteboardItems?.first?.types ?? [])
+        }
+
+        let result = await harness.injector.inject(text: "- one\n- two ", paste: markdownPaste)
+
+        XCTAssertEqual(
+            result, InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored, keptItemCount: 1))
+        XCTAssertEqual(harness.system.postedKeystrokes, [.paste, .text(Array(" ".utf16))])
+        XCTAssertEqual(observed.pastedTexts.first, "- one\n- two")
+        XCTAssertFalse(observed.pastedTypes.first?.contains(.html) ?? true)
+        XCTAssertEqual(harness.pasteboard.pasteboardItems?.count, 1)
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+        XCTAssertEqual(harness.pasteboard.data(forType: .html), Data("<b>\(usersText)</b>".utf8))
+        let restoredTypes = try XCTUnwrap(harness.pasteboard.pasteboardItems?.first?.types)
+        XCTAssertTrue(restoredTypes.contains(PasteboardBorrower.transientType))
+        XCTAssertTrue(restoredTypes.contains(PasteboardBorrower.concealedType))
+    }
+
+    @MainActor
+    func testAMarkdownPasteKeepsEveryItemInItsOrder() async throws {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyItemsAsAnotherApplication()
+
+        let result = await harness.injector.inject(text: "1. first\n2. second", paste: markdownPaste)
+
+        XCTAssertEqual(
+            result, InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored, keptItemCount: 2))
+        let items = try XCTUnwrap(harness.pasteboard.pasteboardItems)
+        XCTAssertEqual(items.count, 2)
+        XCTAssertEqual(items.first?.data(forType: .png), InjectionHarness.imageBytes)
+        XCTAssertEqual(items.first?.string(forType: .string), "Image caption")
+        XCTAssertEqual(items.last?.data(forType: InjectionHarness.privateType), InjectionHarness.privateBytes)
+        XCTAssertFalse(items.last?.types.contains(PasteboardBorrower.concealedType) ?? true)
+    }
+
+    @MainActor
+    func testAFormattedCopyIsWrittenBesideTheTextAndNeverKept() async throws {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        let observed = InjectionObservations()
+        harness.system.onPost = { _ in
+            observed.pastedTexts.append(harness.pasteboard.string(forType: .html))
+            observed.events.append(harness.pasteboard.string(forType: .string) ?? "")
+        }
+
+        let result = await harness.injector.inject(
+            text: "**bold**",
+            paste: PasteRequest(keepsWholePasteboard: true, html: "<p><strong>bold</strong></p>"))
+
+        XCTAssertEqual(
+            result, InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored, htmlPlaced: true))
+        XCTAssertEqual(observed.pastedTexts, ["<meta charset=\"utf-8\"><p><strong>bold</strong></p>"])
+        XCTAssertEqual(observed.events, ["**bold**"])
+        XCTAssertNil(harness.pasteboard.data(forType: .html))
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+    }
+
+    /// A refused Markdown paste types the Markdown text, never the formatted copy.
+    @MainActor
+    func testARefusedMarkdownPasteTypesTheMarkdown() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        harness.pacer.onPause = { pause in
+            if pause == .beforePaste {
+                harness.copyAsAnotherApplication("Copied by another app before Command-V.")
+            }
+        }
+
+        let result = await harness.injector.inject(
+            text: "**bold**", paste: PasteRequest(keepsWholePasteboard: true, html: "<p><strong>bold</strong></p>"))
+
+        XCTAssertEqual(result, InjectionResult(delivery: .typed, clipboard: .superseded, restore: .superseded))
+        XCTAssertEqual(typedText(harness.system.postedKeystrokes), "**bold**")
+    }
+
+    /// A password manager marks its copy concealed or transient so that nothing keeps it; a Markdown paste leaves
+    /// such a pasteboard alone and types instead.
+    @MainActor
+    func testAMarkdownPasteLeavesAnotherAppsPrivateCopyAlone() async {
+        for marker in [PasteboardBorrower.concealedType, PasteboardBorrower.transientType] {
+            let harness = InjectionHarness()
+            defer { harness.releasePasteboard() }
+            harness.pasteboard.clearContents()
+            let item = NSPasteboardItem()
+            item.setString("hunter2", forType: .string)
+            item.setData(Data(), forType: marker)
+            harness.pasteboard.writeObjects([item])
+            let changeCount = harness.pasteboard.changeCount
+
+            let result = await harness.injector.inject(text: "- one", paste: markdownPaste)
+
+            XCTAssertEqual(result, InjectionResult(delivery: .typed, clipboard: .markedPrivate), marker.rawValue)
+            XCTAssertEqual(harness.pasteboard.changeCount, changeCount)
+            XCTAssertEqual(harness.pasteboard.string(forType: .string), "hunter2")
+        }
+    }
+
+    @MainActor
+    func testAMarkdownPasteLargerThanItsBoundIsTypedAndLeftAlone() async {
+        let harness = InjectionHarness(maximumKeptBytes: 8)
+        defer { harness.releasePasteboard() }
+        harness.copyRichTextAsAnotherApplication(usersText)
+        let changeCount = harness.pasteboard.changeCount
+
+        let result = await harness.injector.inject(text: "- one", paste: markdownPaste)
+
+        XCTAssertEqual(result, InjectionResult(delivery: .typed, clipboard: .tooLarge))
+        XCTAssertEqual(harness.pasteboard.changeCount, changeCount)
+        XCTAssertNotNil(harness.pasteboard.data(forType: .html))
+    }
+
+    @MainActor
+    func testAMarkdownPasteWhoseTypeCannotBeReadIsTypedAndLeftAlone() async {
+        var operations = PasteboardOperations.live
+        operations.itemData = { pasteboard in
+            pasteboard.pasteboardItems.map { items in
+                items.map { item in
+                    item.types.map { type in (type: type, data: type == .html ? nil : item.data(forType: type)) }
+                }
+            }
+        }
+        let harness = InjectionHarness(operations: operations)
+        defer { harness.releasePasteboard() }
+        harness.copyRichTextAsAnotherApplication(usersText)
+        let changeCount = harness.pasteboard.changeCount
+
+        let result = await harness.injector.inject(text: "- one", paste: markdownPaste)
+
+        XCTAssertEqual(result, InjectionResult(delivery: .typed, clipboard: .unreadable))
+        XCTAssertEqual(harness.pasteboard.changeCount, changeCount)
+    }
+
+    @MainActor
+    func testConsecutiveMarkdownPastesKeepBorrowingAfterScribesOwnRestore() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyRichTextAsAnotherApplication(usersText)
+
+        let first = await harness.injector.inject(text: "- one", paste: markdownPaste)
+        let second = await harness.injector.inject(text: "- two", paste: markdownPaste)
+
+        let kept = InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored, keptItemCount: 1)
+        XCTAssertEqual(first, kept)
+        XCTAssertEqual(second, kept)
+        XCTAssertEqual(harness.system.postedKeystrokes, [.paste, .paste])
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+        XCTAssertEqual(harness.pasteboard.data(forType: .html), Data("<b>\(usersText)</b>".utf8))
+    }
+
+    /// Without the Markdown request the borrow keeps plain text only, as before app-aware formatting.
+    @MainActor
+    func testAPlainPasteStillRefusesARichPasteboard() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyItemsAsAnotherApplication()
+
+        let result = await harness.injector.inject(
+            text: "- one", paste: PasteRequest(keepsWholePasteboard: false, html: nil))
+
+        XCTAssertEqual(result, InjectionResult(delivery: .typed, clipboard: .nonTextContent))
+    }
+
+    // MARK: - The space after a dictation is typed after the paste (Windows 0.5.19)
+
+    func testOnlyTheTrailingRunOfSpacesIsSplitOffAPaste() {
+        let cases: [(String, String, String)] = [
+            ("", "", ""),
+            ("Hello world.", "Hello world.", ""),
+            ("Hello world. ", "Hello world.", " "),
+            ("Hello world.   ", "Hello world.", "   "),
+            ("Two words  here ", "Two words  here", " "),
+            ("Ends in a tab\t", "Ends in a tab\t", ""),
+            ("Ends in a line break\n", "Ends in a line break\n", ""),
+            ("Space then a tab \t", "Space then a tab \t", ""),
+            ("Line break then a space\n ", "Line break then a space\n", " "),
+            ("No-break space\u{00A0}", "No-break space\u{00A0}", ""),
+            ("Ideographic space\u{3000}", "Ideographic space\u{3000}", ""),
+            ("   ", "", "   "),
+            ("Cafe\u{0301} ", "Cafe\u{0301}", " "),
+        ]
+        for (text, pasted, typedAfter) in cases {
+            let split = TextInjector.splitTrailingSpaces(text)
+            XCTAssertEqual(split.pasted, pasted, text.debugDescription)
+            XCTAssertEqual(split.typedAfter, typedAfter, text.debugDescription)
+            XCTAssertEqual(split.pasted + split.typedAfter, text, text.debugDescription)
+        }
+    }
+
+    @MainActor
+    func testThePasteLeavesTheTrailingSpaceOffAndTypesItOnceThePasteboardIsBack() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        let observed = InjectionObservations()
+        harness.system.onPost = { _ in
+            observed.pastedTexts.append(harness.pasteboard.string(forType: .string))
+        }
+
+        let result = await harness.injector.inject(text: dictation + " ")
+
+        XCTAssertEqual(result, InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored))
+        XCTAssertEqual(harness.system.postedKeystrokes, [.paste, .text(Array(" ".utf16))])
+        XCTAssertTrue(harness.system.posted.allSatisfy { $0.processIdentifier == InjectionHarness.editorProcess })
+        // The pasteboard held the dictation without its space at Command-V, and the user's own text again by the
+        // time the space was typed.
+        XCTAssertEqual(observed.pastedTexts, [dictation, usersText])
+        XCTAssertEqual(harness.pacer.pauses, [.beforePaste, .afterPaste])
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+    }
+
+    @MainActor
+    func testEverySpaceOfTheTrailingRunIsTypedAfterThePaste() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+
+        let result = await harness.injector.inject(text: "Hello world.   ")
+
+        XCTAssertEqual(result, InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored))
+        XCTAssertEqual(harness.system.postedKeystrokes, [.paste, .text(Array("   ".utf16))])
+    }
+
+    @MainActor
+    func testATrailingTabOrLineBreakIsPastedNeverTyped() async {
+        for ending in ["\t", "\n", " \n"] {
+            let harness = InjectionHarness()
+            defer { harness.releasePasteboard() }
+            let observed = InjectionObservations()
+            harness.system.onPost = { _ in
+                observed.pastedTexts.append(harness.pasteboard.string(forType: .string))
+            }
+
+            let result = await harness.injector.inject(text: "Hello world." + ending)
+
+            XCTAssertEqual(
+                result, InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored),
+                ending.debugDescription)
+            XCTAssertEqual(harness.system.postedKeystrokes, [.paste], ending.debugDescription)
+            XCTAssertEqual(observed.pastedTexts, ["Hello world." + ending], ending.debugDescription)
+        }
+    }
+
+    @MainActor
+    func testTextThatIsOnlySpacesIsTypedWholeAndNeverBorrowsThePasteboard() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        let changeCount = harness.pasteboard.changeCount
+
+        let result = await harness.injector.inject(text: "  ")
+
+        XCTAssertEqual(result, InjectionResult(delivery: .typed))
+        XCTAssertEqual(harness.system.postedKeystrokes, [.text(Array("  ".utf16))])
+        XCTAssertEqual(harness.pasteboard.changeCount, changeCount)
+    }
+
+    @MainActor
+    func testARefusedPasteTypesTheWholeTextSpaceIncluded() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyRichTextAsAnotherApplication(usersText)
+
+        let result = await harness.injector.inject(text: "Hello world. ")
+
+        XCTAssertEqual(result, InjectionResult(delivery: .typed, clipboard: .nonTextContent))
+        XCTAssertEqual(typedText(harness.system.postedKeystrokes), "Hello world. ")
+        XCTAssertFalse(harness.system.postedKeystrokes.contains(.paste))
+    }
+
+    @MainActor
+    func testASpaceThatCannotFollowThePasteLeavesTheDeliveryIncompleteAndNeverRetypesTheText() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        harness.pacer.onPause = { pause in
+            if pause == .afterPaste {
+                harness.moveFocusToAnotherApplication()
+            }
+        }
+
+        let result = await harness.injector.inject(text: dictation + " ")
+
+        XCTAssertEqual(result, InjectionResult(delivery: .pastedWithoutSpace, clipboard: .pasted, restore: .restored))
+        XCTAssertTrue(result.mayHaveReachedTarget)
+        XCTAssertFalse(result.isComplete)
+        XCTAssertEqual(harness.system.postedKeystrokes, [.paste])
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+    }
+
+    @MainActor
+    func testASpaceThatCannotBePostedLeavesThePasteIncomplete() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.system.rejects = { $0 == .text(Array(" ".utf16)) }
+
+        let result = await harness.injector.inject(text: "Hello world. ")
+
+        XCTAssertEqual(result, InjectionResult(delivery: .pastedWithoutSpace, clipboard: .pasted, restore: .restored))
+        XCTAssertEqual(harness.system.postedKeystrokes, [.paste])
+    }
+
+    @MainActor
+    func testCancellingAfterCommandVStillReportsThePasteWhenTheSpaceIsDue() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        harness.pacer.holdNext = .afterPaste
+        let observed = InjectionObservations()
+
+        let delivery = Task { @MainActor in
+            observed.first = await harness.injector.inject(text: dictation + " ")
+        }
+        await yieldUntil { harness.pacer.isHolding }
+        delivery.cancel()
+        harness.pacer.releaseHeldPause()
+        await delivery.value
+
+        // The text went in with Command-V, so the delivery is never reported as cancelled, which would leave it
+        // out of history; the space the cancellation stopped is what is missing.
+        XCTAssertEqual(
+            observed.first, InjectionResult(delivery: .pastedWithoutSpace, clipboard: .pasted, restore: .restored))
+        XCTAssertEqual(harness.system.postedKeystrokes, [.paste])
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
     }
 
     private func typedText(_ keystrokes: [InjectionKeystroke]) -> String {

@@ -96,7 +96,10 @@ protocol DictationTargeting {
 /// Delivery into the focused application (`TextInjector`).
 @MainActor
 protocol DictationInjecting: AnyObject {
-    func inject(text: String, into target: InjectionTarget?, shiftReturnLineBreaks: Bool) async -> InjectionResult
+    /// `paste` is the paste a Markdown format asks for, nil to deliver the usual way (typing).
+    func inject(
+        text: String, into target: InjectionTarget?, shiftReturnLineBreaks: Bool, paste: PasteRequest?
+    ) async -> InjectionResult
 
     /// The shutdown barrier: returns once every delivery requested before it has finished, however long that takes.
     func waitUntilIdle() async

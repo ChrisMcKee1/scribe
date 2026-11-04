@@ -239,8 +239,13 @@ so resizing cannot subtract the title bar from the space reserved for the page a
   invalidate the existing recovery UI through the same history-cleared callback.
 - User dictionary (CSV import/export, history-mined suggestions, unused-entry cleanup), Word packs
   (all 11 built-in packs, custom CSV import/export, staged editing with undo, redo, save and discard,
-  per-pack AI vocabulary permission), voice snippets, and per-app profiles (writing style + newline
-  mode by focused app)
+  per-pack AI vocabulary permission), voice snippets, and per-app profiles (writing style, newline
+  mode and text format by focused app)
+- App-aware formatting, on by default: literal Markdown pasted as one piece into known Markdown apps (Claude,
+  Slack, VS Code, Obsidian and others), and in Teams, Microsoft Copilot and Codex also an HTML copy so lists, bold,
+  links and code show as formatting. A Markdown paste puts back whatever was on the clipboard, a screenshot or
+  formatted text included, and types its trailing space after the paste. Use Plain Text Once in the menu bar menu
+  arms the next recording for plain text, and Smart Flatten keeps Excel on one line
 - AI cleanup across Foundry Local (default), Ollama and LM Studio at their own addresses (with a model list
   read from the app), any OpenAI-compatible endpoint, and Microsoft Foundry cloud (Azure CLI or service-principal auth,
   secrets in Keychain, an https resource or pasted Foundry project URL works). Each provider is

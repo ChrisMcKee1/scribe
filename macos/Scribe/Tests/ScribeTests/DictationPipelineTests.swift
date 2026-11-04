@@ -839,6 +839,7 @@ final class DictationPipelineTests: XCTestCase {
             (.targetUnresponsive, .textKept, .notInserted),
             (.noFocusedElement, .textKept, .notInserted),
             (.typedPartially, .partlyInserted, .partlyInserted),
+            (.pastedWithoutSpace, .partlyInserted, .partlyInserted),
             (.accessibilityUnconfirmed, .mayNotBeInserted, .mayNotBeInserted),
             (.accessibilityDenied, .accessibilityNeeded, .accessibilityNeeded),
         ]
