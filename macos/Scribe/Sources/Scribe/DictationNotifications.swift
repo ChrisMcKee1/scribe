@@ -48,6 +48,7 @@ struct DictationNotice: Equatable, Sendable {
         case copyFailed
         case quickAdd
         case cleanupActivation
+        case formattingConflict
     }
 
     let kind: Kind
@@ -231,6 +232,12 @@ struct DictationNotice: Equatable, Sendable {
         body: "Scribe saved your word but couldn't start using it. Quit and reopen Scribe to use it.",
         recoveryText: nil, settingsPane: nil)
 
+    /// An app profile asked for Markdown where its line-break rule uses one line, so the dictation was typed as plain
+    /// text (Windows' `TrayNotices.AppFormattingConflict`).
+    static let formattingConflict = DictationNotice(
+        kind: .formattingConflict, title: "Literal Markdown source wasn't used",
+        body: DictationFormattingText.runtimeNewlineConflict, recoveryText: nil, settingsPane: nil)
+
     static func cleanupActivation(_ enabled: Bool) -> DictationNotice {
         DictationNotice(
             kind: .cleanupActivation, title: enabled ? "AI cleanup is on" : "AI cleanup is off",
@@ -254,7 +261,7 @@ struct DictationNotice: Equatable, Sendable {
     var opensScribeSettings: Bool {
         switch kind {
         case .transcriptionFailed, .microphoneUnavailable, .noAudio, .fallbackMicrophone,
-            .microphoneDisconnected, .durationLimit, .cleanupFellBack, .quickAdd:
+            .microphoneDisconnected, .durationLimit, .cleanupFellBack, .quickAdd, .formattingConflict:
             return kind != .quickAdd || title != Self.quickAddSaved.title
         case .startup:
             return settingsPane == nil

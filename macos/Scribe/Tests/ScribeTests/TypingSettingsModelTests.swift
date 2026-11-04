@@ -36,6 +36,35 @@ final class TypingSettingsModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAppAwareFormattingDefaultsToOnWithPlainProfilesAndStoresChangesAtOnce() {
+        let model = TypingSettingsModel(store: store)
+
+        XCTAssertTrue(model.appAwareFormatting)
+        XCTAssertEqual(model.defaultTextFormat, .plain)
+
+        model.setAppAwareFormatting(false)
+        model.setDefaultTextFormat(.markdownSource)
+        XCTAssertEqual(
+            store.formatting, DictationFormattingSettings(appAwareFormatting: false, defaultTextFormat: .markdownSource)
+        )
+        XCTAssertFalse(model.appAwareFormatting)
+        XCTAssertEqual(model.defaultTextFormat, .markdownSource)
+
+        store.defaultTextFormat = .markdownWithFormatting
+        XCTAssertEqual(model.defaultTextFormat, .markdownWithFormatting)
+    }
+
+    @MainActor
+    func testTheLiveConfigurationReadsTheFormattingSettingsForEachRecording() {
+        let configuration = DictationControllerConfigurationFactory.live(
+            advanced: AdvancedDictationSettingsStore(defaults: suite.defaults), typing: store)
+
+        XCTAssertEqual(configuration.formatting(), DictationFormattingSettings())
+        store.appAwareFormatting = false
+        XCTAssertFalse(configuration.formatting().appAwareFormatting)
+    }
+
+    @MainActor
     func testAChangeStoredElsewhereIsShownWithoutReopeningTheSection() {
         let model = TypingSettingsModel(store: store)
         XCTAssertTrue(model.addSpaceAfterDictation)

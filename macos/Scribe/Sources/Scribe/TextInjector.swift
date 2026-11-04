@@ -53,6 +53,12 @@ enum ClipboardPasteOutcome: String, Equatable, Sendable {
     /// The pasteboard held content a plain-text restore cannot reproduce, so it was left alone and the
     /// text was typed.
     case nonTextContent
+    /// A Markdown paste would have kept more than `PasteboardBorrower.maximumKeptBytes`, so the pasteboard was
+    /// left alone and the text was typed.
+    case tooLarge
+    /// A Markdown paste found another application's transient or concealed marker, so the pasteboard was left
+    /// alone and the text was typed.
+    case markedPrivate
     /// The pasteboard held plain text Scribe could not read silently, or could not report its items, so
     /// the text was typed.
     case unreadable
@@ -80,8 +86,23 @@ enum ClipboardPasteOutcome: String, Equatable, Sendable {
             self = .writeFailed
         case .superseded:
             self = .superseded
+        case .tooLarge:
+            self = .tooLarge
+        case .markedPrivate:
+            self = .markedPrivate
         }
     }
+}
+
+/// The paste a dictation's format asks for (`DictationFormatPlan`): Markdown pasted as one piece, keeping whatever
+/// was on the pasteboard and putting it back, with an HTML rendering beside the text for Markdown with formatting.
+/// The HTML is made from the dictation, so this is never logged.
+struct PasteRequest: Equatable, Sendable {
+    /// Keep the whole pasteboard (an image, formatted text, files) rather than typing when it holds more than
+    /// plain text.
+    var keepsWholePasteboard: Bool
+    /// The HTML fragment written beside the text, or nil.
+    var html: String?
 }
 
 /// The outcome of one delivery. It holds enum values only, never text, so it is safe to log.
@@ -89,15 +110,23 @@ struct InjectionResult: Equatable, Sendable {
     let delivery: InjectionDelivery
     let clipboard: ClipboardPasteOutcome
     let restore: ClipboardRestoreOutcome
+    /// How many items a Markdown paste kept beyond plain text and put back; zero for every other delivery.
+    let keptItemCount: Int
+    /// Whether the pasteboard carried an HTML rendering beside the text at Command-V.
+    let htmlPlaced: Bool
 
     init(
         delivery: InjectionDelivery,
         clipboard: ClipboardPasteOutcome = .notUsed,
-        restore: ClipboardRestoreOutcome = .notApplicable
+        restore: ClipboardRestoreOutcome = .notApplicable,
+        keptItemCount: Int = 0,
+        htmlPlaced: Bool = false
     ) {
         self.delivery = delivery
         self.clipboard = clipboard
         self.restore = restore
+        self.keptItemCount = keptItemCount
+        self.htmlPlaced = htmlPlaced
     }
 
     /// Whether any of the text reached, or may yet reach, the target. When true the text must never be
@@ -125,7 +154,8 @@ struct InjectionResult: Equatable, Sendable {
         }
     }
 
-    /// Enum names only: no text, lengths or pasteboard types.
+    /// Enum names only: no text, lengths or pasteboard types. The controller's "Delivery finished" line adds
+    /// `keptItemCount` and `htmlPlaced`.
     var logSummary: String {
         "delivery=\(delivery.rawValue) clipboard=\(clipboard.rawValue) restore=\(restore.rawValue)"
     }
@@ -376,15 +406,21 @@ final class TextInjector {
     /// typed keystrokes. It never cuts short an insertion that has sent a write, the settle after Command-V
     /// or the restore that follows, which would either strand Scribe's text on the pasteboard or restore the
     /// old content before the target has read the new.
+    ///
+    /// With `paste`, the text goes straight to the pasteboard, as a Markdown format asks (`DictationFormatPlan`),
+    /// without the Accessibility write first: that write would insert the text without the formatted copy, and the
+    /// Markdown apps are mostly composers built on a browser engine. A paste that cannot happen types the same
+    /// text, as any refused paste does.
     func inject(
         text: String,
         into target: InjectionTarget? = nil,
-        shiftReturnLineBreaks: Bool = true
+        shiftReturnLineBreaks: Bool = true,
+        paste: PasteRequest? = nil
     ) async -> InjectionResult {
         await beginDelivery()
         defer { endDelivery() }
 
-        let result = await deliver(text, to: target, shiftReturnLineBreaks: shiftReturnLineBreaks)
+        let result = await deliver(text, to: target, shiftReturnLineBreaks: shiftReturnLineBreaks, paste: paste)
         record(result)
         return result
     }
@@ -452,7 +488,8 @@ final class TextInjector {
     private func deliver(
         _ text: String,
         to target: InjectionTarget?,
-        shiftReturnLineBreaks: Bool
+        shiftReturnLineBreaks: Bool,
+        paste: PasteRequest?
     ) async -> InjectionResult {
         guard !Task.isCancelled else {
             return InjectionResult(delivery: .cancelled)
@@ -492,6 +529,15 @@ final class TextInjector {
             return InjectionResult(delivery: .cancelled)
         }
 
+        if let paste {
+            return await pasteOrType(
+                text,
+                to: requested.pinned(to: processIdentifier),
+                processIdentifier: processIdentifier,
+                shiftReturnLineBreaks: shiftReturnLineBreaks,
+                request: paste)
+        }
+
         if method == .unicodeTyping {
             return InjectionResult(
                 delivery: await typeText(
@@ -527,7 +573,8 @@ final class TextInjector {
             text,
             to: requested.pinned(to: processIdentifier),
             processIdentifier: processIdentifier,
-            shiftReturnLineBreaks: shiftReturnLineBreaks)
+            shiftReturnLineBreaks: shiftReturnLineBreaks,
+            request: PasteRequest(keepsWholePasteboard: false, html: nil))
     }
 
     /// Splits off the run of spaces (U+0020 only) `text` ends with: the paste carries the rest, and the
@@ -556,7 +603,8 @@ final class TextInjector {
         _ text: String,
         to pinned: TargetExpectation,
         processIdentifier: pid_t,
-        shiftReturnLineBreaks: Bool
+        shiftReturnLineBreaks: Bool,
+        request: PasteRequest
     ) async -> InjectionResult {
         func type(_ text: String) async -> InjectionDelivery {
             await typeText(
@@ -577,7 +625,9 @@ final class TextInjector {
         }
 
         let lease: PasteboardLease
-        switch borrower.borrow(for: pasted) {
+        switch borrower.borrow(
+            for: pasted, keepingWholePasteboard: request.keepsWholePasteboard, html: request.html)
+        {
         case .borrowed(let borrowed):
             lease = borrowed
         case .refused(let refusal, let rollback):
@@ -605,7 +655,9 @@ final class TextInjector {
             }
         }
         if let withheld {
-            return InjectionResult(delivery: withheld, clipboard: .withheld, restore: borrower.restore(lease))
+            return InjectionResult(
+                delivery: withheld, clipboard: .withheld, restore: borrower.restore(lease),
+                keptItemCount: lease.keptItemCount)
         }
 
         // Another application may have copied since Scribe's write, and Command-V would paste its content.
@@ -614,12 +666,16 @@ final class TextInjector {
         // NSPasteboard has no lock to hold across the paste, and the target must be free to read.
         guard borrower.stillHolds(lease) else {
             let restore = borrower.restore(lease)
-            return InjectionResult(delivery: await typeInstead(), clipboard: .superseded, restore: restore)
+            return InjectionResult(
+                delivery: await typeInstead(), clipboard: .superseded, restore: restore,
+                keptItemCount: lease.keptItemCount)
         }
 
         guard system.post(.paste, to: processIdentifier) else {
             let restore = borrower.restore(lease)
-            return InjectionResult(delivery: await typeInstead(), clipboard: .chordUnavailable, restore: restore)
+            return InjectionResult(
+                delivery: await typeInstead(), clipboard: .chordUnavailable, restore: restore,
+                keptItemCount: lease.keptItemCount)
         }
 
         // Delivered. Whatever becomes of the restore, typing the text now would insert it twice; only the
@@ -628,12 +684,10 @@ final class TextInjector {
         // arrive leaves the delivery incomplete, never reported as cancelled: the text is already there.
         await pacer.pause(.afterPaste)
         let restore = borrower.restore(lease)
-        guard !typedAfter.isEmpty else {
-            return InjectionResult(delivery: .pasted, clipboard: .pasted, restore: restore)
-        }
-        let spaces = await type(typedAfter)
+        let spaces = typedAfter.isEmpty ? InjectionDelivery.typed : await type(typedAfter)
         return InjectionResult(
-            delivery: spaces == .typed ? .pasted : .pastedWithoutSpace, clipboard: .pasted, restore: restore)
+            delivery: spaces == .typed ? .pasted : .pastedWithoutSpace, clipboard: .pasted, restore: restore,
+            keptItemCount: lease.keptItemCount, htmlPlaced: lease.htmlPlaced)
     }
 
     /// Types `text` as Unicode keystrokes, confirming before each one that the pinned target still has

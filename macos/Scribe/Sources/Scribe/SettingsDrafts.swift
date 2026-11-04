@@ -31,6 +31,8 @@ final class SettingsDrafts: ObservableObject {
     @Published var profileBundleIdentifiers = ""
     @Published var profileWritingStyle = ""
     @Published var profileNewlineMode: NewlineInjectionMode = .smartFlatten
+    /// Nil uses the default text format for app profiles.
+    @Published var profileTextFormat: DictationTextFormat?
 
     @Published var openAIApiKey = ""
     @Published var azureClientSecret = ""
@@ -75,7 +77,7 @@ final class SettingsDrafts: ObservableObject {
         if !dictionaryPattern.isEmpty || !dictionaryReplacement.isEmpty { sections.append("Dictionary") }
         if !snippetPhrase.isEmpty || !snippetTemplate.isEmpty { sections.append("Voice snippets") }
         if !profileName.isEmpty || !profileBundleIdentifiers.isEmpty || !profileWritingStyle.isEmpty
-            || profileNewlineMode != .smartFlatten
+            || profileNewlineMode != .smartFlatten || profileTextFormat != nil
         {
             sections.append("App profiles")
         }
@@ -205,6 +207,7 @@ final class SettingsDrafts: ObservableObject {
         profileBundleIdentifiers = ""
         profileWritingStyle = ""
         profileNewlineMode = .smartFlatten
+        profileTextFormat = nil
         openAIApiKey = ""
         azureClientSecret = ""
         azureApiKey = ""
@@ -292,6 +295,9 @@ extension SettingsDrafts {
             }
             if drafts.unsavedSections.contains("App profiles") {
                 let model = AppProfileSettingsModel(access: .live(store), drafts: drafts, onChanged: onChanged)
+                if model.hasNewlineConflict {
+                    throw SettingsDraftSaveError(DictationFormattingText.newlineConflict)
+                }
                 guard model.canAdd else {
                     throw SettingsDraftSaveError("Enter a name and app identifiers in App profiles.")
                 }
