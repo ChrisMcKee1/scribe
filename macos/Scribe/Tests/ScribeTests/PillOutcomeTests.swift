@@ -38,6 +38,16 @@ final class PillOutcomeTests: XCTestCase {
         XCTAssertEqual(outcome?.detail, PillOutcome.recoveryStep)
     }
 
+    /// A paste whose space typed after it did not arrive is not all typed: it never shows the check.
+    func testAPasteWithoutItsSpaceIsAPartialInsertion() {
+        let outcome = PillOutcome.of(
+            InjectionResult(delivery: .pastedWithoutSpace, clipboard: .pasted, restore: .restored),
+            cleanupRequested: false,
+            cleanupOutcome: .off)
+        XCTAssertEqual(outcome?.kind, .partlyTyped)
+        XCTAssertEqual(outcome?.detail, PillOutcome.recoveryStep)
+    }
+
     func testAFailedInsertionUsesTheRecoveryStepOrTheAccessibilityStep() {
         XCTAssertEqual(
             PillOutcome.of(

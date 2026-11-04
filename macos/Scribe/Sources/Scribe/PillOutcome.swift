@@ -57,7 +57,7 @@ struct PillOutcome: Equatable, Sendable {
                 return PillOutcome(kind: .typedWithoutCleanup, detail: Self.cleanupDidNotRun)
             }
             return PillOutcome(kind: .typed, detail: "")
-        case .typedPartially:
+        case .typedPartially, .pastedWithoutSpace:
             return PillOutcome(kind: .partlyTyped, detail: Self.recoveryStep)
         case .accessibilityDenied:
             return PillOutcome(kind: .nothingTyped, detail: Self.accessibilityStep)

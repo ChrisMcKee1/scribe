@@ -737,6 +737,7 @@ final class TextInjectorTests: XCTestCase {
         XCTAssertEqual(level(InjectionResult(delivery: .targetChanged)).rawValue, OSLogType.default.rawValue)
         XCTAssertEqual(level(InjectionResult(delivery: .cancelled)).rawValue, OSLogType.default.rawValue)
         XCTAssertEqual(level(InjectionResult(delivery: .typedPartially)).rawValue, OSLogType.error.rawValue)
+        XCTAssertEqual(level(InjectionResult(delivery: .pastedWithoutSpace)).rawValue, OSLogType.error.rawValue)
         XCTAssertEqual(level(InjectionResult(delivery: .accessibilityUnconfirmed)).rawValue, OSLogType.error.rawValue)
         XCTAssertEqual(level(InjectionResult(delivery: .targetUnknown)).rawValue, OSLogType.error.rawValue)
         XCTAssertEqual(level(restoreFailed).rawValue, OSLogType.error.rawValue)
@@ -744,13 +745,13 @@ final class TextInjectorTests: XCTestCase {
 
     func testOnlyDeliveriesThatMayHaveLandedCountAsReachingTheTarget() {
         let reached: Set<InjectionDelivery> = [
-            .accessibility, .pasted, .typed, .typedPartially, .accessibilityUnconfirmed,
+            .accessibility, .pasted, .pastedWithoutSpace, .typed, .typedPartially, .accessibilityUnconfirmed,
         ]
         let complete: Set<InjectionDelivery> = [.accessibility, .pasted, .typed, .nothingToInsert]
         let all: [InjectionDelivery] = [
-            .accessibility, .pasted, .typed, .typedPartially, .accessibilityUnconfirmed, .nothingToInsert,
-            .targetChanged, .targetUnknown, .targetUnresponsive, .noFocusedElement, .accessibilityDenied, .cancelled,
-            .failed,
+            .accessibility, .pasted, .pastedWithoutSpace, .typed, .typedPartially, .accessibilityUnconfirmed,
+            .nothingToInsert, .targetChanged, .targetUnknown, .targetUnresponsive, .noFocusedElement,
+            .accessibilityDenied, .cancelled, .failed,
         ]
 
         for delivery in all {
@@ -1109,6 +1110,168 @@ final class TextInjectorTests: XCTestCase {
             await Task.yield()
         }
         XCTAssertTrue(condition(), "The awaited state was never reached.", file: file, line: line)
+    }
+
+    // MARK: - The space after a dictation is typed after the paste (Windows 0.5.19)
+
+    func testOnlyTheTrailingRunOfSpacesIsSplitOffAPaste() {
+        let cases: [(String, String, String)] = [
+            ("", "", ""),
+            ("Hello world.", "Hello world.", ""),
+            ("Hello world. ", "Hello world.", " "),
+            ("Hello world.   ", "Hello world.", "   "),
+            ("Two words  here ", "Two words  here", " "),
+            ("Ends in a tab\t", "Ends in a tab\t", ""),
+            ("Ends in a line break\n", "Ends in a line break\n", ""),
+            ("Space then a tab \t", "Space then a tab \t", ""),
+            ("Line break then a space\n ", "Line break then a space\n", " "),
+            ("No-break space\u{00A0}", "No-break space\u{00A0}", ""),
+            ("Ideographic space\u{3000}", "Ideographic space\u{3000}", ""),
+            ("   ", "", "   "),
+            ("Cafe\u{0301} ", "Cafe\u{0301}", " "),
+        ]
+        for (text, pasted, typedAfter) in cases {
+            let split = TextInjector.splitTrailingSpaces(text)
+            XCTAssertEqual(split.pasted, pasted, text.debugDescription)
+            XCTAssertEqual(split.typedAfter, typedAfter, text.debugDescription)
+            XCTAssertEqual(split.pasted + split.typedAfter, text, text.debugDescription)
+        }
+    }
+
+    @MainActor
+    func testThePasteLeavesTheTrailingSpaceOffAndTypesItOnceThePasteboardIsBack() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        let observed = InjectionObservations()
+        harness.system.onPost = { _ in
+            observed.pastedTexts.append(harness.pasteboard.string(forType: .string))
+        }
+
+        let result = await harness.injector.inject(text: dictation + " ")
+
+        XCTAssertEqual(result, InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored))
+        XCTAssertEqual(harness.system.postedKeystrokes, [.paste, .text(Array(" ".utf16))])
+        XCTAssertTrue(harness.system.posted.allSatisfy { $0.processIdentifier == InjectionHarness.editorProcess })
+        // The pasteboard held the dictation without its space at Command-V, and the user's own text again by the
+        // time the space was typed.
+        XCTAssertEqual(observed.pastedTexts, [dictation, usersText])
+        XCTAssertEqual(harness.pacer.pauses, [.beforePaste, .afterPaste])
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+    }
+
+    @MainActor
+    func testEverySpaceOfTheTrailingRunIsTypedAfterThePaste() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+
+        let result = await harness.injector.inject(text: "Hello world.   ")
+
+        XCTAssertEqual(result, InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored))
+        XCTAssertEqual(harness.system.postedKeystrokes, [.paste, .text(Array("   ".utf16))])
+    }
+
+    @MainActor
+    func testATrailingTabOrLineBreakIsPastedNeverTyped() async {
+        for ending in ["\t", "\n", " \n"] {
+            let harness = InjectionHarness()
+            defer { harness.releasePasteboard() }
+            let observed = InjectionObservations()
+            harness.system.onPost = { _ in
+                observed.pastedTexts.append(harness.pasteboard.string(forType: .string))
+            }
+
+            let result = await harness.injector.inject(text: "Hello world." + ending)
+
+            XCTAssertEqual(
+                result, InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored),
+                ending.debugDescription)
+            XCTAssertEqual(harness.system.postedKeystrokes, [.paste], ending.debugDescription)
+            XCTAssertEqual(observed.pastedTexts, ["Hello world." + ending], ending.debugDescription)
+        }
+    }
+
+    @MainActor
+    func testTextThatIsOnlySpacesIsTypedWholeAndNeverBorrowsThePasteboard() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        let changeCount = harness.pasteboard.changeCount
+
+        let result = await harness.injector.inject(text: "  ")
+
+        XCTAssertEqual(result, InjectionResult(delivery: .typed))
+        XCTAssertEqual(harness.system.postedKeystrokes, [.text(Array("  ".utf16))])
+        XCTAssertEqual(harness.pasteboard.changeCount, changeCount)
+    }
+
+    @MainActor
+    func testARefusedPasteTypesTheWholeTextSpaceIncluded() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyRichTextAsAnotherApplication(usersText)
+
+        let result = await harness.injector.inject(text: "Hello world. ")
+
+        XCTAssertEqual(result, InjectionResult(delivery: .typed, clipboard: .nonTextContent))
+        XCTAssertEqual(typedText(harness.system.postedKeystrokes), "Hello world. ")
+        XCTAssertFalse(harness.system.postedKeystrokes.contains(.paste))
+    }
+
+    @MainActor
+    func testASpaceThatCannotFollowThePasteLeavesTheDeliveryIncompleteAndNeverRetypesTheText() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        harness.pacer.onPause = { pause in
+            if pause == .afterPaste {
+                harness.moveFocusToAnotherApplication()
+            }
+        }
+
+        let result = await harness.injector.inject(text: dictation + " ")
+
+        XCTAssertEqual(result, InjectionResult(delivery: .pastedWithoutSpace, clipboard: .pasted, restore: .restored))
+        XCTAssertTrue(result.mayHaveReachedTarget)
+        XCTAssertFalse(result.isComplete)
+        XCTAssertEqual(harness.system.postedKeystrokes, [.paste])
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
+    }
+
+    @MainActor
+    func testASpaceThatCannotBePostedLeavesThePasteIncomplete() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.system.rejects = { $0 == .text(Array(" ".utf16)) }
+
+        let result = await harness.injector.inject(text: "Hello world. ")
+
+        XCTAssertEqual(result, InjectionResult(delivery: .pastedWithoutSpace, clipboard: .pasted, restore: .restored))
+        XCTAssertEqual(harness.system.postedKeystrokes, [.paste])
+    }
+
+    @MainActor
+    func testCancellingAfterCommandVStillReportsThePasteWhenTheSpaceIsDue() async {
+        let harness = InjectionHarness()
+        defer { harness.releasePasteboard() }
+        harness.copyAsAnotherApplication(usersText)
+        harness.pacer.holdNext = .afterPaste
+        let observed = InjectionObservations()
+
+        let delivery = Task { @MainActor in
+            observed.first = await harness.injector.inject(text: dictation + " ")
+        }
+        await yieldUntil { harness.pacer.isHolding }
+        delivery.cancel()
+        harness.pacer.releaseHeldPause()
+        await delivery.value
+
+        // The text went in with Command-V, so the delivery is never reported as cancelled, which would leave it
+        // out of history; the space the cancellation stopped is what is missing.
+        XCTAssertEqual(
+            observed.first, InjectionResult(delivery: .pastedWithoutSpace, clipboard: .pasted, restore: .restored))
+        XCTAssertEqual(harness.system.postedKeystrokes, [.paste])
+        XCTAssertEqual(harness.pasteboard.string(forType: .string), usersText)
     }
 
     private func typedText(_ keystrokes: [InjectionKeystroke]) -> String {

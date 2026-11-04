@@ -7,9 +7,14 @@ import OSLog
 enum InjectionDelivery: String, Equatable, Sendable {
     /// Inserted through the Accessibility API.
     case accessibility
-    /// Command-V was posted while the pasteboard held Scribe's text. That proves the keystrokes were
-    /// posted, not that the target read the pasteboard: nothing reports whether or when it did.
+    /// Command-V was posted while the pasteboard held Scribe's text, and any trailing space typed after it
+    /// arrived. That proves the keystrokes were posted, not that the target read the pasteboard: nothing
+    /// reports whether or when it did.
     case pasted
+    /// Command-V was posted, but the trailing space typed after the paste did not all arrive, because focus
+    /// moved, the delivery was cancelled or a keystroke could not be created. The text may be there, so it
+    /// must never be delivered again.
+    case pastedWithoutSpace
     /// Every keystroke was posted.
     case typed
     /// Typing stopped part way, because focus moved, the delivery was cancelled or an event could not be
@@ -100,7 +105,7 @@ struct InjectionResult: Equatable, Sendable {
     /// offer the transcript while saying it may already be there.
     var mayHaveReachedTarget: Bool {
         switch delivery {
-        case .accessibility, .pasted, .typed, .typedPartially, .accessibilityUnconfirmed:
+        case .accessibility, .pasted, .pastedWithoutSpace, .typed, .typedPartially, .accessibilityUnconfirmed:
             return true
         case .nothingToInsert, .targetChanged, .targetUnknown, .targetUnresponsive, .noFocusedElement,
             .accessibilityDenied, .cancelled, .failed:
@@ -114,8 +119,8 @@ struct InjectionResult: Equatable, Sendable {
         switch delivery {
         case .accessibility, .pasted, .typed, .nothingToInsert:
             return true
-        case .typedPartially, .accessibilityUnconfirmed, .targetChanged, .targetUnknown, .targetUnresponsive,
-            .noFocusedElement, .accessibilityDenied, .cancelled, .failed:
+        case .pastedWithoutSpace, .typedPartially, .accessibilityUnconfirmed, .targetChanged, .targetUnknown,
+            .targetUnresponsive, .noFocusedElement, .accessibilityDenied, .cancelled, .failed:
             return false
         }
     }
@@ -415,8 +420,8 @@ final class TextInjector {
             return .info
         case .targetChanged, .noFocusedElement, .cancelled:
             return .default
-        case .typedPartially, .accessibilityUnconfirmed, .targetUnknown, .targetUnresponsive, .accessibilityDenied,
-            .failed:
+        case .pastedWithoutSpace, .typedPartially, .accessibilityUnconfirmed, .targetUnknown, .targetUnresponsive,
+            .accessibilityDenied, .failed:
             return .error
         }
     }
@@ -525,22 +530,54 @@ final class TextInjector {
             shiftReturnLineBreaks: shiftReturnLineBreaks)
     }
 
+    /// Splits off the run of spaces (U+0020 only) `text` ends with: the paste carries the rest, and the
+    /// spaces are typed after it, as Windows does since 0.5.19. A pasted trailing space is lost in many
+    /// chat and mail composers: an editor whose own paste handling inserts the text as it is leaves an
+    /// ordinary space at the end of a paragraph, which a browser engine neither shows nor keeps (Windows
+    /// measured it in Chromium 152, the engine Teams, the GitHub Copilot app and Claude run on), while a
+    /// typed space goes through the editor's typing path, which every editor has to get right. Only spaces:
+    /// a tab or a line break typed would move focus or press Return, and a no-break space survives a paste.
+    /// Text with no trailing space comes back whole with nothing to type.
+    static func splitTrailingSpaces(_ text: String) -> (pasted: String, typedAfter: String) {
+        let scalars = text.unicodeScalars
+        var end = scalars.endIndex
+        while end > scalars.startIndex {
+            let before = scalars.index(before: end)
+            guard scalars[before] == " " else { break }
+            end = before
+        }
+        guard end != scalars.endIndex else {
+            return (text, "")
+        }
+        return (String(scalars[scalars.startIndex..<end]), String(scalars[end...]))
+    }
+
     private func pasteOrType(
         _ text: String,
         to pinned: TargetExpectation,
         processIdentifier: pid_t,
         shiftReturnLineBreaks: Bool
     ) async -> InjectionResult {
-        func typeInstead() async -> InjectionDelivery {
+        func type(_ text: String) async -> InjectionDelivery {
             await typeText(
                 text,
                 to: pinned,
                 processIdentifier: processIdentifier,
                 shiftReturnLineBreaks: shiftReturnLineBreaks)
         }
+        func typeInstead() async -> InjectionDelivery {
+            await type(text)
+        }
+
+        // Trailing spaces are typed after the paste, never pasted (see `splitTrailingSpaces`). Text that is
+        // nothing but spaces has nothing to paste, so it is typed whole.
+        let (pasted, typedAfter) = Self.splitTrailingSpaces(text)
+        guard !pasted.isEmpty else {
+            return InjectionResult(delivery: await typeInstead())
+        }
 
         let lease: PasteboardLease
-        switch borrower.borrow(for: text) {
+        switch borrower.borrow(for: pasted) {
         case .borrowed(let borrowed):
             lease = borrowed
         case .refused(let refusal, let rollback):
@@ -585,9 +622,18 @@ final class TextInjector {
             return InjectionResult(delivery: await typeInstead(), clipboard: .chordUnavailable, restore: restore)
         }
 
-        // Delivered. Whatever becomes of the restore, typing now would insert the text twice.
+        // Delivered. Whatever becomes of the restore, typing the text now would insert it twice; only the
+        // trailing spaces left off the pasteboard are still due. They are typed once the paste has settled and
+        // the user's pasteboard is back, with the same focus check as any typing, and a space that does not
+        // arrive leaves the delivery incomplete, never reported as cancelled: the text is already there.
         await pacer.pause(.afterPaste)
-        return InjectionResult(delivery: .pasted, clipboard: .pasted, restore: borrower.restore(lease))
+        let restore = borrower.restore(lease)
+        guard !typedAfter.isEmpty else {
+            return InjectionResult(delivery: .pasted, clipboard: .pasted, restore: restore)
+        }
+        let spaces = await type(typedAfter)
+        return InjectionResult(
+            delivery: spaces == .typed ? .pasted : .pastedWithoutSpace, clipboard: .pasted, restore: restore)
     }
 
     /// Types `text` as Unicode keystrokes, confirming before each one that the pinned target still has

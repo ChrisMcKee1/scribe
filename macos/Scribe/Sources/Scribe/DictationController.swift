@@ -1207,7 +1207,7 @@ final class DictationController {
             postOutcome(
                 .textKept, about: id, stage: .delivery, recoveryGeneration: recoveryGeneration,
                 notification: .notInserted(transcript, recoveryGeneration: recoveryGeneration))
-        case .typedPartially:
+        case .typedPartially, .pastedWithoutSpace:
             postOutcome(
                 .partlyInserted, about: id, stage: .delivery, recoveryGeneration: recoveryGeneration,
                 notification: .partlyInserted(transcript, recoveryGeneration: recoveryGeneration))
