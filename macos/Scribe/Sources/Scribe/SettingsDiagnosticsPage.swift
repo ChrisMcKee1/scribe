@@ -160,7 +160,8 @@ struct DiagnosticsSettingsTab: View {
                     )
                     .cardDescription()
                     Text(
-                        "Best real-time factor: \(String(format: "%.3fx", snapshot.fastestRtf)). P50 \(String(format: "%.3fx", snapshot.rtfP50)), P95 \(String(format: "%.3fx", snapshot.rtfP95))."
+                        DictationSpeedText.summary(
+                            fastest: snapshot.fastestRtf, typical: snapshot.rtfP50, slowest: snapshot.rtfP95)
                     )
                     .cardDescription()
                     metricSummary("Speech recognition", snapshot.decodeMs)
@@ -193,7 +194,7 @@ struct DiagnosticsSettingsTab: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(systemSummary).cardDescription()
             Text(
-                "Speech recognition uses the Foundry Local command-line recognizer when available, with whisper.cpp as a developer fallback."
+                "Speech recognition uses Foundry Local's command-line tool when available, with whisper.cpp as a developer fallback."
             )
             .cardDescription()
         }

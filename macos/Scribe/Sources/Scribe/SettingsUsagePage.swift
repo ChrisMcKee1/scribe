@@ -217,9 +217,9 @@ struct UsageInsightsSettingsTab: View {
                 .cardTitle()
             Text(
                 """
-                Sends only aggregate totals and dictionary-covered term labels to your configured AI cleanup \
-                provider. Novel terms, replacements that are templates in all but name (such as a signature \
-                block), and raw transcripts never leave this device.
+                Sends only aggregate totals and dictionary-covered term labels to the AI service you chose for \
+                AI cleanup. Novel terms, replacements that are templates in all but name (such as a signature \
+                block), and your dictations never leave this Mac.
                 """
             )
             .font(.caption)

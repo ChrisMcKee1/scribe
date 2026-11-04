@@ -53,10 +53,10 @@ struct DictationNotice: Equatable, Sendable {
     let kind: Kind
     let title: String
     let body: String
-    /// The dictation the notice is about, for its Copy Transcript action. Kept in memory only.
+    /// The dictation the notice is about, for its Copy Dictation action. Kept in memory only.
     let recoveryText: String?
     /// `LastTranscriptStore.generation` when `recoveryText` was kept for recovery. After a Clear the notice is
-    /// obsolete: it is not posted, and its Copy Transcript action copies nothing.
+    /// obsolete: it is not posted, and its Copy Dictation action copies nothing.
     let recoveryGeneration: UInt64?
     /// The privacy pane its Open System Settings action opens.
     let settingsPane: PrivacyPane?
@@ -77,7 +77,7 @@ struct DictationNotice: Equatable, Sendable {
         DictationNotice(
             kind: .notInserted,
             title: "Couldn't type your dictation",
-            body: "The window changed or didn't accept the text. Use \u{201C}Copy Transcript\u{201D} below or "
+            body: "The window changed or didn't accept the text. Use \u{201C}Copy Dictation\u{201D} below or "
                 + "open Scribe's menu bar icon and choose Recent Dictations, then paste it.",
             recoveryText: transcript,
             recoveryGeneration: recoveryGeneration,
@@ -88,7 +88,7 @@ struct DictationNotice: Equatable, Sendable {
         DictationNotice(
             kind: .partlyInserted,
             title: "Couldn't type all of your dictation",
-            body: "This app didn't accept all of the text. Use \u{201C}Copy Transcript\u{201D} below or the "
+            body: "This app didn't accept all of the text. Use \u{201C}Copy Dictation\u{201D} below or the "
                 + "Recent Dictations menu to recover the full text.",
             recoveryText: transcript,
             recoveryGeneration: recoveryGeneration,
@@ -100,7 +100,7 @@ struct DictationNotice: Equatable, Sendable {
             kind: .mayNotBeInserted,
             title: "Dictation may not have been inserted",
             body: "The app stopped responding while Scribe was inserting it, so the text may still appear. If it "
-                + "does not, use \u{201C}Copy Transcript\u{201D} below or the Recent Dictations menu.",
+                + "does not, use \u{201C}Copy Dictation\u{201D} below or the Recent Dictations menu.",
             recoveryText: transcript,
             recoveryGeneration: recoveryGeneration,
             settingsPane: nil)
@@ -111,7 +111,7 @@ struct DictationNotice: Equatable, Sendable {
             kind: .accessibilityNeeded,
             title: "Scribe needs Accessibility access",
             body: "Allow Scribe in System Settings > Privacy & Security > Accessibility to insert dictations. This "
-                + "one is kept: use \u{201C}Copy Transcript\u{201D} below or the Recent Dictations menu.",
+                + "one is kept: use \u{201C}Copy Dictation\u{201D} below or the Recent Dictations menu.",
             recoveryText: transcript,
             recoveryGeneration: recoveryGeneration,
             settingsPane: .accessibility)
@@ -153,7 +153,7 @@ struct DictationNotice: Equatable, Sendable {
     static func recognizerMissing(_ issue: TranscriptionBackendIssue) -> DictationNotice {
         DictationNotice(
             kind: .recognizerMissing,
-            title: "No speech recognizer found",
+            title: "No speech model",
             body: TranscriptionError.backendMissing(issue).errorDescription
                 ?? "Install Foundry Local, then dictate again.",
             recoveryText: nil,
@@ -354,9 +354,9 @@ final class StartupNotices {
     }
 }
 
-/// The Copy Transcript texts of recent notices, kept in memory only and never in the notification itself, which
+/// The Copy Dictation texts of recent notices, kept in memory only and never in the notification itself, which
 /// macOS stores on disk. Bounded, so an old notice's text is let go. Each text carries the recovery generation it was
-/// kept in, and a Copy Transcript after Clear history finds nothing.
+/// kept in, and a Copy Dictation after Clear history finds nothing.
 struct NotificationRecoveryTexts: Sendable {
     static let capacity = 5
 
@@ -432,7 +432,7 @@ final class DictationNotificationCenter: DictationNotifying {
         center.delegate = responder
 
         let copy = UNNotificationAction(
-            identifier: Self.copyTranscriptActionIdentifier, title: "Copy Transcript", options: [])
+            identifier: Self.copyTranscriptActionIdentifier, title: "Copy Dictation", options: [])
         let openSettings = UNNotificationAction(
             identifier: Self.openSettingsActionIdentifier, title: "Open System Settings", options: [])
         let openAppSettings = UNNotificationAction(
@@ -465,7 +465,7 @@ final class DictationNotificationCenter: DictationNotifying {
     }
 
     /// Forgets the transcripts earlier notices would copy, for Clear history: text the user asked to delete must not
-    /// come back through a notice's Copy Transcript action either.
+    /// come back through a notice's Copy Dictation action either.
     func forgetRecoveryTexts() {
         recoveryTexts.removeAll()
     }
@@ -516,7 +516,7 @@ final class DictationNotificationCenter: DictationNotifying {
                 let text = recoveryTexts.text(
                     for: answer.requestIdentifier, currentGeneration: recoveryGeneration())
             else {
-                ScribeLog.info(.app, "Copy Transcript was chosen for a dictation Scribe no longer holds")
+                ScribeLog.info(.app, "Copy Dictation was chosen for a dictation Scribe no longer holds")
                 return
             }
             let pasteboard = NSPasteboard.general

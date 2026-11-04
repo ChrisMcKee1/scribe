@@ -141,8 +141,8 @@ final class AIDictionarySuggestionModel: ObservableObject {
     }
 
     static func consentMessage(sampleCharacters: Int, destination: String) -> String {
-        "Scribe will send up to \(sampleCharacters.formatted()) characters from the latest raw text recognized "
-            + "before dictionary, word pack, and snippet processing, plus suggestion instructions, to \(destination). "
+        "Scribe will send up to \(sampleCharacters.formatted()) characters of the latest text Scribe heard, before "
+            + "your dictionary, word packs and snippets changed it, plus suggestion instructions, to \(destination). "
             + "The cleanup service may also receive applicable dictionary and permitted word pack vocabulary for "
             + "this request. Snippet templates are never included. Review suggestions before adding them."
     }
@@ -156,7 +156,7 @@ final class AIDictionarySuggestionModel: ObservableObject {
             let sample = Self.boundedRawSample(report.text)
         else {
             errorMessage =
-                "AI suggestions are unavailable until cleanup is on and a safe saved-provider handoff is ready."
+                "AI suggestions are unavailable until cleanup is on and a safe handoff to the saved AI service is ready."
             return
         }
 

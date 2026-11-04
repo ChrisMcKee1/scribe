@@ -294,7 +294,7 @@ final class PasteboardBorrower {
 
     /// Copies text the user asked for so that it stays on this Mac (`.currentHostOnly` keeps it out of Universal
     /// Clipboard), with no transient or concealed marker, so clipboard history may keep it like any other copy.
-    /// The app does not call it: Copy Transcript (`DictationNotificationCenter`) and Recent Dictations
+    /// The app does not call it: Copy Dictation (`DictationNotificationCenter`) and Recent Dictations
     /// (`RecentDictationsMenu`) make ordinary copies, which Universal Clipboard can share with other devices.
     static func copyForUser(_ text: String, to pasteboard: NSPasteboard) -> Bool {
         pasteboard.prepareForNewContents(with: .currentHostOnly)

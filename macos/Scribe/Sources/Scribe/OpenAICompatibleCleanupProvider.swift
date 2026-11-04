@@ -41,7 +41,7 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
 
     init(
         id: String = "openai-compatible",
-        displayName: String = "OpenAI-compatible endpoint",
+        displayName: String = "Another AI service",
         model: String,
         apiKey: String? = nil,
         completionsURL: URL? = nil,

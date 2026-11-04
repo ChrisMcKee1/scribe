@@ -227,7 +227,7 @@ final class UsageSummaryModelTests: XCTestCase {
         await model.inFlight?.value
 
         XCTAssertEqual(model.summary, "First summary.")
-        XCTAssertEqual(model.errorMessage, "The AI provider returned no usable summary.")
+        XCTAssertEqual(model.errorMessage, "The AI service returned no usable summary.")
     }
 
     /// A reply for the period the tab showed before the change must not appear under the new period.

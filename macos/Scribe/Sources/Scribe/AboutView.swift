@@ -120,8 +120,8 @@ struct AboutView: View {
                     .foregroundStyle(Color.accentColor)
                 Text(
                     """
-                    Speech recognition runs on this Mac, and audio never leaves it. Cloud AI is optional and sends \
-                    text only when you enable or invoke a remote provider feature.
+                    Speech recognition runs on this Mac, and your audio never leaves it. AI cleanup is optional, and \
+                    online services receive text only while you use them.
                     """
                 )
                 .font(.subheadline)
@@ -161,7 +161,7 @@ struct AboutView: View {
                     Text(
                         """
                         Report a problem, request a feature, or inspect the code that runs on your Mac. Never put \
-                        transcripts, audio, credentials, or other sensitive information in a public issue.
+                        dictations, audio, credentials, or other sensitive information in a public issue.
                         """
                     )
                     .font(.subheadline)

@@ -254,7 +254,7 @@ enum CleanupProviderError: Error, LocalizedError, FailureShapeDetailing, Equatab
             modelHint = "check the model name, and pull the model first with 'ollama pull'."
         case .openAICompatible, .microsoftFoundry:
             name = "The endpoint"
-            modelHint = "check the base URL and the model name."
+            modelHint = "check the server address and the model name."
         }
         switch status {
         case 401:
@@ -320,7 +320,7 @@ enum CleanupConfigurationProblem: Error, Equatable, Sendable {
         case .ollamaModelMissing:
             fix = "Enter the Ollama model name"
         case .openAIEndpointMissing:
-            fix = "Enter the endpoint's base URL and its model"
+            fix = "Enter the service's server address and its model"
         case .openAIEndpointInvalid:
             fix = "Enter an endpoint address that starts with http:// or https:// and names a host"
         case .openAIOldCompletionsPath:
@@ -332,7 +332,7 @@ enum CleanupConfigurationProblem: Error, Equatable, Sendable {
                 "Enter the Microsoft Foundry endpoint as an https:// address that names the resource (for example "
                 + "https://my-resource.openai.azure.com)"
         case .openAIModelMissing:
-            fix = "Enter the model name for the OpenAI-compatible endpoint"
+            fix = "Enter the model name for the AI service"
         case .azureEndpointMissing:
             fix = "Enter the Microsoft Foundry endpoint and deployment name"
         case .azureDeploymentMissing:

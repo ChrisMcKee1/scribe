@@ -145,16 +145,16 @@ struct CleanupSettingsTab: View {
     private var guardrailPromptsCard: some View {
         SettingsCard(searchID: "ai.guardrails") {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Guardrail prompts")
+                Text("Instructions for the AI model")
                     .cardTitle()
                 Text(
-                    "These instructions set how Scribe handles cleanup requests. Local models use the local prompt; cloud models use the detailed prompt. Changes are saved with the Settings footer."
+                    "These instructions set how Scribe handles cleanup requests. Local models use the short instructions; cloud models use the detailed instructions. Changes are saved with the Settings footer."
                 )
                 .cardDescription()
 
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Text("Detailed prompt")
+                        Text("Detailed instructions")
                             .font(.headline)
                         Spacer()
                         Button("Restore default") {
@@ -170,7 +170,7 @@ struct CleanupSettingsTab: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Text("Local prompt")
+                        Text("Short instructions")
                             .font(.headline)
                         Spacer()
                         Button("Restore default") {
