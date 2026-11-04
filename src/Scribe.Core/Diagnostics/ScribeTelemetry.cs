@@ -92,6 +92,9 @@ public static class ScribeTelemetry
     /// <summary>How many control characters other than line breaks (a tab, for example) it held, a count only.</summary>
     public const string TagInjectControlCharacters = "scribe.inject.control_chars";
 
+    /// <summary>How many trailing spaces were typed after a delivered paste rather than pasted, a count only.</summary>
+    public const string TagInjectSpacesAfterPaste = "scribe.inject.spaces_after_paste";
+
     /// <summary>How the clipboard paste path ended (a <c>PasteDelivery</c> name).</summary>
     public const string TagPasteDelivery = "scribe.inject.paste";
 

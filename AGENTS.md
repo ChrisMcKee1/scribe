@@ -1870,6 +1870,15 @@ change the sums and needs a decision (and probably a flag) of its own.
   hold and toggle, and the silence auto-stop insert the same way, and a dictation that inserts nothing inserts no space.
   A partial insertion counts the space as due, so a stall on the final space reports the insertion incomplete and raises
   the recovery notice.
+- **A paste never carries a trailing space; it is typed after the paste** (`TextInjector.SplitTrailingSpaces`). The
+  injector pastes the text without its final run of U+0020 and, once the paste has settled and the user's clipboard is
+  back, types those spaces with the usual focus check; a space that does not arrive leaves the insertion incomplete
+  (`SpaceAfterPasteIncompleteError`). Every pasted dictation into Teams, the GitHub Copilot app and the Copilot app from
+  October 29 to November 4, 2026 logged `space added after it: True`, yet the space was often missing there: an editor whose own paste
+  handling inserts the text as it is leaves an ordinary space at the end of a paragraph, which Chromium neither shows
+  nor keeps (measured in Chromium 152: the next insertion gave "Hello world.Next."), while a typed space goes through
+  the editor's typing path. A tab or line break is never split off (typed, it would move focus or press Enter), and a
+  refused paste still types the whole text, space included. The trace tag `inject.spaces_after_paste` counts them.
 - **On for every install, so the default is the property initializer**, the opposite of the first-run opt-ins of
   pattern P-7: a document written before the key existed reads as on, and an older build, which ignores the key and
   leaves it out of a document it saves, hands back a document that reads as on again. It is a whole-document setting

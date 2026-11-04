@@ -166,17 +166,41 @@ public sealed class TextInjector : ITextInjector
             return TypeAndReport(activity, text, expectedForegroundWindow, shiftEnterLineBreaks, fallback: false, keys, pace, timing);
         }
 
-        var paste = PasteViaClipboard(text, expectedForegroundWindow, keepWholeClipboard, keys, timing);
+        // Trailing spaces are typed after the paste, never pasted (see SplitTrailingSpaces). Text that is nothing but
+        // spaces has nothing to paste, so it is typed whole.
+        var (pasted, typedAfter) = SplitTrailingSpaces(text);
+        if (pasted.Length == 0)
+        {
+            return TypeAndReport(activity, text, expectedForegroundWindow, shiftEnterLineBreaks, fallback: false, keys, pace, timing);
+        }
+
+        var paste = PasteViaClipboard(pasted, expectedForegroundWindow, keepWholeClipboard, keys, timing);
         ReportClipboard(activity, paste);
         LogClipboard(paste);
 
         if (paste.Delivery == PasteDelivery.ChordInserted)
         {
-            // Delivered. Whatever became of the restore, typing now would insert the text twice.
-            ReportInjection(activity, "clipboard", paste.Sent, paste.Total, fallback: false);
+            // Delivered. Whatever became of the restore, typing the text now would insert it twice; only the trailing
+            // spaces left off the clipboard are still due. They are typed after the paste settled and the clipboard was
+            // put back, with the same focus check as any typing, and a space that does not arrive leaves the insertion
+            // incomplete, as it would when typed.
+            var spaces = TypeUnicode(typedAfter, expectedForegroundWindow, shiftEnterLineBreaks, keys, pace, timing);
+            int sent = paste.Sent + spaces.Sent;
+            int total = paste.Total + spaces.Total;
+            bool spacesArrived = spaces.Sent == spaces.Total;
+            ReportInjection(activity, "clipboard", sent, total, fallback: false);
+            ReportSpacesTypedAfterPaste(activity, typedAfter.Length);
+            if (!spacesArrived)
+            {
+                _logger.LogWarning(
+                    "The paste went through, but only {Sent}/{Total} key events of the space typed after it were accepted.",
+                    spaces.Sent, spaces.Total);
+            }
+
             return new InjectionResult(
-                true, "clipboard", paste.Sent, paste.Total,
-                paste.Sent == paste.Total ? null : "Paste completed, but modifier cleanup was partial.")
+                spacesArrived, "clipboard", sent, total,
+                !spacesArrived ? SpaceAfterPasteIncompleteError
+                : paste.Sent == paste.Total ? null : "Paste completed, but modifier cleanup was partial.")
             {
                 Paste = paste.Delivery,
                 ClipboardRestore = paste.Restore,
@@ -194,6 +218,47 @@ public sealed class TextInjector : ITextInjector
             Paste = paste.Delivery,
             ClipboardRestore = paste.Restore,
         };
+    }
+
+    /// <summary>The error of a paste that went through while the space typed after it did not all arrive.</summary>
+    internal const string SpaceAfterPasteIncompleteError = "The text was pasted, but the space after it was not typed.";
+
+    /// <summary>
+    /// Splits off the run of spaces (U+0020 only) <paramref name="text"/> ends with: the paste carries the rest, and the
+    /// spaces are typed after it. A pasted trailing space is lost in many chat and mail composers: an editor whose own
+    /// paste handling inserts the text as it is leaves an ordinary space at the end of a paragraph, which a browser engine
+    /// neither shows nor keeps (measured in Chromium 152, the engine Teams, the GitHub Copilot app and Claude run on: the
+    /// next insertion there gave "Hello world.Next."), while a typed space goes through the editor's typing path, which
+    /// every editor has to get right. Only spaces: a tab or a line break typed would move focus or press Enter, and a
+    /// no-break space is kept by a paste anyway. Text with no trailing space comes back whole with nothing to type.
+    /// </summary>
+    internal static (string Pasted, string TypedAfter) SplitTrailingSpaces(string text)
+    {
+        int end = text.Length;
+        while (end > 0 && text[end - 1] == ' ')
+        {
+            end--;
+        }
+
+        return end == text.Length ? (text, string.Empty) : (text[..end], text[end..]);
+    }
+
+    // How many trailing spaces were typed after the paste, a count only. Runs after text reached the target (see TryStop).
+    private static void ReportSpacesTypedAfterPaste(Activity? activity, int spaces)
+    {
+        if (activity is null)
+        {
+            return;
+        }
+
+        try
+        {
+            activity.SetTag(ScribeTelemetry.TagInjectSpacesAfterPaste, spaces);
+        }
+        catch (Exception)
+        {
+            // Telemetry is optional; the injection is not.
+        }
     }
 
     private static void ReportTimings(Activity? activity, InjectionTimingMeasurement? timing)

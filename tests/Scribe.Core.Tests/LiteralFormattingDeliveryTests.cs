@@ -31,7 +31,8 @@ public sealed class LiteralFormattingDeliveryTests
         Assert.True(insertion.Injection.Succeeded);
         Assert.Equal(PasteDelivery.ChordInserted, insertion.Injection.Paste);
         Assert.Equal(ClipboardRestoreOutcome.Restored, insertion.Injection.ClipboardRestore);
-        Assert.Equal(Source + " ", rig.Pasted);
+        Assert.Equal(Source, rig.Pasted);
+        Assert.Equal(" ", rig.Typed()); // the space is typed after the paste, never pasted
         Assert.Equal(screenshot, rig.Clipboard.DataOf(TextInjectionFakes.CF_DIB));
         Assert.Null(rig.Clipboard.Text);
         Assert.DoesNotContain(rig.Platform.Batches.SelectMany(batch => batch), input => input.U.ki.wVk == VK_RETURN);
@@ -83,7 +84,8 @@ public sealed class LiteralFormattingDeliveryTests
         Assert.Equal(Source + " ", Assert.Single(rig.HandedToInjector));
         if (method == InjectionMethod.ClipboardPaste)
         {
-            Assert.Equal(Source + " ", rig.Pasted);
+            Assert.Equal(Source, rig.Pasted);
+            Assert.Equal(" ", rig.Typed());
             Assert.False(rig.Clipboard.Has("HTML Format"));
             Assert.False(rig.Clipboard.Has("Rich Text Format"));
         }
@@ -218,7 +220,8 @@ public sealed class LiteralFormattingDeliveryTests
         Assert.True(insertion.Injection.Succeeded);
         Assert.Equal("clipboard", insertion.Injection.Method);
         Assert.Equal(bullets, insertion.Recorded);
-        Assert.Equal(bullets + " ", rig.Pasted);
+        Assert.Equal(bullets, rig.Pasted);
+        Assert.Equal(" ", rig.Typed());
         Assert.DoesNotContain(rig.Platform.Batches.SelectMany(batch => batch), input => input.U.ki.wVk == VK_RETURN);
     }
 

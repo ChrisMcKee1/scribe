@@ -90,6 +90,7 @@ public static class TraceTagPolicy
         [ScribeTelemetry.TagInjectLineBreaks] = ValueShape.Number,
         [ScribeTelemetry.TagInjectSurrogatePairs] = ValueShape.Number,
         [ScribeTelemetry.TagInjectControlCharacters] = ValueShape.Number,
+        [ScribeTelemetry.TagInjectSpacesAfterPaste] = ValueShape.Number,
         [ScribeTelemetry.TagPasteDelivery] = ValueShape.Code,
         [ScribeTelemetry.TagClipboardRestore] = ValueShape.Code,
     }.ToFrozenDictionary(StringComparer.Ordinal);
