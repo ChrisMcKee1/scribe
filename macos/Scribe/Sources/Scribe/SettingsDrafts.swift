@@ -323,10 +323,15 @@ extension SettingsDrafts {
                     throw SettingsDraftSaveError("Word packs could not be saved. Review their edits and try again.")
                 }
                 let revision = drafts.wordPackWorkspace.draft.revision
-                let catalog = try await Task.detached {
-                    try libraries.save(changeSet: changeSet)
-                    return try await libraries.loadCatalog()
-                }.value
+                let catalog: LibraryCatalog
+                do {
+                    catalog = try await Task.detached {
+                        try libraries.save(changeSet: changeSet)
+                        return try await libraries.loadCatalog()
+                    }.value
+                } catch let error as WordPackSaveError {
+                    throw SettingsDraftSaveError(error.message)
+                }
                 if drafts.wordPackWorkspace.draft.revision == revision {
                     drafts.wordPackWorkspace = LibraryWorkspace(catalog: catalog)
                 }
