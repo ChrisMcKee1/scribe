@@ -606,7 +606,7 @@ final class TextInjector {
         shiftReturnLineBreaks: Bool,
         request: PasteRequest
     ) async -> InjectionResult {
-        func type(_ text: String) async -> InjectionDelivery {
+        func typeKeystrokes(_ text: String) async -> InjectionDelivery {
             await typeText(
                 text,
                 to: pinned,
@@ -614,7 +614,7 @@ final class TextInjector {
                 shiftReturnLineBreaks: shiftReturnLineBreaks)
         }
         func typeInstead() async -> InjectionDelivery {
-            await type(text)
+            await typeKeystrokes(text)
         }
 
         // Trailing spaces are typed after the paste, never pasted (see `splitTrailingSpaces`). Text that is
@@ -684,7 +684,10 @@ final class TextInjector {
         // arrive leaves the delivery incomplete, never reported as cancelled: the text is already there.
         await pacer.pause(.afterPaste)
         let restore = borrower.restore(lease)
-        let spaces = typedAfter.isEmpty ? InjectionDelivery.typed : await type(typedAfter)
+        var spaces = InjectionDelivery.typed
+        if !typedAfter.isEmpty {
+            spaces = await typeKeystrokes(typedAfter)
+        }
         return InjectionResult(
             delivery: spaces == .typed ? .pasted : .pastedWithoutSpace, clipboard: .pasted, restore: restore,
             keptItemCount: lease.keptItemCount, htmlPlaced: lease.htmlPlaced)
