@@ -154,8 +154,11 @@ public class DictationInsertionTests : InsertionFlagTest
     }
 
     [Fact]
-    public void Pasting_gives_the_target_the_space_and_puts_the_user_s_clipboard_back()
+    public void Pasting_types_the_space_after_the_paste_once_the_user_s_clipboard_is_back()
     {
+        // A pasted trailing space is lost in many composers (Teams, the GitHub Copilot app): their paste handling leaves
+        // an ordinary space at the end of a paragraph, which the browser engine neither shows nor keeps. So the paste
+        // carries the dictation and the space is typed after it, as a person types one.
         var rig = new Rig(Flags);
         rig.Clipboard.SeedText("what the user had copied");
         string? pasted = null;
@@ -166,16 +169,104 @@ public class DictationInsertionTests : InsertionFlagTest
                 pasted = rig.Clipboard.TargetReads();
             }
         };
+        string? clipboardWhenSpaceTyped = null;
+        int? spaceBatch = null;
+        rig.Platform.Deliver = (batch, inputs) =>
+        {
+            if (inputs.Any(input => (input.U.ki.dwFlags & KEYEVENTF_UNICODE) != 0))
+            {
+                clipboardWhenSpaceTyped = rig.Clipboard.Text;
+                spaceBatch = batch;
+            }
+
+            return (uint)inputs.Length;
+        };
 
         var insertion = rig.Insert("Paste me.", InjectionMethod.ClipboardPaste);
 
         Assert.True(insertion.Injection.Succeeded);
+        Assert.Null(insertion.Injection.Error);
+        Assert.Equal("clipboard", insertion.Injection.Method);
         Assert.Equal(PasteDelivery.ChordInserted, insertion.Injection.Paste);
-        Assert.Equal("Paste me. ", pasted);
+        Assert.Equal("Paste me.", pasted);
+        Assert.Equal(" ", rig.Typed());
+        Assert.Equal(2, rig.Platform.UnicodeEvents);
+        Assert.True(insertion.SpaceAdded);
+
+        // The chord went first, and the space only once the paste had settled and the user's clipboard was back.
+        Assert.Equal(1, rig.Platform.CtrlVChords);
+        Assert.Equal(1, spaceBatch);
+        Assert.Equal("what the user had copied", clipboardWhenSpaceTyped);
+        Assert.Equal(6, insertion.Injection.Sent);
+        Assert.Equal(6, insertion.Injection.Total);
+
         Assert.Equal(ClipboardRestoreOutcome.Restored, insertion.Injection.ClipboardRestore);
         Assert.Equal("what the user had copied", rig.Clipboard.Text);
-        Assert.Equal(0, rig.Platform.UnicodeEvents);
         Assert.Equal(["Paste me."], rig.Recovery.GetRecent());
+    }
+
+    [Fact]
+    public void Back_to_back_pasted_dictations_arrive_separated()
+    {
+        var rig = new Rig(Flags);
+        var pasted = new List<string>();
+        rig.Platform.OnSleep = ms =>
+        {
+            if (ms == TextInjector.PasteSettleDelayMs && rig.Clipboard.TargetReads() is { } text)
+            {
+                pasted.Add(text);
+            }
+        };
+
+        rig.Insert("First thought.", InjectionMethod.ClipboardPaste);
+        rig.Insert("Second thought.", InjectionMethod.ClipboardPaste);
+
+        Assert.Equal(["First thought.", "Second thought."], pasted);
+        Assert.Equal("  ", rig.Typed());
+        Assert.Equal(2, rig.Platform.CtrlVChords);
+        Assert.Equal(["Second thought.", "First thought."], rig.Recovery.GetRecent());
+    }
+
+    [Fact]
+    public void A_space_after_a_paste_that_does_not_arrive_leaves_the_insertion_incomplete()
+    {
+        // Windows accepts the Ctrl+V chord and then refuses the space.
+        var rig = new Rig(Flags);
+        rig.Platform.Deliver = (batch, inputs) =>
+            inputs.Any(input => (input.U.ki.dwFlags & KEYEVENTF_UNICODE) != 0) ? 0u : (uint)inputs.Length;
+
+        var insertion = rig.Insert("Pasted, space lost.", InjectionMethod.ClipboardPaste);
+
+        Assert.False(insertion.Injection.Succeeded);
+        Assert.Equal(TextInjector.SpaceAfterPasteIncompleteError, insertion.Injection.Error);
+        Assert.Equal(PasteDelivery.ChordInserted, insertion.Injection.Paste);
+        Assert.Equal(4, insertion.Injection.Sent);
+        Assert.Equal(6, insertion.Injection.Total);
+        Assert.Equal(1, rig.Platform.CtrlVChords);
+        Assert.Equal(["Pasted, space lost."], rig.Recovery.GetRecent());
+    }
+
+    [Fact]
+    public void Focus_that_moves_after_the_paste_gets_no_space_and_the_insertion_says_so()
+    {
+        var rig = new Rig(Flags);
+        rig.Platform.OnSleep = ms =>
+        {
+            if (ms == TextInjector.PasteSettleDelayMs)
+            {
+                rig.Clipboard.TargetReads();
+                rig.Platform.Foreground = 0x9999; // the user clicked another window while the paste settled
+            }
+        };
+
+        var insertion = rig.Insert("Clicked away.", InjectionMethod.ClipboardPaste);
+
+        Assert.False(insertion.Injection.Succeeded);
+        Assert.Equal(TextInjector.SpaceAfterPasteIncompleteError, insertion.Injection.Error);
+        Assert.Equal(PasteDelivery.ChordInserted, insertion.Injection.Paste);
+        Assert.Equal(1, rig.Platform.CtrlVChords);
+        Assert.Equal(0, rig.Platform.UnicodeEvents);
+        Assert.Equal(["Clicked away."], rig.Recovery.GetRecent());
     }
 
     [Fact]
@@ -228,6 +319,11 @@ public class DictationInsertionTests : InsertionFlagTest
         Assert.True(insertion.Injection.Succeeded);
         Assert.False(insertion.SpaceAdded);
         Assert.Equal("No space please.", method == InjectionMethod.UnicodeType ? rig.Typed() : pasted);
+        if (method == InjectionMethod.ClipboardPaste)
+        {
+            Assert.Equal(0, rig.Platform.UnicodeEvents); // nothing is typed after a paste with no space to give
+        }
+
         Assert.Equal(["No space please."], rig.Recovery.GetRecent());
     }
 

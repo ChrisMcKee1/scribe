@@ -35,6 +35,97 @@ public class TextInjectorClipboardPasteTests : InsertionFlagTest
 
     private static int TypedEventsFor(string text) => TextInjector.CountKeyEvents(text, 0, text.Length);
 
+    // --- Trailing spaces are typed after the paste, never pasted --------------------------------------------------
+
+    [Theory]
+    [InlineData("Hello world. ", "Hello world.", " ")]
+    [InlineData("Two spaces.  ", "Two spaces.", "  ")]
+    [InlineData("Inner  spaces stay.", "Inner  spaces stay.", "")]
+    [InlineData("A tab stays pasted.\t", "A tab stays pasted.\t", "")]
+    [InlineData("A line break stays pasted.\n", "A line break stays pasted.\n", "")]
+    [InlineData("A space before a line break. \n", "A space before a line break. \n", "")]
+    [InlineData("No-break space ", "No-break space ", "")]
+    [InlineData("Line one.\n- item ", "Line one.\n- item", " ")]
+    [InlineData("   ", "", "   ")]
+    [InlineData("", "", "")]
+    public void Only_a_final_run_of_ordinary_spaces_is_split_off_to_be_typed(string text, string pasted, string typedAfter)
+    {
+        var split = TextInjector.SplitTrailingSpaces(text);
+
+        Assert.Equal(pasted, split.Pasted);
+        Assert.Equal(typedAfter, split.TypedAfter);
+        Assert.Equal(text, split.Pasted + split.TypedAfter);
+    }
+
+    [Fact]
+    public void Text_with_a_trailing_space_is_pasted_without_it_and_the_space_typed_after_the_restore()
+    {
+        var rig = new Rig(Flags);
+        rig.Clipboard.SeedText(Previous);
+        string? pasted = null;
+        rig.Platform.OnSleep = ms =>
+        {
+            if (ms == TextInjector.PasteSettleDelayMs)
+            {
+                pasted = rig.Clipboard.TargetReads();
+            }
+        };
+        var clipboardAtEachBatch = new List<string?>();
+        rig.Platform.Deliver = (_, inputs) =>
+        {
+            clipboardAtEachBatch.Add(rig.Clipboard.Text);
+            return (uint)inputs.Length;
+        };
+
+        var result = rig.Paste(Dictation + " ");
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(PasteDelivery.ChordInserted, result.Paste);
+        Assert.Equal(Dictation, pasted);
+        Assert.Equal(2, rig.Platform.Batches.Count);
+        Assert.Equal(1, rig.Platform.CtrlVChords);
+        Assert.Equal(TypedEventsFor(" "), rig.Platform.UnicodeEvents);
+        Assert.Equal(' ', (char)rig.Platform.Batches[1][0].U.ki.wScan);
+
+        // The chord was sent while Scribe's text was on the clipboard, the space once the user's text was back.
+        Assert.Equal([Dictation, Previous], clipboardAtEachBatch);
+        Assert.All(
+            rig.Platform.Batches.SelectMany(batch => batch),
+            input => Assert.Equal(SyntheticInputMarker.Value, input.U.ki.dwExtraInfo));
+    }
+
+    [Fact]
+    public void Text_of_nothing_but_spaces_is_typed_and_the_clipboard_is_never_touched()
+    {
+        var rig = new Rig(Flags);
+        rig.Clipboard.SeedText(Previous);
+
+        var result = rig.Paste("  ");
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("unicode", result.Method);
+        Assert.Equal(PasteDelivery.NotUsed, result.Paste);
+        Assert.Equal(0, rig.Platform.CtrlVChords);
+        Assert.Equal(TypedEventsFor("  "), rig.Platform.UnicodeEvents);
+        Assert.Equal(0, rig.Clipboard.OpenAttempts);
+        Assert.Equal(Previous, rig.Clipboard.Text);
+    }
+
+    [Fact]
+    public void A_refused_paste_types_the_whole_text_with_its_trailing_space()
+    {
+        var rig = new Rig(Flags);
+        rig.Clipboard.SeedFormats(TextInjectionFakes.CF_DIB); // an image the text-only borrow cannot put back
+
+        var result = rig.Paste(Dictation + " ");
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("unicode", result.Method);
+        Assert.Equal(PasteDelivery.NonTextContent, result.Paste);
+        Assert.Equal(0, rig.Platform.CtrlVChords);
+        Assert.Equal(TypedEventsFor(Dictation + " "), rig.Platform.UnicodeEvents);
+    }
+
     [Fact]
     public void A_delivered_paste_whose_restore_fails_is_never_typed_a_second_time()
     {
