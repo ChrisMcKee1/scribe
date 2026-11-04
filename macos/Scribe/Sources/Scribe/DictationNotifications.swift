@@ -49,6 +49,7 @@ struct DictationNotice: Equatable, Sendable {
         case quickAdd
         case cleanupActivation
         case formattingConflict
+        case plainTextOnce
     }
 
     let kind: Kind
@@ -238,6 +239,14 @@ struct DictationNotice: Equatable, Sendable {
         kind: .formattingConflict, title: "Literal Markdown source wasn't used",
         body: DictationFormattingText.runtimeNewlineConflict, recoveryText: nil, settingsPane: nil)
 
+    /// Arming, using, expiring or cancelling Plain text once, as Windows' tray notices say it; nil for the changes that
+    /// need no notice.
+    static func plainTextOnce(_ state: PlainTextOnceState) -> DictationNotice? {
+        PlainTextOnceText.notice(state).map {
+            DictationNotice(kind: .plainTextOnce, title: $0.title, body: $0.body, recoveryText: nil, settingsPane: nil)
+        }
+    }
+
     static func cleanupActivation(_ enabled: Bool) -> DictationNotice {
         DictationNotice(
             kind: .cleanupActivation, title: enabled ? "AI cleanup is on" : "AI cleanup is off",
@@ -249,7 +258,7 @@ struct DictationNotice: Equatable, Sendable {
 
     var playsSound: Bool {
         switch kind {
-        case .copied, .cleanupActivation, .fallbackMicrophone:
+        case .copied, .cleanupActivation, .fallbackMicrophone, .plainTextOnce:
             return false
         case .quickAdd:
             return title != Self.quickAddSaved.title

@@ -104,6 +104,8 @@ private struct LiveRecording {
     let admittedAt: ContinuousClock.Instant
     /// Held from admission until the dictation's processing ends, so storage housekeeping stays out of the way.
     let lease: ForegroundActivity.Lease
+    /// Whether this recording took Plain text once when it was admitted.
+    var plainTextOnce = false
     var phase = Phase.admitted
     /// Captured when the microphone starts opening, so a later change of focus changes neither where the text goes
     /// nor which app profile applies.
@@ -124,6 +126,7 @@ private struct AdmittedDictation: Sendable {
     let target: DictationTarget?
     let profiles: [AppProfile]?
     let formatting: DictationFormattingSettings?
+    let plainTextOnce: Bool
     let sealing: Task<CapturedAudio?, Never>
     let stopReason: DictationStopReason
     let lease: ForegroundActivity.Lease
@@ -229,6 +232,9 @@ final class DictationController {
         /// App-aware formatting and the default text format for app profiles (`TypingSettingsStore`), read when a
         /// recording captures its target, so a change applies from the next recording.
         var formatting: @MainActor @Sendable () -> DictationFormattingSettings = { DictationFormattingSettings() }
+        /// Takes Plain text once (`PlainTextOnce.consumeForAdmittedRecording`) for a recording just admitted, and
+        /// says whether it was armed. Called only on admission, never for a press that was turned away.
+        var consumePlainTextOnce: @MainActor @Sendable () -> Bool = { false }
         /// How long a notice stays on the pill.
         var noticeDuration: Duration = .milliseconds(1_800)
         /// A press while this many dictations are still processing is turned away, which bounds the audio held.
@@ -544,14 +550,15 @@ final class DictationController {
                 self.present()
             }
             : nil
+        let plainTextOnce = configuration.consumePlainTextOnce()
         recording = LiveRecording(
             id: id, trigger: trigger, policy: policy, admittedAt: services.clock.now, lease: services.activity.begin(),
-            localModelPreparation: preparation)
+            plainTextOnce: plainTextOnce, localModelPreparation: preparation)
         preparation?.start(using: services.cleanup)
         ScribeLog.info(
             .dictation, "Recording admitted", .integer("dictation", id.rawValue), .name("trigger", trigger),
             .name("gesture", trigger.gesture), .flag("stopsOnSilence", policy.stopsOnSilence),
-            .flag("durationCeiling", policy.maximumDuration != nil))
+            .flag("durationCeiling", policy.maximumDuration != nil), .flag("plainTextOnce", plainTextOnce))
         Task { [weak self] in
             await self?.openMicrophone(for: id)
         }
@@ -696,7 +703,7 @@ final class DictationController {
 
         let dictation = AdmittedDictation(
             id: id, trigger: ended.trigger, target: ended.target, profiles: ended.profiles,
-            formatting: ended.formatting, sealing: sealing,
+            formatting: ended.formatting, plainTextOnce: ended.plainTextOnce, sealing: sealing,
             stopReason: reason, lease: ended.lease, localModelPreparation: ended.localModelPreparation,
             heldDuration: ended.admittedAt.duration(to: services.clock.now))
         if let preparation = ended.localModelPreparation {
@@ -820,7 +827,7 @@ final class DictationController {
             settings: dictation.formatting ?? configuration.formatting(),
             bundleIdentifier: target?.bundleIdentifier,
             applicationName: target?.processName,
-            plainOnce: false)
+            plainOnce: dictation.plainTextOnce)
         let singleLine = plan.flattensNewlines
 
         // With AI cleanup off: snippets, then the dictionary and the libraries, each once, as Windows runs them. With

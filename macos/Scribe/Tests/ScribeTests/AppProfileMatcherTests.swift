@@ -100,4 +100,16 @@ final class AppProfileMatcherTests: XCTestCase {
             .smartFlatten, to: "one\ntwo", bundleIdentifier: "com.apple.mail")
         XCTAssertEqual(result, "one\ntwo")
     }
+
+    /// Excel takes a line break as leaving the cell, so Smart Flatten keeps a dictation on one line there, as Windows
+    /// does since 0.5.19; Keep Newlines still keeps them.
+    func testSmartFlattenKeepsExcelOnOneLine() {
+        XCTAssertTrue(AppProfileMatcher.flattensNewlines(.smartFlatten, bundleIdentifier: "com.microsoft.Excel"))
+        XCTAssertEqual(
+            AppProfileMatcher.applyNewlineMode(.smartFlatten, to: "one\ntwo", bundleIdentifier: "com.microsoft.Excel"),
+            "one two")
+        XCTAssertFalse(AppProfileMatcher.flattensNewlines(.keepNewlines, bundleIdentifier: "com.microsoft.Excel"))
+        XCTAssertFalse(AppProfileMatcher.flattensNewlines(.smartFlatten, bundleIdentifier: "com.microsoft.Word"))
+        XCTAssertFalse(AppProfileMatcher.flattensNewlines(.smartFlatten, bundleIdentifier: nil))
+    }
 }

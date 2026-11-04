@@ -53,6 +53,16 @@ enum AppProfileMatcher {
         "com.mitchellh.ghostty",
     ]
 
+    /// Spreadsheets, where a line break leaves the cell, flattened under Smart Flatten as terminals are (Windows'
+    /// `InjectionTextFormatter.IsSingleLineCellProcess`). Excel's documented keys: Return "completes a cell entry"
+    /// and moves down, and Shift-Return moves up, so a typed multi-line dictation with Scribe's Shift-Return line
+    /// breaks wrote each line over the cell above, and a pasted one fills the rows below. One line keeps a dictation in
+    /// the cell it was meant for. A text box or comment in Excel loses its line breaks too, which a bundle identifier
+    /// cannot tell apart.
+    static let knownSingleLineCellBundleIdentifiers: Set<String> = [
+        "com.microsoft.Excel"
+    ]
+
     /// Returns the first profile matching `bundleIdentifier`/`processName` (case-insensitive),
     /// checking bundle identifier first, then process name. First match wins, in the user's
     /// configured order.
@@ -107,6 +117,7 @@ enum AppProfileMatcher {
         case .smartFlatten:
             guard let bundleIdentifier else { return false }
             return knownTerminalBundleIdentifiers.contains(bundleIdentifier)
+                || knownSingleLineCellBundleIdentifiers.contains(bundleIdentifier)
         }
     }
 

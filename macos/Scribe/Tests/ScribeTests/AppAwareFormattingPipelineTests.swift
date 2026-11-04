@@ -121,6 +121,30 @@ final class AppAwareFormattingPipelineTests: XCTestCase {
         XCTAssertEqual(harness.notifier.notices.map(\.kind), [.formattingConflict])
     }
 
+    /// Plain text once is taken by the next admitted recording only: that recording is typed as plain text whatever
+    /// its app would get, and the one after it gets the app's format again. A press turned away takes nothing.
+    func testPlainTextOnceIsTakenByTheNextAdmittedRecordingOnly() async {
+        let armed = PlainTextOnceCalls(armed: true)
+        var configuration = DictationController.Configuration()
+        configuration.consumePlainTextOnce = { armed.take() }
+        let harness = makeHarness(configuration: configuration)
+        harness.targeting.next = Self.teams
+
+        harness.controller.setPaused(true)
+        XCTAssertFalse(harness.controller.hotkeyPressed(DictationHarness.holdKey))
+        XCTAssertEqual(armed.calls, 0)
+        harness.controller.setPaused(false)
+
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        XCTAssertEqual(armed.calls, 2)
+        XCTAssertEqual(harness.fakeInjector.pasteRequests, [nil, markdownPaste])
+        XCTAssertEqual(harness.fakeInjector.texts, ["hello from the recognizer ", "hello from the recognizer "])
+    }
+
     /// The formatting settings are read when the recording captures its target, so a change while it records or
     /// processes applies from the next recording.
     func testTheSettingsAreReadWhenTheRecordingCapturesItsTarget() async {
@@ -139,6 +163,23 @@ final class AppAwareFormattingPipelineTests: XCTestCase {
         await harness.waitUntilProcessed()
 
         XCTAssertEqual(harness.fakeInjector.pasteRequests, [markdownPaste, nil])
+    }
+}
+
+/// Plain text once as the controller sees it: armed until the first admitted recording takes it.
+@MainActor
+private final class PlainTextOnceCalls: Sendable {
+    private var armed: Bool
+    private(set) var calls = 0
+
+    init(armed: Bool) {
+        self.armed = armed
+    }
+
+    func take() -> Bool {
+        calls += 1
+        defer { armed = false }
+        return armed
     }
 }
 
