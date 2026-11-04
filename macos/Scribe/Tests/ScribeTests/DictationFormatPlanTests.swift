@@ -253,6 +253,18 @@ final class DictationFormatPlanTests: XCTestCase {
         }
     }
 
+    /// Only Markdown with formatting, pasted, adds HTML, made from the text as represented and only when it has
+    /// Markdown structure.
+    func testOnlyMarkdownWithFormattingAddsHTMLAndOnlyForMarkdownStructure() {
+        let teams = plan("com.microsoft.teams2")
+        XCTAssertEqual(teams.pasteboardHTML("- one\n- two"), "<ul>\n<li>one</li>\n<li>two</li>\n</ul>")
+        XCTAssertNil(teams.pasteboardHTML("Just a sentence."))
+        XCTAssertNil(plan("md.obsidian").pasteboardHTML("- one\n- two"))
+        XCTAssertNil(plan("com.example.editor").pasteboardHTML("- one\n- two"))
+        XCTAssertNil(plan("com.microsoft.teams2", plainOnce: true).pasteboardHTML("- one\n- two"))
+        XCTAssertNil(plan("com.microsoft.teams2", settings: off).pasteboardHTML("- one\n- two"))
+    }
+
     func testTheWordsUseTheMacLabels() {
         XCTAssertTrue(DictationFormattingText.newlineConflict.contains("Plain text"))
         XCTAssertTrue(DictationFormattingText.newlineConflict.contains("Keep Newlines"))

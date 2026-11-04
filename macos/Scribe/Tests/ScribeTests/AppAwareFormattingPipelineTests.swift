@@ -33,6 +33,30 @@ final class AppAwareFormattingPipelineTests: XCTestCase {
         }
     }
 
+    /// Markdown with formatting adds an HTML rendering of the text as represented, before the space after it.
+    func testTeamsGetsAFormattedCopyOfMarkdownAndNoneForPlainProse() async {
+        let harness = makeHarness()
+        harness.targeting.next = Self.teams
+        harness.transcriber.defaultText = "- first point\n- second point"
+
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+        harness.transcriber.defaultText = "just a sentence"
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        XCTAssertEqual(
+            harness.fakeInjector.pasteRequests,
+            [
+                PasteRequest(
+                    keepsWholePasteboard: true, html: "<ul>\n<li>first point</li>\n<li>second point</li>\n</ul>"),
+                markdownPaste,
+            ])
+        XCTAssertEqual(harness.fakeInjector.texts, ["- first point\n- second point ", "just a sentence "])
+        XCTAssertEqual(
+            harness.history.records.map(\.transcriptText), ["- first point\n- second point", "just a sentence"])
+    }
+
     func testAnOrdinaryAppIsTypedAsBefore() async {
         let harness = makeHarness()
 

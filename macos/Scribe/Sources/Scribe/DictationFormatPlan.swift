@@ -236,6 +236,15 @@ struct DictationFormatPlan: Equatable, Sendable {
         AppProfileMatcher.applyNewlineMode(newlineMode, to: text, bundleIdentifier: bundleIdentifier)
     }
 
+    /// The HTML fragment Markdown with formatting puts on the pasteboard beside `represented` (R, what `represent`
+    /// returned, before the space after the dictation), or nil: for every other format, and for text with no Markdown
+    /// structure (`MarkdownPasteboardHTML`). It is only ever an addition to the pasteboard; nothing keeps it, and a
+    /// paste that turns into typing types the Markdown.
+    func pasteboardHTML(_ represented: String) -> String? {
+        guard textFormat == .markdownWithFormatting, delivery == .paste else { return nil }
+        return MarkdownPasteboardHTML.render(represented)
+    }
+
     private static func decision(for format: DictationTextFormat) -> DictationFormatDecision {
         switch format {
         case .plain:

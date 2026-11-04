@@ -888,7 +888,8 @@ final class DictationController {
         report.finalText = insertion
         let paste =
             plan.delivery == .paste
-            ? PasteRequest(keepsWholePasteboard: plan.keepsWholePasteboard, html: nil) : nil
+            ? PasteRequest(keepsWholePasteboard: plan.keepsWholePasteboard, html: plan.pasteboardHTML(insertion))
+            : nil
         ScribeLog.info(
             .dictation, "Formatting decided", .integer("dictation", id.rawValue), .name("decision", plan.decision),
             .name("format", plan.textFormat), .name("delivery", plan.delivery))
