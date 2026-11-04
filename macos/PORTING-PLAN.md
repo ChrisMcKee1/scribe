@@ -38,6 +38,7 @@ implementation outline, not authorization to add a dependency, change a schema o
 | Recognizer is not bundled or offline from install | `TranscriptionBackendResolver` locates the user-installed `foundry` CLI, and Foundry Local downloads its model on first use. Windows ships its ASR model/runtime in the app payload. | Evaluate a supported, redistributable macOS runtime/model and its payload, signing and update costs. External runtime support and redistribution rights block a parity claim. |
 | Foundry long recordings are chunked | `TranscriptionChunker` ports Windows' joint quiet-seam planner. Foundry decoding is sequential, at most 30 seconds per chunk, with cancellation/failure never returning a partial transcript. | The cached Parakeet model decoded a committed long fixture in two 23.76-second calls. Other models and the fallback backend still need real long-audio characterization. |
 | GitHub Copilot cleanup is missing | macOS `CleanupProviderKind` and `CleanupProviderResolver` have no Copilot case. Windows uses the GitHub Copilot SDK/CLI provider and exposes it in Settings. | Add a provider and Settings path only after approval for a new dependency and a design for CLI/account availability on macOS. No SDK or Copilot credentials were added or tested. |
+| Ollama model download is present; starting Ollama is missing | Download another model (`OllamaModelDownloader`, `OllamaModelDownloadSection`) mirrors Windows' `OllamaModelDownloader` and `OllamaModelDownload`: validated name only, streamed `/api/pull` on loopback, progress, Cancel download, a confirmed choice. Windows also has Start/Stop Ollama (`OllamaServiceController`, `OllamaOwnedProcess`), which runs `ollama serve` in a kill-on-close job and stops only what it started. | A Mac counterpart would launch `ollama serve` through `ProcessRunner` in its own process group with the same ownership rules. Not started: Scribe owning an Ollama process needs the maintainer's decision first. |
 | Diagnostics export and retained file logging are present | `DiagnosticsLogStore` queues only ScribeLog's redacted shape-only events, excludes unshaped legacy lines, applies seven-day/16-MB-day/64-MB-total soft budgets and drains at shutdown. `DiagnosticsExport` stages only recognized log files and a system summary, then uses the supervised `ditto` process to create a zip. | Diagnostics and About have Save diagnostics. Privacy canaries, real zip extraction, retention, unwritable destinations and symlink refusal are tested. Windows historical leak redaction is not applicable to these new macOS files. |
 | On-screen indicator preview is present | Settings stages visibility and position through Save/Discard. Preview on screen shows the chosen position for two seconds without changing saved settings or activating the target, including when the indicator is disabled. | Deterministic expiry/gate tests cover restoration and ordering; actual focus and full-screen behavior still need a real Mac. |
 | Indicator visibility control is present | The persisted default-on preference gates normal presentation without changing the dictation lifecycle or notification recovery. | Changing visibility and position participates in the Settings dirty and Save/Discard flow. |
@@ -149,12 +150,26 @@ real Mac.
   `localhost` names at once (the 0.5.4 fix). Settings, AI cleanup, On this PC offers Let Scribe manage it, Ollama
   and LM Studio with a model list read from the app, Check again and Free memory; another AI service is remembered
   beside an app.
-  Windows also offers an explicit Ollama model-name download, a catalog link, progress and cancellation, then a
-  confirmation that saves only the model choice. That download UI is not mirrored on macOS yet.
-  Its Start/Stop Ollama button owns only the server process Scribe launched and its descendants, and stops them
+  The explicit Ollama model download is mirrored (`OllamaModelDownload`, `OllamaModelDownloader`,
+  `OllamaModelDownloadSection`): Download another model under Ollama takes a model name, or the catalog's copied
+  `ollama run` or `ollama pull` command read only for its model name, and refuses web addresses, extra arguments and
+  cloud tags before sending anything. It streams Ollama's `/api/pull` to the saved Ollama address only (Ollama's
+  default loopback address), sending the model name and `stream` and nothing else, through `LocalServerClient`'s
+  session rules (no proxy, no cookies, no cache) and redirect refusal, with a two-hour limit. It shows progress, has
+  Cancel download (Ollama keeps the parts), treats a stream without `success` as a failure, and gives Ollama's exact
+  "pull model manifest: file does not exist" its fixed missing-model notice; errors carry no server text. A finished
+  download refreshes the list without choosing the model, checks the reading that refresh returned, and only Use
+  model in the question that follows stores the choice, through `CleanupSettingsModel.setLocalModel`, which writes only
+  the fields that change. The log names the outcome and whether the name had a publisher or tag, never the name.
+  `OllamaModelDownloaderTests` run the request through a scripted URL-loading stub (`ScriptedPullProtocol`, the same
+  seam as `StubURLProtocol`, no socket) and `OllamaModelDownloadTests` the validation, notices and question.
+  Differences: macOS stops a download when AI cleanup is turned off, because its section's controls, Cancel included,
+  are disabled then; Windows keeps it running. The question is a SwiftUI alert. Not verified against a real Ollama or
+  on screen.
+  Windows' Start/Stop Ollama button owns only the server process Scribe launched and its descendants, and stops them
   when Scribe exits, including an update restart or forced exit; a pre-existing server is left alone.
-  Closing Settings cancels observation, not a requested Start or Stop. This process-control UI is not mirrored either.
-  Windows 0.5.5 also accepts the catalog's copied run/pull command and explains a missing model tag.
+  Closing Settings cancels observation, not a requested Start or Stop. This process-control UI is not mirrored: Scribe
+  starting or owning an `ollama serve` process on macOS waits on the maintainer's decision.
   Its conditional extra answer allowance for Ollama models that keep reasoning, with a synthetic rewrite
   check before readiness, is not mirrored here. The Windows failure list now names the model chosen
   for the actual cleanup service. Windows also keeps a dictation chunk as heard when the AI service
