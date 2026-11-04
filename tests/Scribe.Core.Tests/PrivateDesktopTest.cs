@@ -12,6 +12,14 @@ namespace Scribe.Core.Tests;
 internal static class PrivateDesktopTest
 {
     private const string Prefix = "ScribeGridTests-";
+    internal const string WatchdogMessage = "The private-desktop WPF check did not finish.";
+    internal const string CheckpointMessage = "The private-desktop WPF render checkpoint timed out.";
+    internal const string ChildWaitMessage = "The private-desktop test did not finish:";
+    // A hosted runner's desktop sometimes stops a WPF thread inside one message, so no timeout on that thread can
+    // fire. It has stopped at a window's show, its first render, a click and the start of a test body, in four
+    // different tests, and widening the watchdog from 30 to 60 s did not help. No product cause was found, so a
+    // child that stalls gets one more attempt on a fresh desktop and process; a failed assertion gets none.
+    internal const int StallAttempts = 2;
     private static readonly TimeSpan RenderCheckpointTimeout = TimeSpan.FromSeconds(10);
     private static string _phase = "not started";
 
@@ -33,7 +41,7 @@ internal static class PrivateDesktopTest
         }
         catch (TimeoutException error)
         {
-            throw new TimeoutException($"The private-desktop WPF render checkpoint timed out. phase={Phase}", error);
+            throw new TimeoutException($"{CheckpointMessage} phase={Phase}", error);
         }
 
         Step($"{stage}: complete");
@@ -83,11 +91,68 @@ internal static class PrivateDesktopTest
         }) { IsBackground = true };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), $"The private-desktop WPF check did not finish. phase={Phase}; limit=60s");
+        Assert.True(thread.Join(TimeSpan.FromSeconds(60)), $"{WatchdogMessage} phase={Phase}; limit=60s");
         failure?.Throw();
     }
 
+    internal static bool IsStall(string errors) =>
+        errors.Contains(WatchdogMessage, StringComparison.Ordinal) ||
+        errors.Contains(CheckpointMessage, StringComparison.Ordinal) ||
+        errors.Contains(ChildWaitMessage, StringComparison.Ordinal);
+
+    /// <summary>Runs attempts until one passes, a failure is not a stall, or the stall attempts run out.</summary>
+    /// <returns>How many stalled attempts came before the one that passed.</returns>
+    internal static int RunWithStallRetry(Func<string?> runOnce)
+    {
+        var stalls = new List<string>();
+        while (true)
+        {
+            var failure = runOnce();
+            if (failure is null)
+            {
+                return stalls.Count;
+            }
+
+            if (!IsStall(failure) || stalls.Count + 1 >= StallAttempts)
+            {
+                Assert.Fail(stalls.Count == 0
+                    ? failure
+                    : string.Join(Environment.NewLine, [failure, "Earlier attempts stalled:", .. stalls]));
+            }
+
+            stalls.Add(failure);
+        }
+    }
+
     private static void RunChild(string testName)
+    {
+        var recovered = RunWithStallRetry(() => RunChildOnce(testName));
+        if (recovered > 0)
+        {
+            NoteRecoveredStall(testName, recovered);
+        }
+    }
+
+    // A stall that a fresh attempt recovered from is otherwise invisible, so CI's step summary counts them.
+    private static void NoteRecoveredStall(string testName, int stalls)
+    {
+        var summary = Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY");
+        if (string.IsNullOrEmpty(summary))
+        {
+            return;
+        }
+
+        try
+        {
+            File.AppendAllText(summary,
+                $"- `{testName}` stalled on a private desktop {stalls} time(s), then passed on a fresh one.{Environment.NewLine}");
+        }
+        catch (IOException) { } // parallel test classes can append at once; the note is best effort
+        catch (UnauthorizedAccessException) { }
+    }
+
+    /// <returns>Null when the child's one test passed, otherwise what it reported.</returns>
+    private static string? RunChildOnce(string testName)
     {
         var name = Prefix + Guid.NewGuid().ToString("N");
         var desktop = CreateDesktop(name, IntPtr.Zero, IntPtr.Zero, 0, 0x10000000, IntPtr.Zero);
@@ -122,7 +187,7 @@ internal static class PrivateDesktopTest
                 using var child = Process.GetProcessById((int)process.ProcessId);
                 child.Kill(entireProcessTree: true);
                 child.WaitForExit(10000);
-                Assert.Fail($"The private-desktop test did not finish: wait result {wait}.");
+                return $"{ChildWaitMessage} wait result {wait}.";
             }
 
             Assert.True(GetExitCodeProcess(process.Process, out var exitCode));
@@ -130,10 +195,15 @@ internal static class PrivateDesktopTest
             var report = XDocument.Load(reportPath);
             var errors = string.Join(Environment.NewLine,
                 report.Descendants().Where(element => element.Name.LocalName is "Message" or "StackTrace").Select(element => element.Value));
-            Assert.True(exitCode == 0, errors);
+            if (exitCode != 0)
+            {
+                return errors.Length > 0 ? errors : $"The private-desktop test failed with exit code {exitCode}.";
+            }
+
             var counters = Assert.Single(report.Descendants(), element => element.Name.LocalName == "Counters");
             Assert.Equal("1", counters.Attribute("passed")?.Value);
             Assert.Equal("1", counters.Attribute("total")?.Value);
+            return null;
         }
         finally
         {
