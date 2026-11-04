@@ -106,6 +106,12 @@ enum RetentionBatchOutcome: Equatable, Sendable {
     case authorizationChanged(HistoryRetentionSetting)
 }
 
+/// One row of the `settings` table as a conditional commit sees it: its key, and its value or nil for no row.
+struct StoredStringSetting: Equatable, Sendable {
+    let key: String
+    let value: String?
+}
+
 /// What a dictionary import changed, by count.
 struct DictionaryImportSummary: Equatable, Sendable {
     let added: Int
@@ -754,6 +760,29 @@ final class PersistenceStore: Sendable {
     func writeStringSetting(key: String, value: String?) throws {
         try owner.withSession(.foreground) { session in
             try Self.writeSetting(key: key, value: value, session)
+        }
+    }
+
+    /// Writes every row of `writes` in one `BEGIN IMMEDIATE` transaction, but only while every row of `expected`
+    /// still holds the value given there (nil: no row). Returns false, having written nothing, when one does not.
+    /// A word pack save commits through this: its state, its Recently deleted list and its journal land together or
+    /// not at all.
+    func commitStringSettings(
+        expecting expected: [StoredStringSetting],
+        writing writes: [StoredStringSetting]
+    ) throws -> Bool {
+        try owner.withSession(.foreground) { session in
+            try session.transaction(.write) {
+                for condition in expected {
+                    guard try Self.readSetting(key: condition.key, session) == condition.value else {
+                        return false
+                    }
+                }
+                for write in writes {
+                    try Self.writeSetting(key: write.key, value: write.value, session)
+                }
+                return true
+            }
         }
     }
 
