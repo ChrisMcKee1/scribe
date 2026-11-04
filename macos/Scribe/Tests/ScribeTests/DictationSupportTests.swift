@@ -286,7 +286,7 @@ final class DictationPresentationTests: XCTestCase {
             XCTAssertFalse(label.contains("\u{2014}") || label.contains("\u{2013}"), label)
         }
         XCTAssertNotEqual(OverlayNotice.cleanupFellBack.label, OverlayNotice.textKept.label)
-        XCTAssertTrue(OverlayNotice.cleanupFellBack.label.contains("raw text"))
+        XCTAssertTrue(OverlayNotice.cleanupFellBack.label.contains("as heard"))
     }
 }
 
@@ -401,7 +401,7 @@ final class StartupNoticeTests: XCTestCase {
             texts.text(for: "notice 2", currentGeneration: 0), "Clear history left a notice's transcript behind")
     }
 
-    /// A notice's Copy Transcript copies nothing once Clear history has started another recovery generation, even
+    /// A notice's Copy Dictation copies nothing once Clear history has started another recovery generation, even
     /// when the text is still remembered.
     func testACopyTranscriptAfterClearHistoryFindsNothing() {
         var texts = NotificationRecoveryTexts()
@@ -411,7 +411,7 @@ final class StartupNoticeTests: XCTestCase {
     }
 
     /// Every notice about a dictation that did not go in carries its transcript and the recovery generation it was
-    /// kept in, for Copy Transcript; none says anything with a dash, and neither do the fallbacks for the pill.
+    /// kept in, for Copy Dictation; none says anything with a dash, and neither do the fallbacks for the pill.
     func testDeliveryNoticesCarryTheirTranscriptAndGeneration() {
         let notices = [
             DictationNotice.notInserted("words", recoveryGeneration: 2),

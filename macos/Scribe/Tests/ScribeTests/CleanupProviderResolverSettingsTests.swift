@@ -95,7 +95,7 @@ final class CleanupProviderResolverSettingsTests: XCTestCase {
                 apiStyle: .responses))
         let provider = try makeProvider(fixture.store)
         XCTAssertEqual(provider.id, "openai-compatible")
-        XCTAssertEqual(provider.displayName, "OpenAI-compatible endpoint")
+        XCTAssertEqual(provider.displayName, "Another AI service")
     }
 
     func testAStaleLocalSelectionIsNotCapturedByARemoteConnection() throws {

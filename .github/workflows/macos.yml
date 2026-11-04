@@ -13,12 +13,16 @@ on:
     paths:
       - 'macos/**'
       - 'tests/fixtures/speech/**'
+      # Its retired words are the Mac's too (GlossarySourceTests reads the list).
+      - 'tests/Scribe.Core.Tests/GlossarySourceTests.cs'
       - '.github/workflows/macos.yml'
   pull_request:
     branches: [main]
     paths:
       - 'macos/**'
       - 'tests/fixtures/speech/**'
+      # Its retired words are the Mac's too (GlossarySourceTests reads the list).
+      - 'tests/Scribe.Core.Tests/GlossarySourceTests.cs'
       - '.github/workflows/macos.yml'
   workflow_dispatch:
     inputs:

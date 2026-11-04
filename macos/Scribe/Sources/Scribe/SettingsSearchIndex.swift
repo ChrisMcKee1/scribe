@@ -49,7 +49,7 @@ enum SettingsSearchIndex {
     private static let requiresAI = SettingsSearchRequirement(
         controlName: "ai.enabled", label: "Use AI cleanup", kind: .checkbox)
     private static let requiresLocal = SettingsSearchRequirement(
-        controlName: "ai.provider", label: "On this PC", kind: .radio)
+        controlName: "ai.provider", label: "On this Mac", kind: .radio)
     private static let requiresScribeModel = SettingsSearchRequirement(
         controlName: "ai.provider", label: "Let Scribe manage it", kind: .radio)
     private static let requiresOllama = SettingsSearchRequirement(
@@ -96,7 +96,7 @@ enum SettingsSearchIndex {
 
         entry("ai.enabled", .aiCleanup, "ai.enabled", "Use AI cleanup", ["polish", "grammar", "punctuation"]),
         entry(
-            "ai.local", .aiCleanup, "ai.provider", "On this PC", ["provider", "offline", "local", "private"], nil,
+            "ai.local", .aiCleanup, "ai.provider", "On this Mac", ["provider", "offline", "local", "private"], nil,
             [requiresAI]),
         entry(
             "ai.foundry", .aiCleanup, "ai.provider", "Microsoft Foundry", ["provider", "azure", "cloud"], nil,
@@ -106,20 +106,20 @@ enum SettingsSearchIndex {
             ["provider", "openrouter", "openai", "server"], nil, [requiresAI]),
         entry(
             "ai.local.scribe", .aiCleanup, "ai.provider", "Let Scribe manage it",
-            ["foundry local", "download", "local model", "scribe"], "On this PC", [requiresAI, requiresLocal]),
+            ["foundry local", "download", "local model", "scribe"], "On this Mac", [requiresAI, requiresLocal]),
         entry(
             "ai.local.ollama", .aiCleanup, "ai.provider", "Ollama", ["local model", "gemma", "llama"],
-            "On this PC", [requiresAI, requiresLocal]),
+            "On this Mac", [requiresAI, requiresLocal]),
         entry(
             "ai.local.lmstudio", .aiCleanup, "ai.provider", "LM Studio",
-            ["lm studio", "lmstudio", "local model"], "On this PC", [requiresAI, requiresLocal]),
+            ["lm studio", "lmstudio", "local model"], "On this Mac", [requiresAI, requiresLocal]),
         entry(
             "ai.model", .aiCleanup, "ai.provider", "Model alias",
-            ["foundry local", "download", "load", "free memory"], "On this PC",
+            ["foundry local", "download", "load", "free memory"], "On this Mac",
             [requiresAI, requiresLocal, requiresScribeModel]),
         entry(
             "ai.local.scribe.vocabulary", .aiCleanup, "ai.provider", LocalModelTuningText.wholeVocabularyTitle,
-            ["vocabulary", "dictionary", "word packs", "context", "foundry local"], "On this PC",
+            ["vocabulary", "dictionary", "word packs", "context", "foundry local"], "On this Mac",
             [requiresAI, requiresLocal, requiresScribeModel]),
         entry(
             "ai.local.ollama.context", .aiCleanup, "ai.provider", LocalModelTuningText.contextSizeTitle,
@@ -146,7 +146,7 @@ enum SettingsSearchIndex {
             ["vocabulary", "dictionary", "word packs", "context"], "LM Studio",
             [requiresAI, requiresLocal, requiresLMStudio]),
         entry(
-            "ai.custom.endpoint", .aiCleanup, "ai.provider", "Base URL", ["url", "openrouter", "address"],
+            "ai.custom.endpoint", .aiCleanup, "ai.provider", "Server address", ["url", "openrouter", "base url"],
             "Another AI service", [requiresAI, requiresOtherService]),
         entry(
             "ai.custom.api", .aiCleanup, "ai.provider", "API", ["chat completions", "responses", "openai"],
@@ -189,13 +189,13 @@ enum SettingsSearchIndex {
             "ai.restore-writing-style", .aiCleanup, "ai.writing-style", "Restore default writing style",
             ["reset", "restore", "default prompt"], nil, [requiresAI]),
         entry(
-            "ai.guardrails.detailed", .aiCleanup, "ai.guardrails", "Detailed guardrail prompt",
-            ["system prompt", "instructions", "cloud", "frontier"], nil, [requiresAI]),
+            "ai.guardrails.detailed", .aiCleanup, "ai.guardrails", "Detailed instructions",
+            ["system prompt", "guardrail", "cloud", "frontier"], nil, [requiresAI]),
         entry(
-            "ai.guardrails.local", .aiCleanup, "ai.guardrails", "Local guardrail prompt",
-            ["system prompt", "instructions", "on this pc"], nil, [requiresAI]),
+            "ai.guardrails.local", .aiCleanup, "ai.guardrails", "Short instructions",
+            ["local prompt", "system prompt", "guardrail", "on this mac"], nil, [requiresAI]),
         entry(
-            "ai.guardrails.restore", .aiCleanup, "ai.guardrails", "Restore default guardrail prompts",
+            "ai.guardrails.restore", .aiCleanup, "ai.guardrails", "Restore default instructions",
             ["reset", "restore", "default prompt"], nil, [requiresAI]),
 
         entry(

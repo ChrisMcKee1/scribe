@@ -6,7 +6,7 @@ enum LibraryCsvCodecError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .metadataUnreadableInOlderVersions:
-            return "The library metadata does not read back in older versions."
+            return "The word pack's details do not read back in older versions of Scribe."
         }
     }
 }

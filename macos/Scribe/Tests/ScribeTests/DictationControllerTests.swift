@@ -597,7 +597,7 @@ final class DictationControllerTests: XCTestCase {
 
     // MARK: - Who owns the pill
 
-    /// Dictation A's cleanup fails while a newer recording B owns the pill. The pill cannot say "raw text used" now,
+    /// Dictation A's cleanup fails while a newer recording B owns the pill. The pill cannot say "typing as heard" now,
     /// so a notification says it instead, and the pill does not say it later as well.
     func testACleanupFallbackWhileANewerRecordingOwnsThePillIsPostedAsANotification() async throws {
         let harness = makeHarness()

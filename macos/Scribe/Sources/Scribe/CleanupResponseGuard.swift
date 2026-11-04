@@ -12,19 +12,6 @@ enum CleanupResponseGuard {
         case overlongRamble
         case refusalLike
         case replyLike
-
-        var logMessage: String {
-            switch self {
-            case .emptyCandidate, .emptyAfterStripping:
-                return "AI cleanup produced an empty response after sanitization; using post-processed transcription."
-            case .overlongRamble:
-                return "AI cleanup rejected an over-long response; using post-processed transcription."
-            case .refusalLike:
-                return "AI cleanup rejected a refusal-like response; using post-processed transcription."
-            case .replyLike:
-                return "AI cleanup rejected a reply-like response; using post-processed transcription."
-            }
-        }
     }
 
     static func sanitize(candidate: String?, original: String) -> CleanupResponseGuardResult {

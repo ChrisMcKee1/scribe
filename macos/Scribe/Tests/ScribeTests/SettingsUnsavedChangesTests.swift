@@ -62,7 +62,7 @@ final class SettingsUnsavedChangesTests: XCTestCase {
         drafts.section = .dictionary
         drafts.wordPackWorkspace = LibraryWorkspace(libraries: [])
         XCTAssertFalse(drafts.hasUnsavedChanges)
-        XCTAssertEqual(drafts.footerText, "No unsaved changes.")
+        XCTAssertEqual(drafts.footerText, "All changes saved.")
     }
 
     func testDirtySectionsDescribeOnlyPendingInput() {

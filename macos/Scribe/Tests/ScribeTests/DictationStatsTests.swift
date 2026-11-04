@@ -106,3 +106,29 @@ final class DictationStatsTests: XCTestCase {
         XCTAssertEqual(stats?.rtfP50 ?? -1, 0.10, accuracy: 1e-6)
     }
 }
+
+/// Windows' `TryDictationTiming.SpeedLabel`, in Swift: the speed figure Diagnostics and Try dictation show.
+final class DictationSpeedTextTests: XCTestCase {
+    func testTheSpeedIsTheInverseOfTheRealTimeFactorRoundedAwayFromZero() {
+        XCTAssertEqual(DictationSpeedText.speedLabel(realTimeFactor: 0.05), "20 times faster than real time")
+        XCTAssertEqual(DictationSpeedText.speedLabel(realTimeFactor: 0.4), "3 times faster than real time")
+        XCTAssertEqual(DictationSpeedText.speedLabel(realTimeFactor: 1.5), "1 times faster than real time")
+    }
+
+    func testAFactorThatSaysNothingGivesNoText() {
+        XCTAssertEqual(DictationSpeedText.speedLabel(realTimeFactor: 0), "")
+        XCTAssertEqual(DictationSpeedText.speedLabel(realTimeFactor: -1), "")
+        XCTAssertEqual(DictationSpeedText.speedLabel(realTimeFactor: .nan), "")
+        XCTAssertEqual(DictationSpeedText.speedLabel(realTimeFactor: .infinity), "")
+    }
+
+    func testTheSummaryNamesTheFastestTheTypicalAndTheSpeedNineteenInTwentyReach() {
+        XCTAssertEqual(
+            DictationSpeedText.summary(fastest: 0.05, typical: 0.1, slowest: 0.25),
+            "Fastest: 20 times faster than real time. Typical: 10 times faster than real time. "
+                + "19 in 20: 4 times faster than real time or more.")
+        XCTAssertEqual(
+            DictationSpeedText.summary(fastest: 0.05, typical: 0, slowest: 0),
+            "Fastest: 20 times faster than real time.")
+    }
+}

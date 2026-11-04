@@ -47,13 +47,13 @@ enum DictionaryLibraryServiceError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidCsv(let detail):
-            return "That library contains invalid CSV rows:\n\(detail)"
+            return "That word pack contains invalid CSV rows:\n\(detail)"
         case .noUsableEntries:
             return "That file has no usable dictionary rows. Each row needs at least a spoken form and a replacement."
         case .builtInCannotBeRemoved:
-            return "Built-in libraries can't be removed. Turn it off instead."
+            return "Built-in word packs can't be removed. Turn it off instead."
         case .invalidLibraryId:
-            return "That library id is not valid."
+            return "That word pack id is not valid."
         }
     }
 }
