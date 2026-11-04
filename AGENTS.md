@@ -1798,7 +1798,7 @@ change the sums and needs a decision (and probably a flag) of its own.
   before. `HotkeyModifierTests` and `HotkeyDesktopSwitchTests` pin the rules, and the
   `HotkeyServiceTests.Start_` desktop-switch tests (desktop filter, so CI) the wiring and the check.
 
-## App-aware formatting (Windows, restricted literal-source MVP)
+## App-aware formatting (Windows, literal source plus a formatted copy)
 
 - **On for every install, not semantic formatting.** `AppSettings.AppAwareFormattingEnabled` is on: the maintainer
   decided (2026-10-26) that it is on for everyone, after dictated lists typed into Markdown apps came out as "2. 2.".
@@ -1810,9 +1810,11 @@ change the sums and needs a decision (and probably a flag) of its own.
   new format and delivery overrides and preserves the old profile writing-style and newline behavior. On uses
   `AppProfileMatcher`'s first match; `AppProfile.TextFormat` null inherits the default, and nullable `InjectionMethod`
   and `ShiftEnterLineBreaks` inherit their legacy globals. Without a matching profile, known Markdown-aware desktop
-  apps (`DictationFormatPlan.IsMarkdownProcess`, such as `github`, `claude`, `Code` and `Obsidian`) default to
-  `MarkdownSource` and `ClipboardPaste` when line breaks are kept, so multi-line lists paste as a unit instead of
-  triggering `Shift+Enter` list auto-continuation (`- - `, `2. 2.`); other unmatched apps stay Plain. Such a paste keeps
+  apps (`DictationFormatPlan.BuiltInFormat`: `MarkdownProcesses`, such as `github`, `claude`, `Code` and `Obsidian`,
+  and `FormattedMarkdownProcesses`, `ms-teams`, `Teams`, `copilotapp` and `ChatGPT`) default to `MarkdownSource`, or
+  `MarkdownWithFormatting` for the second list, and `ClipboardPaste` when line breaks are kept, so multi-line lists
+  paste as a unit instead of triggering `Shift+Enter` list auto-continuation (`- - `, `2. 2.`); other unmatched apps
+  stay Plain. Such a paste keeps
   the whole clipboard (`DictationFormatPlan.KeepsWholeClipboard`, see "Clipboard paste"), because a screenshot or
   formatted text on the clipboard used to make the borrow refuse and the dictation was typed, list markers doubled.
   This never enables AI cleanup or changes a prompt.
@@ -1822,16 +1824,40 @@ change the sums and needs a decision (and probably a flag) of its own.
   Markdown-source/one-line conflicts, including stock AlwaysFlatten presets. At runtime a new inherited conflict
   refuses all new preferences before selecting Plain with the legacy delivery and an explicit
   `MarkdownNewlineConflict` notice/code. It never silently changes a preset.
+- **Markdown with formatting (approved by the maintainer 2026-11-04).** `DictationTextFormat.MarkdownWithFormatting`
+  pastes exactly what `MarkdownSource` pastes and adds an HTML rendering of R as the clipboard's "HTML Format"
+  (`DictationFormatPlan.ClipboardHtml`, `MarkdownClipboardHtml`, encoded by `ClipboardHtmlFormat`). Measured by pasting
+  one test document into each app (2026-11-04): Teams showed pasted Markdown literally and turned the HTML into real
+  lists, emphasis, links, code blocks and tables; Microsoft Copilot (`copilotapp`) half-converted pasted Markdown and ran
+  a fenced code block into the lines after it, while the HTML lost no line; Codex (`ChatGPT`) kept Markdown literal and
+  formatted the HTML; Scout ignores the HTML (its box is plain text); the GitHub Copilot app converts pasted Markdown
+  fully and, given both, takes the HTML, which loses task boxes and a code block's language, so `github` stays
+  `MarkdownSource`. Claude, Outlook, Word, PowerPoint and Grok Bot were not measured and stay as they were. RTF was
+  ignored by Codex; none is made. The renderer is Markdig (BSD-2-Clause) with raw HTML off and the backslash-escape and
+  entity parsers removed, so a dictated `C:\Users\me\.config`, `&copy;` or `<script>` reads as typed; a single newline
+  is a `<br>`; text with no Markdown structure (plain prose, with or without a bare web address) or with a link
+  reference definition (which renders as nothing) gets no HTML, so it pastes as before. `MarkdownClipboardHtmlTests`
+  pins those rules and the parser list across a Markdig bump. The HTML is made from R before the space is added, never
+  kept anywhere, and only for a paste: a typed delivery, a refused paste's fallback and a remote client type the
+  Markdown. The borrow writes it in the same open session right after the text and before the privacy marks and the
+  receipt, best effort (`ClipboardLease.HtmlPlaced`): a failed HTML write still pastes the text. The paste log line adds
+  two booleans, formatted copy asked and placed, never the HTML. Older builds read the saved name as Plain
+  (`FormattingJson`); this enum is not one of the legacy enums the next bullet warns about.
+- **Excel stays on one line under Automatic.** `InjectionTextFormatter.ShouldFlatten` flattens `EXCEL` under
+  `SmartFlatten` as it does terminals (`IsSingleLineCellProcess`): Excel's Shift+Enter "completes a cell entry and
+  selects the cell above", so a typed multi-line dictation wrote each line over the cell above, and a pasted one filled
+  the rows below. The Documents preset no longer lists Excel; profiles added from it earlier keep their list.
 - **P, R and T.** `DictationFormatPlan` is immutable and captured inside the admitted recording factory, alongside the
-  existing settings, target and vocabulary. P is the actual postprocessed text; both Plain and MarkdownSource renderers
-  are identity operations. `Represent` applies only the existing target newline handling to obtain R. FinalText,
+  existing settings, target and vocabulary. P is the actual postprocessed text; every format's text is an identity
+  rendering, and `MarkdownWithFormatting`'s HTML is a second rendering of R on the clipboard only. `Represent` applies only the existing target newline handling to obtain R. FinalText,
   Recorded and the recovery copy are R; history and Dictated receive R only on insertion success. T is
   `DictationInsertion.TextToType(R, AddSpaceAfterDictation)`, and only the injector receives it. Paste refusal types the
   same T, without recomputing R. Remote typing-only and the HWND focus guards are unchanged.
 - **Do not reconstruct meaning.** Keep literal code, URLs, punctuation, Unicode, ASCII markers and supplied line
   boundaries, not inferred lists, renumbering, links or generated fences. Cleanup's existing fence stripping, dash
-  normalization, inaccuracies and chunk-space joins still happen before P. No rich HTML/RTF payload, CSS mode, second
-  LLM rewrite, voice-format commands or literal AI/dictionary/snippet bypass is shipped.
+  normalization, inaccuracies and chunk-space joins still happen before P. The HTML copy renders the Markdown the text
+  already holds; it infers nothing. No RTF payload, CSS mode, second LLM rewrite, voice-format commands or literal
+  AI/dictionary/snippet bypass is shipped.
 - **Saved fields and downgrade behavior.** Only ordinary Save/SaveBundle JSON, no schema change or library byte patch.
   The new properties have property-specific tolerant converters: unknown explicit formats become Plain, malformed
   delivery overrides inherit, and only a JSON true opts in. Old readers ignore missing/new fields; an old re-save can
@@ -1904,7 +1930,7 @@ change the sums and needs a decision (and probably a flag) of its own.
 - **By default a borrow keeps plain text only; a formatting paste keeps the whole clipboard.** A clipboard holding
   more than plain text (an image, files, formatted text: `HasNonTextContent`) is refused, untouched, and the
   dictation is typed, so the user's content survives. `TryBorrow(text, keepWholeClipboard: true)`, which only
-  `DictationFormatPlan.KeepsWholeClipboard` (literal Markdown source, pasted) asks for, copies every format in the same
+  `DictationFormatPlan.KeepsWholeClipboard` (either Markdown format, pasted) asks for, copies every format in the same
   open session instead (`TryKeepWholeClipboard`) and restores them all by the same receipt rule, in the order Windows
   listed them, marked private like a restored text. It skips what Windows synthesizes (the first of each text,
   device-independent bitmap and metafile family listed is the one placed; CF_BITMAP and CF_PALETTE come from the
@@ -1917,7 +1943,8 @@ change the sums and needs a decision (and probably a flag) of its own.
   which would tell exactly when the target reads it, needs an owner window; the clipboard is opened with a NULL owner
   (see `Win32Clipboard`'s remarks), so the restore still waits `PasteSettleDelayMs`. `WholeClipboardBorrowTests` pins
   the rules on the fake; `Win32ClipboardTests` round-trips an image and HTML on the CI runners only (it replaces the
-  clipboard).
+  clipboard). A `MarkdownWithFormatting` paste also writes its "HTML Format" copy in that session (see "App-aware
+  formatting"); the receipt check and the restore never look at it, and `EmptyClipboard` in the restore frees it.
 - The paste log line carries enum names, counts and booleans only: nothing of the clipboard's content,
   length or format names (for a whole-clipboard borrow, whether it was asked and how many formats it kept).
 - **A Remote Desktop or virtual machine client never reaches this path**: it is always typed into (see "Typing into a

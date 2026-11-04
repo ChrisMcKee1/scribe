@@ -464,10 +464,12 @@ public class DictationInsertionTests : InsertionFlagTest
         Assert.Contains("typed => _injector.Inject(", call, StringComparison.Ordinal);
         Assert.Contains("typed, session.Formatting.InjectionMethod, session.TargetWindow, session.Formatting.ShiftEnterLineBreaks", call, StringComparison.Ordinal);
 
-        // The target's process, which paces typing into a Remote Desktop or virtual machine client (TypingPace), and the
-        // plan's choice to keep the whole clipboard for a formatting paste.
+        // The target's process, which paces typing into a Remote Desktop or virtual machine client (TypingPace), the
+        // plan's choice to keep the whole clipboard for a formatting paste, and the HTML copy "Markdown with formatting"
+        // adds to a paste (null otherwise), rendered from the text before the space is added.
         Assert.Contains("session.Formatting.ShiftEnterLineBreaks, targetApp,", call, StringComparison.Ordinal);
-        Assert.Contains("session.Formatting.KeepsWholeClipboard)", call, StringComparison.Ordinal);
+        Assert.Contains("session.Formatting.KeepsWholeClipboard, clipboardHtml)", call, StringComparison.Ordinal);
+        Assert.Contains("var clipboardHtml = session.Formatting.ClipboardHtml(text);", controller[..insert], StringComparison.Ordinal);
 
         // After AI cleanup (its guards and the dash normalizer run inside CleanAsync), the dictionary and snippets, and the
         // line breaks handled for the target, which trims; the report keeps the text as dictated.

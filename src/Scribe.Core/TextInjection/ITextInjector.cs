@@ -20,7 +20,9 @@ public interface ITextInjector
     /// never pasted into, whatever <paramref name="method"/> asks, and the typing is paced for the remote session (see
     /// <see cref="RemoteClientProcesses"/>). With <paramref name="keepWholeClipboard"/>, a paste keeps and puts back
     /// everything on the clipboard it can restore exactly (an image, formatted text, copied files) instead of typing
-    /// when the clipboard holds more than plain text (see <see cref="DictationFormatPlan.KeepsWholeClipboard"/>).
+    /// when the clipboard holds more than plain text (see <see cref="DictationFormatPlan.KeepsWholeClipboard"/>). With
+    /// <paramref name="htmlFragment"/>, a paste also places that HTML as the clipboard's "HTML Format" beside the text (see
+    /// <see cref="DictationFormatPlan.ClipboardHtml"/>); typing, including a refused paste's fallback, types the text.
     /// </summary>
     InjectionResult Inject(
         string text,
@@ -28,7 +30,8 @@ public interface ITextInjector
         nint expectedForegroundWindow = 0,
         bool shiftEnterLineBreaks = true,
         string? targetProcessName = null,
-        bool keepWholeClipboard = false);
+        bool keepWholeClipboard = false,
+        string? htmlFragment = null);
 }
 
 /// <summary>Outcome of placing text into the target application.</summary>

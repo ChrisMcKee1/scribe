@@ -25,7 +25,7 @@ public partial class SettingsWindow
         ProfileNewlineCombo.ItemsSource = new[]
         {
             new ProfileNewlineChoice(null, "Use the Advanced setting"),
-            new ProfileNewlineChoice(NewlineInjectionMode.SmartFlatten, "Automatic: one line in command windows"),
+            new ProfileNewlineChoice(NewlineInjectionMode.SmartFlatten, "Automatic: one line in command windows and Excel"),
             new ProfileNewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line"),
             new ProfileNewlineChoice(NewlineInjectionMode.KeepNewlines, "Keep line breaks"),
         };

@@ -154,6 +154,13 @@
          cancellation token, so OllamaDownloadReadCancellation and its stalled-body test stay. -->
     <PackageVersion Include="OllamaSharp" Version="5.5.0" />
 
+    <!-- App-aware formatting's "Markdown with formatting" paste: the dictation's Markdown is rendered to the clipboard's
+         HTML Format beside the Markdown text, for apps that read HTML but not pasted Markdown (Teams, Microsoft Copilot,
+         Codex; measured 2026-11-04). BSD-2-Clause. MarkdownClipboardHtml builds its own pipeline: raw HTML off, and
+         backslash escapes and entities left as typed, so a dictated path or "&copy;" is never rewritten. Re-run
+         MarkdownClipboardHtmlTests after a bump: they pin the pipeline's parser list and the rendered HTML. -->
+    <PackageVersion Include="Markdig" Version="1.5.1" />
+
     <!-- Optional cloud AI cleanup via Microsoft Foundry / Azure OpenAI, discovered through the
          user's existing Azure CLI sign-in (AzureCliCredential, AAD tokens, no key stored).
          Azure.Identity type-forwards AzureCliCredential and ClientSecretCredential to Azure.Core,

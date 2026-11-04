@@ -85,7 +85,10 @@ It does not inspect website addresses, window titles, field contents, password f
 and it does not add application names or other target details to AI cleanup requests. Turning it on
 does not turn AI cleanup on or make another AI rewrite. Literal Markdown source is still plain text
 delivery, not HTML or RTF; it keeps source already produced by the pipeline, without repairing any
-changes an earlier cleanup made.
+changes an earlier cleanup made. Markdown with formatting pastes that same text and adds an HTML
+rendering of it to the clipboard item Scribe places for the paste. The rendering is made on this PC,
+holds nothing the text does not, carries the same marks that keep Scribe's clipboard writes out of
+clipboard history and cloud sync, and is removed when Scribe puts your clipboard back. No RTF is made.
 
 Use plain text once is an in-memory Windows preference, visibly armed for at most 60 seconds and
 taken only by the next accepted recording. Refused shortcuts do not take it. Cancellation, expiry

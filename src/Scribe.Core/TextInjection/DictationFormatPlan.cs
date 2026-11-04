@@ -10,6 +10,7 @@ public enum DictationFormatDecision
     MarkdownSource,
     PlainOnce,
     MarkdownNewlineConflict,
+    MarkdownWithFormatting,
 }
 
 /// <summary>
@@ -28,22 +29,18 @@ public sealed record DictationFormatPlan(
     // formatting is enabled and no explicit profile matches, these targets default to MarkdownSource
     // with ClipboardPaste so multi-line lists and paragraphs are pasted as a unit rather than typed
     // line-by-line (where Shift+Enter triggers the editor's list auto-continuation and duplicates
-    // bullet markers as "- - ").
+    // bullet markers as "- - "). Apps in FormattedMarkdownProcesses get the same paste plus an HTML copy.
     private static readonly HashSet<string> MarkdownProcesses = new(StringComparer.OrdinalIgnoreCase)
     {
         "github",
         "GitHubCopilot",
-        "copilotapp",
         "claude",
-        "ChatGPT",
         "M365Copilot",
         "Microsoft Scout",
         "scout",
         "Perplexity",
         "slack",
         "Discord",
-        "ms-teams",
-        "Teams",
         "Code",
         "Code - Insiders",
         "VSCodium",
@@ -68,6 +65,20 @@ public sealed record DictationFormatPlan(
         "Logseq",
     };
 
+    // Apps that read the clipboard's HTML but leave pasted Markdown as typed, measured by pasting into each on 2026-11-04:
+    // Teams showed "**Bold**" and "- item" literally and turned the HTML copy into real formatting; Microsoft Copilot
+    // (copilotapp) half-converted pasted Markdown and ran a fenced code block into the lines after it, while the HTML copy
+    // lost no line; Codex (the ChatGPT app) kept Markdown literal and formatted the HTML copy. They default to
+    // MarkdownWithFormatting. The GitHub Copilot app is deliberately not here: it converts pasted Markdown fully (task boxes
+    // and a code block's language included), and given both it takes the HTML, which loses those two.
+    private static readonly HashSet<string> FormattedMarkdownProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ms-teams",
+        "Teams",
+        "copilotapp",
+        "ChatGPT",
+    };
+
     /// <summary>
     /// Whether this plan's paste keeps everything on the clipboard (an image, formatted text, copied files) and puts it
     /// back, rather than typing when the clipboard holds more than plain text. Only literal Markdown source pasted asks
@@ -75,21 +86,33 @@ public sealed record DictationFormatPlan(
     /// so a screenshot left on the clipboard must not turn the paste into typing.
     /// </summary>
     public bool KeepsWholeClipboard =>
-        TextFormat == DictationTextFormat.MarkdownSource && InjectionMethod == InjectionMethod.ClipboardPaste;
+        IsMarkdown(TextFormat) && InjectionMethod == InjectionMethod.ClipboardPaste;
 
     /// <summary>True when <paramref name="processName"/> is a known Markdown-aware desktop application.</summary>
-    public static bool IsMarkdownProcess(string? processName)
+    public static bool IsMarkdownProcess(string? processName) => BuiltInFormat(processName) is not null;
+
+    /// <summary>
+    /// The format a known app gets when no profile matches it: <see cref="DictationTextFormat.MarkdownWithFormatting"/> for
+    /// an app that reads the clipboard's HTML but not pasted Markdown, <see cref="DictationTextFormat.MarkdownSource"/> for
+    /// the other Markdown-aware apps, and null for every other app.
+    /// </summary>
+    public static DictationTextFormat? BuiltInFormat(string? processName)
     {
         if (string.IsNullOrWhiteSpace(processName))
         {
-            return false;
+            return null;
         }
 
         var trimmed = processName.Trim();
         var normalized = trimmed.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
             ? trimmed[..^4]
             : trimmed;
-        return MarkdownProcesses.Contains(normalized);
+        if (FormattedMarkdownProcesses.Contains(normalized))
+        {
+            return DictationTextFormat.MarkdownWithFormatting;
+        }
+
+        return MarkdownProcesses.Contains(normalized) ? DictationTextFormat.MarkdownSource : null;
     }
 
     /// <summary>
@@ -121,7 +144,7 @@ public sealed record DictationFormatPlan(
 
         if (profile is null)
         {
-            if (!IsMarkdownProcess(targetProcessName) ||
+            if (BuiltInFormat(targetProcessName) is not { } builtIn ||
                 InjectionTextFormatter.ShouldFlatten(newline, targetProcessName))
             {
                 return legacy;
@@ -129,9 +152,9 @@ public sealed record DictationFormatPlan(
 
             return legacy with
             {
-                TextFormat = plainOnce ? DictationTextFormat.Plain : DictationTextFormat.MarkdownSource,
+                TextFormat = plainOnce ? DictationTextFormat.Plain : builtIn,
                 InjectionMethod = plainOnce ? settings.InjectionMethod : InjectionMethod.ClipboardPaste,
-                Decision = plainOnce ? DictationFormatDecision.PlainOnce : DictationFormatDecision.MarkdownSource,
+                Decision = plainOnce ? DictationFormatDecision.PlainOnce : DecisionFor(builtIn),
             };
         }
 
@@ -146,9 +169,7 @@ public sealed record DictationFormatPlan(
         var method = profile.InjectionMethod is { } chosen && Enum.IsDefined(chosen)
             ? chosen
             : settings.InjectionMethod;
-        var formatDecision = format == DictationTextFormat.MarkdownSource
-            ? DictationFormatDecision.MarkdownSource
-            : DictationFormatDecision.Plain;
+        var formatDecision = DecisionFor(format);
         return legacy with
         {
             TextFormat = plainOnce ? DictationTextFormat.Plain : format,
@@ -159,9 +180,9 @@ public sealed record DictationFormatPlan(
     }
 
     /// <summary>
-    /// R: the actual postprocessed characters, after the existing target newline policy. Both representations are identity
-    /// renderers in this MVP: no markers added or removed, no Markdown-to-rich conversion, no parsing of code or URLs.
-    /// Delivery, including a refused paste's typing fallback, receives this one result without recalculating it.
+    /// R: the actual postprocessed characters, after the existing target newline policy. Every format's text is an identity
+    /// rendering: no markers added or removed, no parsing of code or URLs. Delivery, including a refused paste's typing
+    /// fallback, receives this one result without recalculating it, and history keeps it.
     /// </summary>
     public string Represent(string postprocessedText)
     {
@@ -169,13 +190,38 @@ public sealed record DictationFormatPlan(
         return InjectionTextFormatter.Apply(postprocessedText, NewlineHandling, TargetProcessName);
     }
 
+    /// <summary>
+    /// The HTML fragment "Markdown with formatting" puts on the clipboard beside <paramref name="represented"/> (R, the text
+    /// <see cref="Represent"/> returned), or null: for every other format, for a dictation that is typed rather than pasted,
+    /// and for text with no Markdown structure (see <see cref="MarkdownClipboardHtml"/>). It is only ever an addition to the
+    /// clipboard; nothing keeps it.
+    /// </summary>
+    public string? ClipboardHtml(string represented)
+    {
+        ArgumentNullException.ThrowIfNull(represented);
+        return TextFormat == DictationTextFormat.MarkdownWithFormatting && InjectionMethod == InjectionMethod.ClipboardPaste
+            ? MarkdownClipboardHtml.TryRender(represented)
+            : null;
+    }
+
     public static DictationTextFormat SafeFormat(DictationTextFormat value) =>
-        value == DictationTextFormat.MarkdownSource ? value : DictationTextFormat.Plain;
+        value is DictationTextFormat.MarkdownSource or DictationTextFormat.MarkdownWithFormatting
+            ? value
+            : DictationTextFormat.Plain;
+
+    /// <summary>Whether <paramref name="format"/> pastes Markdown source, with or without its formatted copy.</summary>
+    public static bool IsMarkdown(DictationTextFormat format) => SafeFormat(format) != DictationTextFormat.Plain;
 
     public static bool ConflictsWithNewlines(
         DictationTextFormat format, NewlineInjectionMode newline, string? targetProcessName) =>
-        SafeFormat(format) == DictationTextFormat.MarkdownSource &&
-        InjectionTextFormatter.ShouldFlatten(newline, targetProcessName);
+        IsMarkdown(format) && InjectionTextFormatter.ShouldFlatten(newline, targetProcessName);
+
+    private static DictationFormatDecision DecisionFor(DictationTextFormat format) => SafeFormat(format) switch
+    {
+        DictationTextFormat.MarkdownSource => DictationFormatDecision.MarkdownSource,
+        DictationTextFormat.MarkdownWithFormatting => DictationFormatDecision.MarkdownWithFormatting,
+        _ => DictationFormatDecision.Plain,
+    };
 }
 
 public static class DictationFormattingText
@@ -190,11 +236,17 @@ public static class DictationFormattingText
 
     public const string SourceLimits =
         "Literal Markdown source keeps the characters already in your text, including a snippet's markers. It doesn't " +
-        "turn speech into lists, links or code blocks, and doesn't correct changes made by AI cleanup. No rich text is sent.";
+        "turn speech into lists, links or code blocks, and doesn't correct changes made by AI cleanup. Markdown with " +
+        "formatting pastes that same text and adds a formatted copy of it, for apps that show pasted Markdown as typed.";
 
     public static string Describe(DictationFormatPlan plan)
     {
-        var format = plan.TextFormat == DictationTextFormat.MarkdownSource ? "Literal Markdown source" : "Plain text";
+        var format = plan.TextFormat switch
+        {
+            DictationTextFormat.MarkdownSource => "Literal Markdown source",
+            DictationTextFormat.MarkdownWithFormatting => "Markdown with formatting",
+            _ => "Plain text",
+        };
         var method = plan.InjectionMethod == InjectionMethod.ClipboardPaste ? "Paste requested" : "Typing requested";
         var lineBreak = plan.ShiftEnterLineBreaks ? "Shift+Enter for typed line breaks" : "Enter for typed line breaks";
         return $"{format}. {method}; {lineBreak}.";

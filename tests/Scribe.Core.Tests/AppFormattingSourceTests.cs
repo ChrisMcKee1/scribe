@@ -61,8 +61,13 @@ public sealed class AppFormattingSourceTests
         Assert.Single(Regex.Matches(source, Regex.Escape("_injector.Inject(")));
         Assert.Contains("typed, session.Formatting.InjectionMethod, session.TargetWindow, session.Formatting.ShiftEnterLineBreaks, targetApp",
             source[insertion..history], StringComparison.Ordinal);
-        Assert.DoesNotContain("Html", source[insertion..history], StringComparison.Ordinal);
-        Assert.DoesNotContain("Rtf", source[insertion..history], StringComparison.Ordinal);
+        // The one formatted addition is the plan's HTML rendering of R, made after R and the conflict notice and handed
+        // to the injector beside the text; nothing else about the text or its delivery changes, and no RTF is made.
+        var html = source.IndexOf("var clipboardHtml = session.Formatting.ClipboardHtml(text);", StringComparison.Ordinal);
+        Assert.True(final < html && html < insertion);
+        Assert.Contains("session.Formatting.KeepsWholeClipboard, clipboardHtml)", source[insertion..history], StringComparison.Ordinal);
+        Assert.Single(Regex.Matches(source[insertion..history], "Html"));
+        Assert.DoesNotContain("Rtf", source[final..history], StringComparison.Ordinal);
         var notice = source.IndexOf("FormattingConflict?.Invoke()", representation, StringComparison.Ordinal);
         Assert.True(notice > representation);
         Assert.Contains("TryLog(", source[representation..insertion], StringComparison.Ordinal);

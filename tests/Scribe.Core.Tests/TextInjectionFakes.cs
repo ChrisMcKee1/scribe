@@ -93,6 +93,9 @@ internal static class TextInjectionFakes
 
         public bool Has(string formatName) => IsFormatAvailable(RegisterFormat(formatName));
 
+        /// <summary>A copy of a registered format's data as it stands now, or null when the clipboard does not hold it.</summary>
+        public byte[]? DataOf(string formatName) => Find(RegisterFormat(formatName))?.ToArray();
+
         public uint RegisterFormat(string name)
         {
             if (!_registered.TryGetValue(name, out var id))

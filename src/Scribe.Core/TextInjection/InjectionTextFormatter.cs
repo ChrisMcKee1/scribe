@@ -8,7 +8,7 @@ namespace Scribe.Core.TextInjection;
 /// injected newline, typed as a Unicode key event or pasted, as Enter, so a dictation the AI
 /// cleanup split into paragraphs would submit several partial messages instead of one. This
 /// flattens line breaks to spaces, either everywhere or only when the focused process is a known
-/// terminal, per <see cref="NewlineInjectionMode"/>.
+/// terminal or spreadsheet, per <see cref="NewlineInjectionMode"/>.
 /// </summary>
 public static partial class InjectionTextFormatter
 {
@@ -39,6 +39,16 @@ public static partial class InjectionTextFormatter
         "warp",
     };
 
+    // Spreadsheets, where a line break leaves the cell. Excel's documented keys: Enter "completes a cell entry ... and
+    // selects the cell below", Shift+Enter "completes a cell entry and selects the cell above" (Keyboard shortcuts in Excel),
+    // so a typed multi-line dictation with Scribe's default Shift+Enter wrote each line over the cell above, and a pasted one
+    // fills the rows below. One line keeps a dictation in the cell it was meant for. A text box or comment in Excel loses its
+    // line breaks too, which a process name cannot tell apart.
+    private static readonly HashSet<string> SingleLineCellProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "EXCEL",
+    };
+
     // A line-break run plus the spaces/tabs hugging it collapses to one space, so a paragraph
     // break never becomes a double space mid-sentence. Source-generated: this runs on every
     // dictation, and a RegexOptions.Compiled instance is emitted and jitted on first use.
@@ -49,12 +59,17 @@ public static partial class InjectionTextFormatter
     public static bool IsTerminalProcess(string? processName) =>
         !string.IsNullOrWhiteSpace(processName) && TerminalProcesses.Contains(processName.Trim());
 
+    /// <summary>True when <paramref name="processName"/> is a spreadsheet, where a line break leaves the cell.</summary>
+    public static bool IsSingleLineCellProcess(string? processName) =>
+        !string.IsNullOrWhiteSpace(processName) && SingleLineCellProcesses.Contains(processName.Trim());
+
     /// <summary>True when the effective mode will remove line breaks for this target.</summary>
     public static bool ShouldFlatten(NewlineInjectionMode mode, string? targetProcessName) =>
         mode switch
         {
             NewlineInjectionMode.AlwaysFlatten => true,
-            NewlineInjectionMode.SmartFlatten => IsTerminalProcess(targetProcessName),
+            NewlineInjectionMode.SmartFlatten =>
+                IsTerminalProcess(targetProcessName) || IsSingleLineCellProcess(targetProcessName),
             _ => false,
         };
 
