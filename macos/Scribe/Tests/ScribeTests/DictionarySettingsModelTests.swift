@@ -380,6 +380,19 @@ final class DictionarySettingsModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAScanAfterTheAIServiceFoundNothingSaysBothLookedAsWindowsSaysIt() async throws {
+        let store = try makeStore()
+        let model = DictionarySettingsModel(access: .live(store), drafts: SettingsDrafts(), onChanged: {})
+
+        await model.learnFromHistory(afterAI: true)
+        XCTAssertEqual(model.statusMessage, DictionarySettingsModel.nothingFoundAfterAI)
+        XCTAssertTrue(model.statusMessage?.hasPrefix("Your AI model and the history scan didn't find") == true)
+
+        await model.learnFromHistory()
+        XCTAssertEqual(model.statusMessage, "No new recurring terms found in your dictation history yet.")
+    }
+
+    @MainActor
     func testApplyingCleanUpTurnsOffExactlyTheChosenRules() async throws {
         let store = try makeStore()
         let keep = try store.insertDictionaryEntry(DictionaryEntry(pattern: "keep", replacement: "Keep"))

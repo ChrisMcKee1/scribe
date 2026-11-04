@@ -52,6 +52,49 @@ enum CleanupDisclosure {
         }
     }
 
+    static let suggestionConsentTitle = "Send recent dictations to your AI service?"
+
+    /// Asked before Learn from history sends saved dictations to an AI service, naming where they go: the
+    /// configuration AI cleanup is serving, the only one the request can reach (`CleanupSendHandoff` refuses any
+    /// other). Windows' `CleanupDisclosure.SuggestionConsentFor`, word for word but for the destination. The sample is
+    /// history as it was typed, which is text the dictionary and snippets already changed.
+    static func suggestionConsent(for target: CleanupConnection.Target) -> String {
+        "To suggest vocabulary, Scribe will send up to \(count(AIDictionarySuggester.defaultMaxSampleChars)) "
+            + "characters of your most recent dictations, as they were inserted, to "
+            + "\(suggestionDestination(for: target)). That text can include words your dictionary and snippets "
+            + "added. Your dictionary list, your writing style and audio are not sent. If where AI cleanup runs "
+            + "changes before the request goes out, nothing is sent."
+    }
+
+    /// Whether Learn from history asks before sending. As on Windows (`AiRequestConsent.IsNeeded`), only Foundry Local
+    /// goes unasked: everything else, Ollama and LM Studio on this Mac included, is asked about first.
+    static func suggestionConsentIsNeeded(for target: CleanupConnection.Target) -> Bool {
+        if case .foundryLocal = target {
+            return false
+        }
+        return true
+    }
+
+    static func suggestionDestination(for target: CleanupConnection.Target) -> String {
+        switch target {
+        case .foundryLocal:
+            return "Foundry Local, which runs on this Mac"
+        case .ollama:
+            return "Ollama, which runs on this Mac"
+        case .microsoftFoundry:
+            return "your Microsoft Foundry deployment"
+        case .openAICompatible(let serviceURL, _, _, _):
+            switch LocalAiServer.appAt(serviceURL.absoluteString) {
+            case .ollama:
+                return "Ollama, which runs on this Mac"
+            case .lmStudio:
+                return "LM Studio, which runs on this Mac"
+            case .none:
+                return "the AI service you set up"
+            }
+        }
+    }
+
     private static func count(_ value: Int) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal

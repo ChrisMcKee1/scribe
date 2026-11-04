@@ -349,10 +349,15 @@ so resizing cannot subtract the title bar from the space reserved for the page a
   Ollama/LM Studio tuning is bound to that app's recognized local address. A stale app selection beside a different
   address sends neither whole-vocabulary tuning nor app-specific request fields. Literal loopback IPs are parsed as
   IPs: domains such as `127.example.com` are remote, not a server on this Mac.
-- Dictionary's **Suggest with AI** asks before sending a bounded raw sample from the latest Try dictation report and
-  suggestion instructions. It never reads saved history or sends expanded snippets/templates. Consent is tied to the
-  saved cleanup configuration's revision: changing away and back still requires consent again. Every request/retry
-  shares the settings/send admission boundary, and a stale reply is discarded. Only reviewed, selected words are added.
+- Dictionary's **Learn from history**, as on Windows: while AI cleanup serves a configuration, it sends up to 6,000
+  characters of your most recent saved dictations, as they were inserted (so they can hold words your dictionary and
+  snippets added), with the suggestion instructions and nothing else: no dictionary, writing style or audio. It asks
+  first unless AI cleanup runs in Foundry Local. Consent is tied to the saved cleanup configuration's revision:
+  changing away and back still requires consent again. Every request/retry shares the settings/send admission
+  boundary, and a stale reply is discarded. A suggestion for a word you already have fixes it in place, a suggestion
+  that writes back a mistake one of your words fixes is left out, and only reviewed, selected words are added. With
+  AI cleanup off, or when the answer holds nothing usable, it scans history on this Mac instead. Windows' full-context
+  request and its high reasoning request are not ported.
 - Diagnostics (P50/P95 decode latency, real-time factor) and Usage Insights (totals, trend chart,
   top apps, recurring terms with one-click dictionary add, and an opt-in AI summary that sends only your
   totals and the recurring terms that are dictionary spellings: never a word mined from your dictations,

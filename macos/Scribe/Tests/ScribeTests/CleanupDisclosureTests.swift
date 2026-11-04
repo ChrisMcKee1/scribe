@@ -78,4 +78,46 @@ final class CleanupDisclosureTests: XCTestCase {
         XCTAssertTrue(section.contains("CleanupDisclosure.whatCleanupSends"))
         XCTAssertTrue(section.contains("CleanupDisclosure.whatCleanupNeverSends"))
     }
+
+    /// Windows' `CleanupDisclosure.SuggestionConsentFor`, with the Mac's destinations.
+    func testTheSuggestionQuestionSaysWhatLearnFromHistorySendsAndWhere() {
+        let remote = CleanupConnection.Target.openAICompatible(
+            serviceURL: URL(string: "https://openrouter.ai/api/v1")!, model: "m", apiKey: .environment,
+            apiStyle: .chatCompletions)
+        let text = CleanupDisclosure.suggestionConsent(for: remote)
+
+        XCTAssertEqual(CleanupDisclosure.suggestionConsentTitle, "Send recent dictations to your AI service?")
+        XCTAssertEqual(
+            text,
+            "To suggest vocabulary, Scribe will send up to 6,000 characters of your most recent dictations, as they "
+                + "were inserted, to the AI service you set up. That text can include words your dictionary and "
+                + "snippets added. Your dictionary list, your writing style and audio are not sent. If where AI "
+                + "cleanup runs changes before the request goes out, nothing is sent.")
+        XCTAssertTrue(text.contains(AIDictionarySuggester.defaultMaxSampleChars.formatted()))
+        XCTAssertFalse(DashNormalizer.containsDash(text))
+    }
+
+    func testTheSuggestionQuestionNamesEachDestinationAndOnlyFoundryLocalGoesUnasked() {
+        let lmStudio = CleanupConnection.Target.openAICompatible(
+            serviceURL: URL(string: LocalAiServer.lmStudioAddress)!, model: "m", apiKey: .environment,
+            apiStyle: .chatCompletions)
+        let ollamaAddress = CleanupConnection.Target.openAICompatible(
+            serviceURL: URL(string: LocalAiServer.ollamaAddress)!, model: "m", apiKey: .environment,
+            apiStyle: .chatCompletions)
+        let foundry = CleanupConnection.Target.microsoftFoundry(
+            inferenceBase: URL(string: "https://example.services.ai.azure.com/openai/v1/")!, deployment: "d",
+            identity: .azureCli(tenantId: nil))
+        let cases: [(CleanupConnection.Target, String, Bool)] = [
+            (.foundryLocal(modelAlias: "a"), "Foundry Local, which runs on this Mac", false),
+            (.ollama(model: "m"), "Ollama, which runs on this Mac", true),
+            (ollamaAddress, "Ollama, which runs on this Mac", true),
+            (lmStudio, "LM Studio, which runs on this Mac", true),
+            (foundry, "your Microsoft Foundry deployment", true),
+        ]
+        for (target, destination, asks) in cases {
+            XCTAssertEqual(CleanupDisclosure.suggestionDestination(for: target), destination)
+            XCTAssertTrue(CleanupDisclosure.suggestionConsent(for: target).contains(" to \(destination). "))
+            XCTAssertEqual(CleanupDisclosure.suggestionConsentIsNeeded(for: target), asks, destination)
+        }
+    }
 }
