@@ -86,6 +86,62 @@ final class PersistenceStoreDictionaryTests: XCTestCase {
         XCTAssertEqual(try store.fetchAllDictionaryEntries().map(\.pattern), [" Azure ", "K8s"])
     }
 
+    // MARK: - Learn from history: adding and repairing in place
+
+    func testReviewedSuggestionsAddNewWordsAndRepairTheRuleWithTheSameSpokenForm() async throws {
+        let store = try makeStore()
+        let apim = try store.insertDictionaryEntry(
+            DictionaryEntry(pattern: "A P I M", replacement: "Apim", wholeWord: false, enabled: false))
+        let azure = try store.insertDictionaryEntry(DictionaryEntry(pattern: "azure", replacement: "Azure"))
+
+        let commit = try await store.addOrRepairDictionaryEntries([
+            DictionaryEntry(pattern: "a  p i m", replacement: "APIM"),
+            DictionaryEntry(pattern: "azure", replacement: "Azure"),
+            DictionaryEntry(pattern: "cosmos db", replacement: "Cosmos DB"),
+            DictionaryEntry(pattern: "Cosmos DB", replacement: "COSMOS"),
+            DictionaryEntry(pattern: "  ", replacement: "blank"),
+        ])
+
+        // The rule keeps its id, spoken form and whole-word choice, takes the new written form and is turned on, as
+        // Windows' Learn from history updates the row in place. A rule that already writes the suggestion is kept.
+        let repaired = DictionaryEntry(
+            id: apim, pattern: "A P I M", replacement: "APIM", wholeWord: false, enabled: true)
+        XCTAssertEqual(commit.repaired, [repaired])
+        XCTAssertEqual(commit.added.map(\.pattern), ["cosmos db"])
+        XCTAssertNotEqual(commit.added.first?.id, 0)
+        let stored = try store.fetchAllDictionaryEntries()
+        XCTAssertEqual(stored.count, 3)
+        XCTAssertEqual(stored.first { $0.id == apim }, repaired)
+        XCTAssertEqual(stored.first { $0.id == azure }?.replacement, "Azure")
+    }
+
+    func testARepairTurnsOnARuleThatAlreadyWritesTheSuggestionWhileOff() async throws {
+        let store = try makeStore()
+        let id = try store.insertDictionaryEntry(
+            DictionaryEntry(pattern: "kube control", replacement: "kubectl", enabled: false))
+
+        let commit = try await store.addOrRepairDictionaryEntries([
+            DictionaryEntry(pattern: "kube control", replacement: "kubectl")
+        ])
+
+        XCTAssertEqual(commit.repaired.map(\.id), [id])
+        XCTAssertEqual(try store.fetchAllDictionaryEntries().map(\.enabled), [true])
+    }
+
+    func testCommittingNothingNewChangesNothing() async throws {
+        let store = try makeStore()
+        _ = try store.insertDictionaryEntry(DictionaryEntry(pattern: "azure", replacement: "Azure"))
+
+        let commit = try await store.addOrRepairDictionaryEntries([
+            DictionaryEntry(pattern: "Azure", replacement: "Azure")
+        ])
+        let none = try await store.addOrRepairDictionaryEntries([])
+
+        XCTAssertTrue(commit.isEmpty)
+        XCTAssertTrue(none.isEmpty)
+        XCTAssertEqual(try store.fetchAllDictionaryEntries().map(\.replacement), ["Azure"])
+    }
+
     func testTwoLearnsAtOnceNeverAddTheSameRuleTwice() async throws {
         let store = try makeStore()
         let history = [

@@ -23,7 +23,6 @@ struct SettingsDictionaryPage: View {
         onChanged: @escaping @MainActor () -> Void,
         drafts: SettingsDrafts,
         requestedTab: DictionaryTab? = nil,
-        pipelineReportStore: PipelineReportStore,
         aiSuggestionService: AIDictionarySuggestionService? = .live
     ) {
         self.persistenceStore = persistenceStore
@@ -33,7 +32,6 @@ struct SettingsDictionaryPage: View {
         self.requestedTab = requestedTab
         _aiSuggestions = StateObject(
             wrappedValue: AIDictionarySuggestionModel(
-                reports: pipelineReportStore,
                 access: .live(persistenceStore),
                 service: aiSuggestionService,
                 onChanged: onChanged))
@@ -77,6 +75,7 @@ struct SettingsDictionaryPage: View {
             }
         }
         .task { await refreshCounts() }
+        .onChange(of: aiSuggestions.dictionaryRevision) { _ in Task { await refreshCounts() } }
         .onAppear { applyRequestedTab() }
         .onChange(of: requestedTab) { _ in applyRequestedTab() }
     }
@@ -228,6 +227,7 @@ struct DictionarySettingsTab: View {
             Task { await model.reload() }
         }
         .onChange(of: drafts.saveRevision) { _ in Task { await model.reload() } }
+        .onChange(of: aiSuggestions.dictionaryRevision) { _ in Task { await model.reload() } }
         .sheet(
             isPresented: Binding(
                 get: { model.cleanupReport != nil },
@@ -264,10 +264,10 @@ struct DictionarySettingsTab: View {
             )
         ) { consent in
             Alert(
-                title: Text("Send recent dictation text for AI suggestions?"),
+                title: Text(consent.title),
                 message: Text(consent.message),
                 primaryButton: .default(Text("Send and continue")) {
-                    aiSuggestions.requestSuggestions()
+                    aiSuggestions.requestSuggestions(consent)
                 },
                 secondaryButton: .cancel {
                     aiSuggestions.cancelConsent()
@@ -295,16 +295,18 @@ struct DictionarySettingsTab: View {
             }
 
             Button("Learn from history") {
-                Task { await model.learnFromHistory() }
+                let words = model
+                aiSuggestions.learnFromHistory { afterAI in
+                    await words.learnFromHistory(afterAI: afterAI)
+                }
             }
-            .disabled(model.isLearning)
-
-            Button(aiSuggestions.isRequesting ? "Asking AI..." : "Suggest with AI") {
-                aiSuggestions.prepareConsent()
-            }
-            .disabled(!aiSuggestions.canSuggest)
+            .disabled(model.isLearning || aiSuggestions.isBusy)
             .help(
-                "Use raw recognized text from the latest Try dictation report. Review suggestions before adding them.")
+                aiSuggestions.usesAIService
+                    ? "Your AI service suggests words from your recent dictations. You review each one before it is "
+                        + "added."
+                    : "Finds words you say often in your recent dictations. With AI cleanup on, your AI service "
+                        + "suggests them instead.")
 
             Button("Clean up unused words...") {
                 Task { await model.reviewUsage() }
@@ -319,7 +321,7 @@ struct DictionarySettingsTab: View {
                 Button("Get template...", action: saveTemplate)
             }
 
-            if model.isLearning || model.isCleaning {
+            if model.isLearning || model.isCleaning || aiSuggestions.isPreparing || aiSuggestions.isRequesting {
                 ProgressView()
                     .controlSize(.small)
             }
@@ -440,16 +442,6 @@ struct DictionarySettingsTab: View {
         if let statusMessage = model.statusMessage {
             Text(statusMessage).foregroundStyle(.secondary).font(.caption)
         }
-        if !aiSuggestions.hasBoundCompletion {
-            Text(
-                "AI suggestions use only raw recognized text from the latest Try dictation report, not saved history. "
-                    + "The request may also include applicable dictionary and permitted word pack vocabulary. "
-                    + "Snippet templates are never sent. Suggestions stay disabled until the saved-provider request "
-                    + "handoff can enforce recipient checks and cancellation."
-            )
-            .foregroundStyle(.secondary)
-            .font(.caption)
-        }
         if let errorMessage = aiSuggestions.errorMessage {
             Text(errorMessage).foregroundStyle(.red).font(.caption)
         }
@@ -472,21 +464,30 @@ struct DictionarySettingsTab: View {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Review AI suggestions")
                     .font(.headline)
-                Text("Choose the spoken forms to add. Nothing is saved until you select Add.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "Choose the words to add. A word you already have is fixed in place. Nothing is saved until you "
+                        + "select Add selected."
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
                 List(model.suggestions, id: \.pattern) { entry in
                     Toggle(
                         isOn: Binding(
-                            get: { model.selectedSpokenForms.contains(Self.key(entry.pattern)) },
+                            get: { model.isSelected(entry) },
                             set: { model.toggleSelection(for: entry, selected: $0) }
                         )
                     ) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text("Scribe hears: \(entry.pattern)")
-                            Text("Scribe writes: \(entry.replacement)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            if let current = model.currentReplacement(for: entry) {
+                                Text("Scribe writes: \(entry.replacement), instead of \(current)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Scribe writes: \(entry.replacement)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                     .toggleStyle(.checkbox)
@@ -504,11 +505,6 @@ struct DictionarySettingsTab: View {
             }
             .padding()
             .frame(width: 500, height: 420)
-        }
-
-        private static func key(_ value: String) -> String {
-            value.trimmingCharacters(in: .whitespacesAndNewlines).folding(
-                options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
         }
     }
 
