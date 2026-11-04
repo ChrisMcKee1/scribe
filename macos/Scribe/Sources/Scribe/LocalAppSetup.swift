@@ -125,9 +125,13 @@ enum LocalAppSetup {
         }
 
         if state.models.isEmpty {
+            let download =
+                app == .ollama
+                ? "Use Download another model below."
+                : "Download one in \(name), then choose Check again."
             return AiCleanupStatusRow(
                 kind: .info,
-                text: "\(name) has no models yet. Download one in \(name), then choose Check again.",
+                text: "\(name) has no models yet. \(download)",
                 primary: checkAgain)
         }
 
@@ -151,9 +155,10 @@ enum LocalAppSetup {
         }
 
         if !state.models.contains(where: { LocalServerClient.sameModel($0.id, model) }) {
+            let download = app == .ollama ? "use Download another model below" : "download it in \(name)"
             return AiCleanupStatusRow(
                 kind: .warning,
-                text: "\(name) doesn't list \(model). Choose another model, or download it in \(name).",
+                text: "\(name) doesn't list \(model). Choose another model, or \(download).",
                 primary: checkAgain)
         }
 

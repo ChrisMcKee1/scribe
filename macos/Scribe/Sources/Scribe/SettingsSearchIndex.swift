@@ -134,6 +134,10 @@ enum SettingsSearchIndex {
             ["vocabulary", "dictionary", "word packs", "context"], "Ollama",
             [requiresAI, requiresLocal, requiresOllama]),
         entry(
+            "ai.local.ollama.download", .aiCleanup, "ai.provider", "Download another model",
+            ["ollama", "download", "install", "catalog", "pull", "model name"], "Ollama",
+            [requiresAI, requiresLocal, requiresOllama]),
+        entry(
             "ai.local.lmstudio.context", .aiCleanup, "ai.provider", LocalModelTuningText.contextSizeTitle,
             ["context", "context window", "context length", "tokens", "memory"], "LM Studio",
             [requiresAI, requiresLocal, requiresLMStudio]),
