@@ -1251,7 +1251,7 @@ public partial class SettingsWindow : Wpf.Ui.Controls.FluentWindow
         NewlineCombo.DisplayMemberPath = nameof(NewlineChoice.Label);
         NewlineCombo.ItemsSource = new[]
         {
-            new NewlineChoice(NewlineInjectionMode.SmartFlatten, "Automatic: one line in command windows (recommended)"),
+            new NewlineChoice(NewlineInjectionMode.SmartFlatten, "Automatic: one line in command windows and Excel (recommended)"),
             new NewlineChoice(NewlineInjectionMode.AlwaysFlatten, "Always one line"),
             new NewlineChoice(NewlineInjectionMode.KeepNewlines, "Keep line breaks"),
         };

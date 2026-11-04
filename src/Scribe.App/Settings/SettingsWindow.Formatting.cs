@@ -20,6 +20,7 @@ public partial class SettingsWindow
         {
             new TextFormatChoice(DictationTextFormat.Plain, "Plain text"),
             new TextFormatChoice(DictationTextFormat.MarkdownSource, "Literal Markdown source"),
+            new TextFormatChoice(DictationTextFormat.MarkdownWithFormatting, "Markdown with formatting"),
         };
         FormattingSourceHint.Text = DictationFormattingText.SourceLimits;
     }
@@ -40,13 +41,14 @@ public partial class SettingsWindow
             new TextFormatChoice(null, "Use the default text format"),
             new TextFormatChoice(DictationTextFormat.Plain, "Plain text"),
             new TextFormatChoice(DictationTextFormat.MarkdownSource, "Literal Markdown source"),
+            new TextFormatChoice(DictationTextFormat.MarkdownWithFormatting, "Markdown with formatting"),
         };
         ProfileInjectionCombo.DisplayMemberPath = nameof(ProfileInjectionChoice.Label);
         ProfileInjectionCombo.ItemsSource = new[]
         {
             new ProfileInjectionChoice(null, "Use the Advanced setting"),
             new ProfileInjectionChoice(InjectionMethod.UnicodeType, "Type the text"),
-            new ProfileInjectionChoice(InjectionMethod.ClipboardPaste, "Paste plain text"),
+            new ProfileInjectionChoice(InjectionMethod.ClipboardPaste, "Paste the text"),
         };
         ProfileShiftEnterCombo.DisplayMemberPath = nameof(ProfileShiftEnterChoice.Label);
         ProfileShiftEnterCombo.ItemsSource = new[]

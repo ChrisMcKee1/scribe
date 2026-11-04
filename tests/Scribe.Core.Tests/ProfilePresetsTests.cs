@@ -219,7 +219,7 @@ public sealed class ProfilePresetsTests
 
         Assert.Equal(NewlineInjectionMode.KeepNewlines, profile.NewlineHandling);
         Assert.Contains("WINWORD", profile.ProcessNames);
-        Assert.Contains("EXCEL", profile.ProcessNames);
+        Assert.DoesNotContain("EXCEL", profile.ProcessNames);
     }
 
     /// <summary>

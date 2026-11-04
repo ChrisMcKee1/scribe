@@ -70,6 +70,7 @@
     <PackageReference Include="Microsoft.Agents.AI.OpenAI" />
     <PackageReference Include="Microsoft.Agents.AI.GitHub.Copilot" />
     <PackageReference Include="OllamaSharp" />
+    <PackageReference Include="Markdig" />
     <PackageReference Include="Azure.Identity" />
     <PackageReference Include="Azure.ResourceManager.CognitiveServices" />
     <PackageReference Include="Azure.ResourceManager.ResourceGraph" />

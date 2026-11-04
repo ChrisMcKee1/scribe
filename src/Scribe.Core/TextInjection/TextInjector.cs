@@ -66,12 +66,14 @@ public sealed class TextInjector : ITextInjector
         nint expectedForegroundWindow = 0,
         bool shiftEnterLineBreaks = true,
         string? targetProcessName = null,
-        bool keepWholeClipboard = false)
+        bool keepWholeClipboard = false,
+        string? htmlFragment = null)
     {
         if (!_measureInput)
         {
             return InjectCore(
-                text, method, expectedForegroundWindow, shiftEnterLineBreaks, targetProcessName, keepWholeClipboard, null);
+                text, method, expectedForegroundWindow, shiftEnterLineBreaks, targetProcessName, keepWholeClipboard,
+                htmlFragment, null);
         }
 
         var timing = new InjectionTimingMeasurement(_time);
@@ -79,7 +81,8 @@ public sealed class TextInjector : ITextInjector
         try
         {
             var result = InjectCore(
-                text, method, expectedForegroundWindow, shiftEnterLineBreaks, targetProcessName, keepWholeClipboard, timing);
+                text, method, expectedForegroundWindow, shiftEnterLineBreaks, targetProcessName, keepWholeClipboard,
+                htmlFragment, timing);
             measured = timing.Snapshot();
             return result with { Timings = measured };
         }
@@ -99,7 +102,7 @@ public sealed class TextInjector : ITextInjector
 
     private InjectionResult InjectCore(
         string text, InjectionMethod method, nint expectedForegroundWindow, bool shiftEnterLineBreaks,
-        string? targetProcessName, bool keepWholeClipboard, InjectionTimingMeasurement? timing)
+        string? targetProcessName, bool keepWholeClipboard, string? htmlFragment, InjectionTimingMeasurement? timing)
     {
         if (string.IsNullOrEmpty(text))
         {
@@ -124,7 +127,8 @@ public sealed class TextInjector : ITextInjector
             try
             {
                 return InjectOnStaThread(
-                    activity, text, method, expectedForegroundWindow, shiftEnterLineBreaks, keepWholeClipboard, pace, timing);
+                    activity, text, method, expectedForegroundWindow, shiftEnterLineBreaks, keepWholeClipboard, htmlFragment,
+                    pace, timing);
             }
             finally
             {
@@ -139,7 +143,7 @@ public sealed class TextInjector : ITextInjector
 
     private InjectionResult InjectOnStaThread(
         Activity? activity, string text, InjectionMethod method, nint expectedForegroundWindow, bool shiftEnterLineBreaks,
-        bool keepWholeClipboard, TypingPace pace, InjectionTimingMeasurement? timing)
+        bool keepWholeClipboard, string? htmlFragment, TypingPace pace, InjectionTimingMeasurement? timing)
     {
         if (!IsExpectedForeground(expectedForegroundWindow))
         {
@@ -174,7 +178,7 @@ public sealed class TextInjector : ITextInjector
             return TypeAndReport(activity, text, expectedForegroundWindow, shiftEnterLineBreaks, fallback: false, keys, pace, timing);
         }
 
-        var paste = PasteViaClipboard(pasted, expectedForegroundWindow, keepWholeClipboard, keys, timing);
+        var paste = PasteViaClipboard(pasted, expectedForegroundWindow, keepWholeClipboard, htmlFragment, keys, timing);
         ReportClipboard(activity, paste);
         LogClipboard(paste);
 
@@ -417,10 +421,12 @@ public sealed class TextInjector : ITextInjector
         bool ConfirmOpened,
         bool CloseMovedSequence,
         bool KeepWholeClipboard,
-        int KeptFormats);
+        int KeptFormats,
+        bool HtmlAsked = false,
+        bool HtmlPlaced = false);
 
     private ClipboardPasteReport PasteViaClipboard(
-        string text, nint expectedForegroundWindow, bool keepWholeClipboard, InjectionKeys keys,
+        string text, nint expectedForegroundWindow, bool keepWholeClipboard, string? htmlFragment, InjectionKeys keys,
         InjectionTimingMeasurement? timing)
     {
         // By default an image, copied files or other non-text content is not saved and restored (text only), so the
@@ -429,7 +435,12 @@ public sealed class TextInjector : ITextInjector
         // Markdown app add list markers of its own; the borrow then refuses only what it cannot put back exactly. Every
         // other refusal leaves nothing of Scribe's behind either: a text or receipt write that failed after emptying was
         // rolled back in the same session.
-        var borrow = _clipboard.TryBorrow(text, keepWholeClipboard);
+        // "Markdown with formatting" also places an HTML rendering of the text (see MarkdownClipboardHtml), for apps that
+        // read HTML but leave pasted Markdown as typed. The text stays the Markdown, so an app that reads only text, the
+        // receipt check and a typed fallback all see what they saw before.
+        byte[]? html = htmlFragment is null ? null : ClipboardHtmlFormat.Encode(htmlFragment);
+        bool htmlAsked = htmlFragment is not null;
+        var borrow = _clipboard.TryBorrow(text, keepWholeClipboard, html);
         if (borrow.Lease is not { } lease)
         {
             var refused = borrow.Status switch
@@ -440,14 +451,14 @@ public sealed class TextInjector : ITextInjector
                 ClipboardBorrowStatus.ReceiptFailed => PasteDelivery.ReceiptFailed,
                 _ => PasteDelivery.WriteFailed,
             };
-            return new(refused, borrow.Rollback, 0, 0, borrow.OpenAttempts, false, false, keepWholeClipboard, 0);
+            return new(refused, borrow.Rollback, 0, 0, borrow.OpenAttempts, false, false, keepWholeClipboard, 0, htmlAsked);
         }
 
         bool confirmOpened = false;
         int keptFormats = lease.Kept?.Formats.Count ?? 0;
         ClipboardPasteReport Report(PasteDelivery delivery, ClipboardRestoreOutcome restore, int sent = 0, int total = 0) =>
             new(delivery, restore, sent, total, borrow.OpenAttempts, confirmOpened, lease.CloseMovedSequence,
-                keepWholeClipboard, keptFormats);
+                keepWholeClipboard, keptFormats, htmlAsked, lease.HtmlPlaced);
 
         // The clipboard is closed during this wait and stays closed through the paste: the target has
         // to open it to read, so holding it here would break every paste.
@@ -540,7 +551,8 @@ public sealed class TextInjector : ITextInjector
     // clipboard moves the sequence number, and how often the number has moved by Ctrl+V so that Confirm
     // has to open the clipboard. A receipt the NULL-owner session could not write shows as its own
     // delivery, ReceiptFailed. A formatting paste also says it asked to keep the whole clipboard and how many formats
-    // it kept: a count, never a format name, since names can say what the user copied.
+    // it kept: a count, never a format name, since names can say what the user copied. "Markdown with formatting" says
+    // whether it asked for the formatted copy and whether the borrow placed it: two booleans, never the HTML.
     private void LogClipboard(ClipboardPasteReport paste)
     {
         bool typingInstead = paste.Delivery is not (PasteDelivery.ChordInserted or PasteDelivery.FocusChanged);
@@ -549,9 +561,9 @@ public sealed class TextInjector : ITextInjector
             "Clipboard paste {Delivery}; previous clipboard {Restore}; {OpenAttempts} open attempt(s); " +
             "typing instead: {TypingInstead}; close moved sequence: {CloseMovedSequence}; " +
             "confirm opened clipboard: {ConfirmOpened}; whole clipboard asked: {KeepWholeClipboard}, " +
-            "{KeptFormats} format(s) kept.",
+            "{KeptFormats} format(s) kept; formatted copy asked: {HtmlAsked}, placed: {HtmlPlaced}.",
             paste.Delivery, paste.Restore, paste.OpenAttempts, typingInstead, paste.CloseMovedSequence,
-            paste.ConfirmOpened, paste.KeepWholeClipboard, paste.KeptFormats);
+            paste.ConfirmOpened, paste.KeepWholeClipboard, paste.KeptFormats, paste.HtmlAsked, paste.HtmlPlaced);
     }
 
     internal static LogLevel ClipboardLogLevel(PasteDelivery delivery, ClipboardRestoreOutcome restore)

@@ -114,6 +114,9 @@ internal sealed class ClipboardLease
     /// <summary>The text Scribe wrote. Never logged.</summary>
     public string Injected { get; }
 
+    /// <summary>Whether the borrow also placed the formatted copy ("HTML Format") it was given.</summary>
+    public bool HtmlPlaced { get; init; }
+
     /// <summary>
     /// The random receipt written beside Scribe's text. Every lease has one: a borrow whose receipt could
     /// not be written is rolled back instead of leased, because nothing else can settle a moved number.
@@ -257,9 +260,12 @@ internal sealed class ClipboardBorrower
     /// Snapshots the user's text and replaces it with <paramref name="text"/> in one open session, and
     /// records the receipt of that write before letting go. A borrow whose receipt cannot be written is
     /// undone in that same session and refused. With <paramref name="keepWholeClipboard"/>, a clipboard holding more
-    /// than plain text is copied whole instead of refused, unless something on it cannot be put back exactly.
+    /// than plain text is copied whole instead of refused, unless something on it cannot be put back exactly. With
+    /// <paramref name="html"/> (CF_HTML data from <see cref="ClipboardHtmlFormat.Encode"/>), the same session also places
+    /// it as "HTML Format" beside the text. That write is best effort: the text alone is a complete paste, so a failed
+    /// HTML write leaves the borrow leased with <see cref="ClipboardLease.HtmlPlaced"/> false.
     /// </summary>
-    public ClipboardBorrowResult TryBorrow(string text, bool keepWholeClipboard = false)
+    public ClipboardBorrowResult TryBorrow(string text, bool keepWholeClipboard = false, byte[]? html = null)
     {
         if (!TryOpenWithRetries(out int attempts))
         {
@@ -269,7 +275,7 @@ internal sealed class ClipboardBorrower
         ClipboardBorrowResult result;
         try
         {
-            result = BorrowWhileHeld(text, attempts, keepWholeClipboard);
+            result = BorrowWhileHeld(text, attempts, keepWholeClipboard, html);
         }
         finally
         {
@@ -283,7 +289,7 @@ internal sealed class ClipboardBorrower
     }
 
     // Must be called while the clipboard is held open.
-    private ClipboardBorrowResult BorrowWhileHeld(string text, int attempts, bool keepWholeClipboard)
+    private ClipboardBorrowResult BorrowWhileHeld(string text, int attempts, bool keepWholeClipboard, byte[]? html)
     {
         // Snapshot and replacement share this session, so what is remembered for the restore is
         // exactly what gets replaced; no other application can write in between.
@@ -319,6 +325,8 @@ internal sealed class ClipboardBorrower
             return new(ClipboardBorrowStatus.WriteFailed, null, attempts, rollback);
         }
 
+        // Before the privacy marks and the receipt, so the receipt stays the session's last write (see the class remarks).
+        bool htmlPlaced = html is not null && TryWriteHtml(html);
         MarkPrivate();
         if (TryWriteReceipt() is not { } receipt)
         {
@@ -332,8 +340,26 @@ internal sealed class ClipboardBorrower
 
         // Read while still held and after Scribe's last write, so no other application's change
         // can be taken for Scribe's.
-        var lease = new ClipboardLease(wasEmpty, previous, kept, text, receipt, _native.SequenceNumber);
+        var lease = new ClipboardLease(wasEmpty, previous, kept, text, receipt, _native.SequenceNumber)
+        {
+            HtmlPlaced = htmlPlaced,
+        };
         return new(ClipboardBorrowStatus.Borrowed, lease, attempts, ClipboardRestoreOutcome.NotApplicable);
+    }
+
+    // Must be called while the clipboard is held open. Never throws: the text is already in place, and losing the
+    // formatted copy must not cost the dictation its paste.
+    private bool TryWriteHtml(byte[] html)
+    {
+        try
+        {
+            uint format = _native.RegisterFormat(ClipboardHtmlFormat.FormatName);
+            return format != 0 && _native.SetData(format, html);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     /// <summary>

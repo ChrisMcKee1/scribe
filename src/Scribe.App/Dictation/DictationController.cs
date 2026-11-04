@@ -1512,7 +1512,11 @@ internal sealed class DictationController : IDisposable
             // line breaks were handled, which trims the text for a single-line target. DictationInsertion keeps the text
             // for recovery before it types anything, and hands back the text as dictated for history: only the injector
             // callback below ever sees the typed form with the space, so nothing that keeps text can be given it.
+            // "Markdown with formatting" renders the same text to HTML for the clipboard (null for every other format, for
+            // typing and for plain prose). Rendered from R, the text history keeps, so the formatted copy says nothing the
+            // text does not.
             currentStage = TryDictationReportClassifier.StageTextInsertion;
+            var clipboardHtml = session.Formatting.ClipboardHtml(text);
             var injectionTimer = Stopwatch.StartNew();
             var insertion = DictationInsertion.Insert(
                 text,
@@ -1520,7 +1524,7 @@ internal sealed class DictationController : IDisposable
                 _lastTranscript,
                 typed => _injector.Inject(
                     typed, session.Formatting.InjectionMethod, session.TargetWindow, session.Formatting.ShiftEnterLineBreaks, targetApp,
-                    session.Formatting.KeepsWholeClipboard),
+                    session.Formatting.KeepsWholeClipboard, clipboardHtml),
                 cancellationToken);
             injectionTimer.Stop();
             var injection = insertion.Injection;

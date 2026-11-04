@@ -454,8 +454,10 @@ public sealed class AppSettings
     public bool AppAwareFormattingEnabled { get; set; } = true;
 
     /// <summary>
-    /// The format a matching app profile inherits. Unmatched apps always use Plain. MarkdownSource preserves characters
-    /// already produced by the pipeline, never generates syntax or requests another AI rewrite.
+    /// The format a matching app profile inherits. An app no profile matches uses its built-in format
+    /// (<see cref="TextInjection.DictationFormatPlan.BuiltInFormat"/>), or Plain. MarkdownSource and MarkdownWithFormatting
+    /// preserve the characters the pipeline produced; neither generates syntax or requests another AI rewrite, and the
+    /// second only adds an HTML rendering of that text to the clipboard when it pastes.
     /// </summary>
     [JsonConverter(typeof(DictationTextFormatJsonConverter))]
     public DictationTextFormat DefaultTextFormat { get; set; } = DictationTextFormat.Plain;

@@ -104,7 +104,8 @@ public sealed class AppAwareFormattingTests
     [InlineData(-1, "Plain")]
     [InlineData(0, "Plain")]
     [InlineData(1, "MarkdownSource")]
-    [InlineData(2, "Plain")]
+    [InlineData(2, "MarkdownWithFormatting")]
+    [InlineData(3, "Plain")]
     public void Global_and_profile_formats_write_only_the_supported_string_tokens(int value, string expected)
     {
         var settings = new AppSettings
@@ -286,16 +287,13 @@ public sealed class AppAwareFormattingTests
     [InlineData("github")]
     [InlineData("GITHUB.EXE")]
     [InlineData("GitHubCopilot")]
-    [InlineData("copilotapp")]
     [InlineData("claude")]
-    [InlineData("ChatGPT")]
     [InlineData("M365Copilot")]
     [InlineData("Microsoft Scout")]
     [InlineData("Code")]
     [InlineData("Code - Insiders.exe")]
     [InlineData("Obsidian")]
     [InlineData("Notion")]
-    [InlineData("Teams")]
     public void Known_markdown_apps_default_to_markdown_source_and_clipboard_paste_when_enabled_without_a_profile(string process)
     {
         var settings = new AppSettings

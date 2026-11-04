@@ -114,15 +114,18 @@ public static class ProfilePresets
 
     /// <summary>
     /// Documents, where paragraph breaks are the whole point. Explicit rather than implied, so a
-    /// user who has set the global mode to always flatten still gets real paragraphs in Word.
+    /// user who has set the global mode to always flatten still gets real paragraphs in Word. Excel is
+    /// deliberately left out: a line break there leaves the cell (Shift+Enter selects the cell above), so
+    /// keeping line breaks would write a dictation's lines over other cells. Profiles added before it was
+    /// left out keep the list they were added with.
     /// </summary>
     public static Preset Documents => new(
-        "Word, Excel, PowerPoint, OneNote and Notepad. Keeps paragraph breaks even when your Advanced setting uses one line.",
+        "Word, PowerPoint, OneNote and Notepad. Keeps paragraph breaks even when your Advanced setting uses one line.",
         new AppProfile
         {
             Name = "Documents",
             NewlineHandling = NewlineInjectionMode.KeepNewlines,
-            ProcessNames = ["WINWORD", "EXCEL", "POWERPNT", "ONENOTE", "Notepad", "wordpad"],
+            ProcessNames = ["WINWORD", "POWERPNT", "ONENOTE", "Notepad", "wordpad"],
         });
 
     /// <summary>All presets, in the order the settings menu offers them.</summary>

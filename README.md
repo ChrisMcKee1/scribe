@@ -149,16 +149,20 @@ In **Settings > Dictation**, **Use app-aware formatting** is on, with **Plain te
 It is on for every install: an install that had it off from an earlier version, when it started off,
 has it turned on once, and turning it off afterwards stays off.
 
-In apps Scribe knows write Markdown (such as Claude, ChatGPT, GitHub Copilot, Visual Studio Code,
-Obsidian, Notion, Slack and Teams) without an **App profile** of their own, Scribe pastes a dictation
-as literal Markdown in one go rather than typing it line by line, so the app does not continue a
-bullet or numbered list with markers of its own ("2. 2."). Whatever is on your clipboard, a screenshot,
+In apps Scribe knows write Markdown (such as Claude, GitHub Copilot, Visual Studio Code, Obsidian,
+Notion and Slack) without an **App profile** of their own, Scribe pastes a dictation as literal
+Markdown in one go rather than typing it line by line, so the app does not continue a bullet or
+numbered list with markers of its own ("2. 2."). In Teams, Microsoft Copilot and Codex (the ChatGPT
+app), which show pasted Markdown as typed, Scribe pastes **Markdown with formatting**: the same
+Markdown text plus a formatted copy of it, so lists, bold, links, code and tables arrive as
+formatting. A dictation without Markdown in it pastes as plain text there, as before. Whatever is on your clipboard, a screenshot,
 formatted text or copied files included, is kept in memory for the paste and put back afterwards. If
 something on it can't be put back exactly (content only the app that copied it can draw, or more than
 128 MB), Scribe leaves your clipboard alone and types the text instead.
 
-The first matching **App profile** can inherit the default format or choose Plain text or **Literal
-Markdown source**, plus its own typing method and typed Enter or Shift+Enter. Other apps use plain
+The first matching **App profile** can inherit the default format or choose Plain text, **Literal
+Markdown source** or **Markdown with formatting**, plus its own typing method and typed Enter or
+Shift+Enter. Other apps use plain
 text. Save applies these choices; Close, then Discard changes, drops unsaved edits.
 Turning it off ignores all of these choices, not the existing writing styles or line-break rules.
 It never turns AI cleanup on.
@@ -166,10 +170,14 @@ It never turns AI cleanup on.
 Literal Markdown source keeps characters already supplied by recognition, cleanup, your dictionary
 or a snippet. It does not convert prose, recover missing bullets, number a list, invent links or add
 code fences. Plain text also keeps existing markers. Cleanup can still change code or URLs, strip
-fences or join chunks with spaces before this step; this setting does not undo that. There is no
-HTML or RTF paste mode.
+fences or join chunks with spaces before this step; this setting does not undo that. Markdown with
+formatting renders that same text to HTML on this PC for the paste only (backslashes, entities and
+any markup you dictate stay as typed); a typed delivery types the Markdown. There is no RTF paste
+mode.
 
-Literal Markdown source needs preserved line breaks. Save rejects known one-line conflicts; an
+Both Markdown formats need preserved line breaks. In Excel, **Automatic** line breaks keep a
+dictation on one line, because a line break there leaves the cell (Shift+Enter selects the cell
+above). Save rejects known one-line conflicts; an
 inherited conflict at dictation time uses the previous plain-text behavior and typing method, with
 a notice. Choose Plain text, or Keep line breaks and check delivery in the target app yourself.
 A program match cannot tell a document from a message box, a command window or a different field in
@@ -444,5 +452,5 @@ Scribe is released under the [MIT License](LICENSE). It builds on excellent open
 - **GitHub Copilot SDK** (`GitHub.Copilot.SDK`): © GitHub, MIT
 - **Also:** WPF UI, NAudio, H.NotifyIcon, Velopack, the OpenAI package for .NET, OllamaSharp, the Foundry
   Local SDK, Microsoft.Extensions.AI, Microsoft.Data.Sqlite and the Azure SDK for .NET (all MIT); SQLitePCLRaw
-  and OpenTelemetry .NET (Apache-2.0); SQLite (public domain); and the Windows App SDK (Microsoft Software
-  License Terms).
+  and OpenTelemetry .NET (Apache-2.0); Markdig, © Alexandre Mutel (BSD-2-Clause); SQLite (public domain); and
+  the Windows App SDK (Microsoft Software License Terms).

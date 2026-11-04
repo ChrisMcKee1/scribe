@@ -3,11 +3,20 @@ using System.Text.Json.Serialization;
 
 namespace Scribe.Core.Models;
 
-/// <summary>A preference for literal text, not a request to generate or convert Markdown.</summary>
+/// <summary>
+/// How a dictation's text reaches the target app. Every format keeps the characters the pipeline produced: none asks AI
+/// cleanup for Markdown or generates syntax. <see cref="MarkdownWithFormatting"/> pastes that same Markdown text and adds an
+/// HTML rendering of it beside it on the clipboard, for apps that read HTML but leave pasted Markdown as typed.
+/// </summary>
+/// <remarks>
+/// Saved as its name. A build that does not know a name reads it as <see cref="Plain"/> (see <see cref="FormattingJson"/>),
+/// so an older build given <see cref="MarkdownWithFormatting"/> pastes plain text rather than refusing the document.
+/// </remarks>
 public enum DictationTextFormat
 {
     Plain,
     MarkdownSource,
+    MarkdownWithFormatting,
 }
 
 internal static class FormattingJson
@@ -22,10 +31,17 @@ internal static class FormattingJson
 
     internal static DictationTextFormat ReadFormat(ref Utf8JsonReader reader)
     {
-        if (reader.TokenType == JsonTokenType.String &&
-            string.Equals(reader.GetString(), nameof(DictationTextFormat.MarkdownSource), StringComparison.OrdinalIgnoreCase))
+        if (reader.TokenType == JsonTokenType.String && reader.GetString() is { } name)
         {
-            return DictationTextFormat.MarkdownSource;
+            if (string.Equals(name, nameof(DictationTextFormat.MarkdownSource), StringComparison.OrdinalIgnoreCase))
+            {
+                return DictationTextFormat.MarkdownSource;
+            }
+
+            if (string.Equals(name, nameof(DictationTextFormat.MarkdownWithFormatting), StringComparison.OrdinalIgnoreCase))
+            {
+                return DictationTextFormat.MarkdownWithFormatting;
+            }
         }
 
         SkipValue(ref reader);
@@ -34,9 +50,12 @@ internal static class FormattingJson
 
     // Only a known token is written. An undefined value is saved as Plain, the value an unknown token reads back as.
     internal static void WriteFormat(Utf8JsonWriter writer, DictationTextFormat value) =>
-        writer.WriteStringValue(value == DictationTextFormat.MarkdownSource
-            ? nameof(DictationTextFormat.MarkdownSource)
-            : nameof(DictationTextFormat.Plain));
+        writer.WriteStringValue(value switch
+        {
+            DictationTextFormat.MarkdownSource => nameof(DictationTextFormat.MarkdownSource),
+            DictationTextFormat.MarkdownWithFormatting => nameof(DictationTextFormat.MarkdownWithFormatting),
+            _ => nameof(DictationTextFormat.Plain),
+        });
 }
 
 internal sealed class DictationTextFormatJsonConverter : JsonConverter<DictationTextFormat>
