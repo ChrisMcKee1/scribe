@@ -13,8 +13,8 @@ enum NewlineInjectionMode: String, Equatable {
 }
 
 /// A per-app dictation profile: when the app that had focus as the recording started matches one of
-/// `bundleIdentifiers`/`processNames`, the profile's overrides apply: a different AI writing style
-/// and/or line-break handling. Nil overrides fall back to the global setting. Mirrors Windows'
+/// `bundleIdentifiers`/`processNames`, the profile's overrides apply: a different AI writing style,
+/// line-break handling and/or text format. Nil overrides fall back to the global setting. Mirrors Windows'
 /// `AppProfile` (Models/AppProfile.cs), but keys on bundle identifier first (the stable macOS
 /// identity for an app) with process name as a secondary/fallback match, since macOS apps don't
 /// have the Windows-style ".exe process name" as their primary identity.
@@ -31,6 +31,9 @@ struct AppProfile: Equatable {
     var writingStylePrompt: String?
     /// Line-break handling for this app; nil keeps the global setting.
     var newlineHandling: NewlineInjectionMode?
+    /// How the text reaches these apps (`DictationFormatPlan`); nil uses the default text format for app
+    /// profiles. Applies only while app-aware formatting is on.
+    var textFormat: DictationTextFormat? = nil
 }
 
 /// Resolves which profile (if any) applies to a foreground app, and the effective newline mode to
@@ -48,6 +51,16 @@ enum AppProfileMatcher {
         "net.kovidgoyal.kitty",
         "co.zeit.hyper",
         "com.mitchellh.ghostty",
+    ]
+
+    /// Spreadsheets, where a line break leaves the cell, flattened under Smart Flatten as terminals are (Windows'
+    /// `InjectionTextFormatter.IsSingleLineCellProcess`). Excel's documented keys: Return "completes a cell entry"
+    /// and moves down, and Shift-Return moves up, so a typed multi-line dictation with Scribe's Shift-Return line
+    /// breaks wrote each line over the cell above, and a pasted one fills the rows below. One line keeps a dictation in
+    /// the cell it was meant for. A text box or comment in Excel loses its line breaks too, which a bundle identifier
+    /// cannot tell apart.
+    static let knownSingleLineCellBundleIdentifiers: Set<String> = [
+        "com.microsoft.Excel"
     ]
 
     /// Returns the first profile matching `bundleIdentifier`/`processName` (case-insensitive),
@@ -104,6 +117,7 @@ enum AppProfileMatcher {
         case .smartFlatten:
             guard let bundleIdentifier else { return false }
             return knownTerminalBundleIdentifiers.contains(bundleIdentifier)
+                || knownSingleLineCellBundleIdentifiers.contains(bundleIdentifier)
         }
     }
 

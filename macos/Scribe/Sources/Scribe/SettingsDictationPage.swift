@@ -63,6 +63,7 @@ private struct SettingsDictationControls: View {
 
             SettingsGroupHeader("Typing")
             SettingsCard(searchID: "dictation.space") { InputTypingSettingsSection() }
+            SettingsCard(searchID: "dictation.app-format") { InputFormattingSettingsSection() }
 
             SettingsGroupHeader("Recording indicator")
             SettingsCard(searchID: "dictation.indicator") { recordingIndicatorCard }

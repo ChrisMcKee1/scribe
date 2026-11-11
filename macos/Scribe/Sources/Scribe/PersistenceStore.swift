@@ -399,6 +399,12 @@ final class PersistenceStore: Sendable {
             """,
             .migrate)
 
+        // text_format (app-aware formatting) came after the table; an older database gains it, and its profiles
+        // read it as nil, the default text format for app profiles. A build before it ignores the column.
+        if !(try session.columnNames(of: "app_profiles", .migrate)).contains("text_format") {
+            try session.execute("ALTER TABLE app_profiles ADD COLUMN text_format TEXT;", .migrate)
+        }
+
         try session.execute(
             "CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);",
             .migrate)
@@ -1445,8 +1451,9 @@ final class PersistenceStore: Sendable {
     private static func insertAppProfile(_ profile: AppProfile, in session: SQLiteSession) throws -> Int64 {
         try session.withStatement(
             """
-            INSERT INTO app_profiles(name, bundle_identifiers, process_names, writing_style_prompt, newline_handling)
-            VALUES (?1, ?2, ?3, ?4, ?5);
+            INSERT INTO app_profiles(
+                name, bundle_identifiers, process_names, writing_style_prompt, newline_handling, text_format)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6);
             """,
             .write
         ) { statement in
@@ -1455,6 +1462,7 @@ final class PersistenceStore: Sendable {
             try statement.bind(profile.processNames.joined(separator: ","), at: 3)
             try statement.bind(profile.writingStylePrompt, at: 4)
             try statement.bind(profile.newlineHandling?.rawValue, at: 5)
+            try statement.bind(profile.textFormat?.rawValue, at: 6)
             try statement.run()
             return session.lastInsertRowID
         }
@@ -1463,7 +1471,7 @@ final class PersistenceStore: Sendable {
     private static func readAppProfiles(_ session: SQLiteSession) throws -> [AppProfile] {
         try session.withStatement(
             """
-            SELECT id, name, bundle_identifiers, process_names, writing_style_prompt, newline_handling
+            SELECT id, name, bundle_identifiers, process_names, writing_style_prompt, newline_handling, text_format
             FROM app_profiles
             ORDER BY id;
             """,
@@ -1478,7 +1486,9 @@ final class PersistenceStore: Sendable {
                         bundleIdentifiers: splitList(statement.text(at: 2)),
                         processNames: splitList(statement.text(at: 3)),
                         writingStylePrompt: statement.text(at: 4),
-                        newlineHandling: statement.text(at: 5).flatMap { NewlineInjectionMode(rawValue: $0) }))
+                        newlineHandling: statement.text(at: 5).flatMap { NewlineInjectionMode(rawValue: $0) },
+                        // A name this build does not know is plain text, never the default: it was a choice.
+                        textFormat: statement.text(at: 6).map { DictationTextFormat(storedName: $0) }))
             }
             return profiles
         }

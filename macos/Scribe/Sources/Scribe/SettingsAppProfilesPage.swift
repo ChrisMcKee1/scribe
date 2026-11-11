@@ -8,7 +8,8 @@ struct SettingsAppProfilesPage: View {
     var body: some View {
         SettingsPage(
             title: "App profiles",
-            subtitle: "Use a different writing style or line-break rule in specific apps, like Outlook or Teams."
+            subtitle:
+                "Use a different writing style, line-break rule or text format in specific apps, like Outlook or Teams."
         ) {
             SettingsCard(searchID: "profiles.page") {
                 AppProfilesSettingsTab(persistenceStore: persistenceStore, onChanged: onChanged, drafts: drafts)
@@ -124,6 +125,10 @@ struct AppProfilesSettingsTab: View {
                 labeledReadOnlyValue(
                     title: "Line breaks in these apps",
                     value: profile.newlineHandling?.label ?? "Uses your main line-break setting.")
+                labeledReadOnlyValue(
+                    title: "Text format for these apps",
+                    value: profile.textFormat.map(DictationFormattingText.label)
+                        ?? "Uses the default text format for app profiles.")
             } else {
                 Text("New profile")
                     .font(.title3.weight(.semibold))
@@ -157,6 +162,29 @@ struct AppProfilesSettingsTab: View {
                     }
                     .labelsHidden()
                     .frame(maxWidth: 280)
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Text format for these apps").cardTitle()
+                    Picker("Text format", selection: $drafts.profileTextFormat) {
+                        Text("Use the default").tag(DictationTextFormat?.none)
+                        ForEach(DictationTextFormat.allCases, id: \.self) { format in
+                            Text(DictationFormattingText.label(format)).tag(Optional(format))
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 280)
+                    Text(
+                        "Applies only with app-aware formatting on in Dictation. Either Markdown format pastes, so "
+                            + "a list arrives as one piece; Markdown with formatting also adds a formatted copy for "
+                            + "apps that show Markdown as typed. An app match is a preference, not proof that its "
+                            + "message box accepts line breaks: check delivery yourself."
+                    )
+                    .cardDescription()
+                    if model.hasNewlineConflict {
+                        Text(DictationFormattingText.newlineConflict)
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                    }
                 }
                 Button(model.isAdding ? "Adding..." : "Add profile") {
                     Task { await model.addFromDrafts() }

@@ -78,6 +78,9 @@ enum SettingsSearchIndex {
             "dictation.space", .dictation, "dictation.space", "Add a space after each dictation",
             ["typing", "trailing space", "spacing"]),
         entry(
+            "dictation.app-format", .dictation, "dictation.app-format", "Use app-aware formatting",
+            ["format", "markdown", "plain text once", "app profiles", "delivery", "paste", "html"]),
+        entry(
             "dictation.indicator", .dictation, "dictation.indicator", "Show the recording indicator",
             ["overlay", "pill", "recording", "indicator", "hide", "show", "visibility"]),
         entry(
@@ -214,7 +217,7 @@ enum SettingsSearchIndex {
             ["snippet", "template", "phrase", "trigger", "expand", "email", "sign-off"]),
         entry(
             "profiles.page", .appProfiles, "profiles.page", "App profiles",
-            ["profile", "per app", "program", "process", "writing style", "line breaks"]),
+            ["profile", "per app", "program", "process", "writing style", "line breaks", "text format", "markdown"]),
 
         entry("history.keep", .history, "history.keep", "Keep dictations", ["retention", "delete", "days"]),
         entry(

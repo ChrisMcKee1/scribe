@@ -104,12 +104,16 @@ private struct LiveRecording {
     let admittedAt: ContinuousClock.Instant
     /// Held from admission until the dictation's processing ends, so storage housekeeping stays out of the way.
     let lease: ForegroundActivity.Lease
+    /// Whether this recording took Plain text once when it was admitted.
+    var plainTextOnce = false
     var phase = Phase.admitted
     /// Captured when the microphone starts opening, so a later change of focus changes neither where the text goes
     /// nor which app profile applies.
     var target: DictationTarget?
     /// The app profiles as they stood at activation, when the rules had loaded by then.
     var profiles: [AppProfile]?
+    /// The formatting preferences as they stood when the target was captured.
+    var formatting: DictationFormattingSettings?
     var deadline: Task<Void, Never>?
     var localModelPreparation: LocalModelPreparation?
 }
@@ -121,6 +125,8 @@ private struct AdmittedDictation: Sendable {
     let trigger: DictationTrigger
     let target: DictationTarget?
     let profiles: [AppProfile]?
+    let formatting: DictationFormattingSettings?
+    let plainTextOnce: Bool
     let sealing: Task<CapturedAudio?, Never>
     let stopReason: DictationStopReason
     let lease: ForegroundActivity.Lease
@@ -223,6 +229,12 @@ final class DictationController {
         /// Whether the target gets one trailing space after each dictation. Read for the dictation being inserted, so
         /// a change applies to the next delivery that reaches insertion.
         var addSpaceAfterDictation: @MainActor @Sendable () -> Bool = { true }
+        /// App-aware formatting and the default text format for app profiles (`TypingSettingsStore`), read when a
+        /// recording captures its target, so a change applies from the next recording.
+        var formatting: @MainActor @Sendable () -> DictationFormattingSettings = { DictationFormattingSettings() }
+        /// Takes Plain text once (`PlainTextOnce.consumeForAdmittedRecording`) for a recording just admitted, and
+        /// says whether it was armed. Called only on admission, never for a press that was turned away.
+        var consumePlainTextOnce: @MainActor @Sendable () -> Bool = { false }
         /// How long a notice stays on the pill.
         var noticeDuration: Duration = .milliseconds(1_800)
         /// A press while this many dictations are still processing is turned away, which bounds the audio held.
@@ -538,14 +550,15 @@ final class DictationController {
                 self.present()
             }
             : nil
+        let plainTextOnce = configuration.consumePlainTextOnce()
         recording = LiveRecording(
             id: id, trigger: trigger, policy: policy, admittedAt: services.clock.now, lease: services.activity.begin(),
-            localModelPreparation: preparation)
+            plainTextOnce: plainTextOnce, localModelPreparation: preparation)
         preparation?.start(using: services.cleanup)
         ScribeLog.info(
             .dictation, "Recording admitted", .integer("dictation", id.rawValue), .name("trigger", trigger),
             .name("gesture", trigger.gesture), .flag("stopsOnSilence", policy.stopsOnSilence),
-            .flag("durationCeiling", policy.maximumDuration != nil))
+            .flag("durationCeiling", policy.maximumDuration != nil), .flag("plainTextOnce", plainTextOnce))
         Task { [weak self] in
             await self?.openMicrophone(for: id)
         }
@@ -569,10 +582,12 @@ final class DictationController {
         let opening = services.capture.startOpening(owner: id, policy: admitted.policy, events: captureEvents.sink)
         let target = services.targeting.captureTarget()
         let profiles = services.rules.isLoaded ? services.rules.appProfiles : nil
+        let formatting = configuration.formatting()
         if var current = recording, current.id == id {
             current.phase = .opening
             current.target = target
             current.profiles = profiles
+            current.formatting = formatting
             recording = current
         }
 
@@ -687,7 +702,8 @@ final class DictationController {
         }
 
         let dictation = AdmittedDictation(
-            id: id, trigger: ended.trigger, target: ended.target, profiles: ended.profiles, sealing: sealing,
+            id: id, trigger: ended.trigger, target: ended.target, profiles: ended.profiles,
+            formatting: ended.formatting, plainTextOnce: ended.plainTextOnce, sealing: sealing,
             stopReason: reason, lease: ended.lease, localModelPreparation: ended.localModelPreparation,
             heldDuration: ended.admittedAt.duration(to: services.clock.now))
         if let preparation = ended.localModelPreparation {
@@ -803,9 +819,16 @@ final class DictationController {
             profiles: dictation.profiles ?? rules.appProfiles,
             bundleIdentifier: target?.bundleIdentifier,
             processName: target?.processName)
-        let newlineMode = AppProfileMatcher.resolveNewlineMode(
-            profile: profile, globalDefault: configuration.newlineMode, bundleIdentifier: target?.bundleIdentifier)
-        let singleLine = AppProfileMatcher.flattensNewlines(newlineMode, bundleIdentifier: target?.bundleIdentifier)
+        // The text format and delivery, decided once from what the recording captured (`DictationFormatPlan`). It
+        // changes neither recognition nor cleanup, and only its line-break rule reaches the cleanup request.
+        let plan = DictationFormatPlan.capture(
+            profile: profile,
+            globalNewlineMode: configuration.newlineMode,
+            settings: dictation.formatting ?? configuration.formatting(),
+            bundleIdentifier: target?.bundleIdentifier,
+            applicationName: target?.processName,
+            plainOnce: dictation.plainTextOnce)
+        let singleLine = plan.flattensNewlines
 
         // With AI cleanup off: snippets, then the dictionary and the libraries, each once, as Windows runs them. With
         // cleanup on, every replacement is decided once on the raw transcript, exactly as cleanup off decides it, and
@@ -866,10 +889,23 @@ final class DictationController {
         report.postProcessing = post
         guard !Self.isBlank(post.text) else { return nothingToInsert(dictation, report: report) }
 
-        // Line breaks last, for the target captured at activation: a terminal takes a newline as Enter.
-        let insertion = AppProfileMatcher.applyNewlineMode(
-            newlineMode, to: post.text, bundleIdentifier: target?.bundleIdentifier)
+        // Line breaks last, for the target captured at activation: a terminal takes a newline as Enter. This is R,
+        // what history and recovery keep; only the target gets the space after it.
+        let insertion = plan.represent(post.text)
         report.finalText = insertion
+        let paste =
+            plan.delivery == .paste
+            ? PasteRequest(keepsWholePasteboard: plan.keepsWholePasteboard, html: plan.pasteboardHTML(insertion))
+            : nil
+        ScribeLog.info(
+            .dictation, "Formatting decided", .integer("dictation", id.rawValue), .name("decision", plan.decision),
+            .name("format", plan.textFormat), .name("delivery", plan.delivery))
+        if plan.decision == .markdownNewlineConflict {
+            ScribeLog.warning(
+                .dictation, "App formatting refused: the line-break rule uses one line, so plain text is typed",
+                .integer("dictation", id.rawValue))
+            notify(.formattingConflict)
+        }
 
         // Delivery in dictation order. The check after the wait is the last one: recovery and delivery follow with
         // no suspension in between.
@@ -882,7 +918,8 @@ final class DictationController {
             recovery: services.recovery
         ) { typed in
             if let destination = target?.injection {
-                return await injector.inject(text: typed, into: destination, shiftReturnLineBreaks: true)
+                return await injector.inject(
+                    text: typed, into: destination, shiftReturnLineBreaks: true, paste: paste)
             }
             // A target that could not be captured is never taken to mean "wherever focus is now".
             return InjectionResult(delivery: .targetUnknown)
@@ -897,6 +934,7 @@ final class DictationController {
             [
                 .integer("dictation", id.rawValue), .name("delivery", injection.delivery),
                 .name("clipboard", injection.clipboard), .name("restore", injection.restore),
+                .count("keptItems", injection.keptItemCount), .flag("formattedCopy", injection.htmlPlaced),
             ])
         // Cancelled before anything was sent: shutdown stopped it, and there is nothing to record.
         guard injection.delivery != .cancelled else { return stopped(dictation, at: .duringDelivery) }
@@ -1207,7 +1245,7 @@ final class DictationController {
             postOutcome(
                 .textKept, about: id, stage: .delivery, recoveryGeneration: recoveryGeneration,
                 notification: .notInserted(transcript, recoveryGeneration: recoveryGeneration))
-        case .typedPartially:
+        case .typedPartially, .pastedWithoutSpace:
             postOutcome(
                 .partlyInserted, about: id, stage: .delivery, recoveryGeneration: recoveryGeneration,
                 notification: .partlyInserted(transcript, recoveryGeneration: recoveryGeneration))

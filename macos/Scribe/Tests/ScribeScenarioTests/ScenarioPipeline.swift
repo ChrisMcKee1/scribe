@@ -347,7 +347,9 @@ final class ScenarioInjector: DictationInjecting {
         self.journal = journal
     }
 
-    func inject(text: String, into target: InjectionTarget?, shiftReturnLineBreaks: Bool) async -> InjectionResult {
+    func inject(
+        text: String, into target: InjectionTarget?, shiftReturnLineBreaks: Bool, paste: PasteRequest?
+    ) async -> InjectionResult {
         deliveries.append(Delivery(text: text, bundleIdentifier: target?.bundleIdentifier))
         journal.record(.delivered, script.line(delivered: text)?.clip.name ?? "?")
         return InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored)

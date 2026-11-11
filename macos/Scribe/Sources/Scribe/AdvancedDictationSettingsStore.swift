@@ -54,6 +54,7 @@ enum DictationControllerConfigurationFactory {
         configuration.newlineMode = advanced.newlineMode
         configuration.toggleKeyStopsOnSilence = toggleKeyStopsOnSilence
         configuration.addSpaceAfterDictation = { typing.addSpaceAfterDictation }
+        configuration.formatting = { typing.formatting }
         return configuration
     }
 }

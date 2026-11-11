@@ -33,10 +33,17 @@ final class AppProfileSettingsModel: ObservableObject {
     let drafts: SettingsDrafts
     private let access: AppProfileSettingsAccess
     private let onChanged: @MainActor () -> Void
+    private let formatting: @MainActor () -> DictationFormattingSettings
 
-    init(access: AppProfileSettingsAccess, drafts: SettingsDrafts, onChanged: @escaping @MainActor () -> Void) {
+    init(
+        access: AppProfileSettingsAccess,
+        drafts: SettingsDrafts,
+        formatting: @escaping @MainActor () -> DictationFormattingSettings = { TypingSettingsStore.live.formatting },
+        onChanged: @escaping @MainActor () -> Void
+    ) {
         self.access = access
         self.drafts = drafts
+        self.formatting = formatting
         self.onChanged = onChanged
     }
 
@@ -47,6 +54,20 @@ final class AppProfileSettingsModel: ObservableObject {
 
     var canAdd: Bool {
         !isAdding && !Self.isBlank(drafts.profileName) && !Self.isBlank(drafts.profileBundleIdentifiers)
+            && !hasNewlineConflict
+    }
+
+    /// Whether the profile in the drafts would paste Markdown where its line-break rule takes the line breaks out,
+    /// which Windows' Save refuses too (`SettingsDraftValidation.ValidateAppFormatting`). Judged on the format it
+    /// would use, its own or the default, and only while app-aware formatting is on, since otherwise the format is
+    /// ignored.
+    var hasNewlineConflict: Bool {
+        let settings = formatting()
+        guard settings.appAwareFormatting else { return false }
+        return DictationFormatPlan.conflictsWithNewlines(
+            drafts.profileTextFormat ?? settings.defaultTextFormat,
+            newlineMode: drafts.profileNewlineMode,
+            bundleIdentifiers: Self.identifiers(in: drafts.profileBundleIdentifiers))
     }
 
     func reload() async {
@@ -72,6 +93,7 @@ final class AppProfileSettingsModel: ObservableObject {
         let identifiersText = drafts.profileBundleIdentifiers
         let writingStyle = drafts.profileWritingStyle
         let newlineMode = drafts.profileNewlineMode
+        let textFormat = drafts.profileTextFormat
         guard canAdd, drafts.beginAdding(.appProfile) else {
             return
         }
@@ -79,24 +101,23 @@ final class AppProfileSettingsModel: ObservableObject {
 
         let profile = AppProfile(
             name: name,
-            bundleIdentifiers:
-                identifiersText
-                .split(separator: ",")
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty },
+            bundleIdentifiers: Self.identifiers(in: identifiersText),
             processNames: [],
             writingStylePrompt: writingStyle.isEmpty ? nil : writingStyle,
-            newlineHandling: newlineMode)
+            newlineHandling: newlineMode,
+            textFormat: textFormat)
         let added = await write {
             try await self.access.addProfile(profile)
         }
         if added, drafts.profileName == name, drafts.profileBundleIdentifiers == identifiersText,
-            drafts.profileWritingStyle == writingStyle, drafts.profileNewlineMode == newlineMode
+            drafts.profileWritingStyle == writingStyle, drafts.profileNewlineMode == newlineMode,
+            drafts.profileTextFormat == textFormat
         {
             drafts.profileName = ""
             drafts.profileBundleIdentifiers = ""
             drafts.profileWritingStyle = ""
             drafts.profileNewlineMode = .smartFlatten
+            drafts.profileTextFormat = nil
         }
     }
 
@@ -120,6 +141,13 @@ final class AppProfileSettingsModel: ObservableObject {
         onChanged()
         await reload()
         return true
+    }
+
+    private static func identifiers(in text: String) -> [String] {
+        text
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
     }
 
     private static func isBlank(_ text: String) -> Bool {

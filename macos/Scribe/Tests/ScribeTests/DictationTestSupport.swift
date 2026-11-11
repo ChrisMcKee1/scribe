@@ -619,6 +619,7 @@ final class FakeInjector: DictationInjecting {
     struct Delivery {
         let text: String
         let target: InjectionTarget?
+        let paste: PasteRequest?
     }
 
     var result = InjectionResult(delivery: .pasted, clipboard: .pasted, restore: .restored)
@@ -633,8 +634,14 @@ final class FakeInjector: DictationInjecting {
         deliveries.map(\.text)
     }
 
-    func inject(text: String, into target: InjectionTarget?, shiftReturnLineBreaks: Bool) async -> InjectionResult {
-        deliveries.append(Delivery(text: text, target: target))
+    var pasteRequests: [PasteRequest?] {
+        deliveries.map(\.paste)
+    }
+
+    func inject(
+        text: String, into target: InjectionTarget?, shiftReturnLineBreaks: Bool, paste: PasteRequest?
+    ) async -> InjectionResult {
+        deliveries.append(Delivery(text: text, target: target, paste: paste))
         inFlight += 1
         if let gate = holdNext {
             holdNext = nil

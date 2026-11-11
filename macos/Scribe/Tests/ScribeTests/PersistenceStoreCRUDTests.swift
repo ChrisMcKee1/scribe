@@ -106,6 +106,60 @@ final class PersistenceStoreCRUDTests: XCTestCase {
         let profile = try XCTUnwrap(try store.fetchAppProfiles().first)
         XCTAssertNil(profile.writingStylePrompt)
         XCTAssertNil(profile.newlineHandling)
+        XCTAssertNil(profile.textFormat)
+    }
+
+    func testEveryProfileTextFormatRoundTrips() throws {
+        for format in DictationTextFormat.allCases {
+            _ = try store.insertAppProfile(
+                AppProfile(
+                    name: format.rawValue, bundleIdentifiers: ["com.example.\(format.rawValue)"], processNames: [],
+                    writingStylePrompt: nil, newlineHandling: .keepNewlines, textFormat: format))
+        }
+
+        let stored = try store.fetchAppProfiles().map(\.textFormat)
+        XCTAssertEqual(stored, DictationTextFormat.allCases.map { Optional($0) })
+    }
+
+    /// A format name this build does not know was still a choice, so it reads as plain text, never as the default.
+    func testAProfileTextFormatThisBuildDoesNotKnowReadsAsPlainText() throws {
+        _ = try store.insertAppProfile(
+            AppProfile(name: "Later", bundleIdentifiers: ["com.example.later"], processNames: []))
+        let raw = try StorageTestSQLite(directory.databaseURL)
+        defer { raw.close() }
+        try raw.execute("UPDATE app_profiles SET text_format = 'RichTextFromALaterBuild';")
+
+        XCTAssertEqual(try store.fetchAppProfiles().first?.textFormat, .plain)
+        try raw.execute("UPDATE app_profiles SET text_format = 'markdownwithformatting';")
+        XCTAssertEqual(try store.fetchAppProfiles().first?.textFormat, .markdownWithFormatting)
+    }
+
+    /// A database from before app-aware formatting gains the column, and its profiles keep the default format.
+    func testAnOlderProfilesTableGainsTheTextFormatColumn() throws {
+        store = nil
+        directory.remove()
+        directory = try StorageTestDirectory()
+        try StorageTestSQLite.createLegacyDatabase(at: directory.databaseURL, historyStartedAt: [])
+        let raw = try StorageTestSQLite(directory.databaseURL)
+        try raw.execute(
+            """
+            INSERT INTO app_profiles(name, bundle_identifiers, process_names, newline_handling)
+            VALUES ('Chat', 'com.tinyspeck.slackmacgap', '', 'keepNewlines');
+            """)
+        raw.close()
+
+        store = PersistenceStore(databaseURL: directory.databaseURL)
+        try store.initialize()
+
+        let profile = try XCTUnwrap(try store.fetchAppProfiles().first)
+        XCTAssertEqual(profile.name, "Chat")
+        XCTAssertEqual(profile.newlineHandling, .keepNewlines)
+        XCTAssertNil(profile.textFormat)
+        _ = try store.insertAppProfile(
+            AppProfile(
+                name: "Docs", bundleIdentifiers: ["md.obsidian"], processNames: [], writingStylePrompt: nil,
+                newlineHandling: nil, textFormat: .markdownSource))
+        XCTAssertEqual(try store.fetchAppProfiles().map(\.textFormat), [nil, .markdownSource])
     }
 
     func testDeleteAppProfile() throws {

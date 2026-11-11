@@ -1875,7 +1875,10 @@ change the sums and needs a decision (and probably a flag) of its own.
   scripted boundaries, with long/multichunk source, paste refusal, remote typing and focus/cancellation. The one-shot
   tests use a manual clock and the real lifecycle admission; UI/source/search/draft tests cover propagation without a
   live app. A Settings runtime/text-size probe, real editor delivery and Arm64 remain separate manual gates.
-  macOS has not ported this MVP; its profile, insertion and tray rows in `macos/PORTING-PLAN.md` note that gap.
+  The macOS port mirrors it in `macos/Scribe/Sources/Scribe/DictationFormatPlan.swift` (bundle identifiers for the
+  built-in apps, Plain text once in the menu bar menu, Excel on one line), with `MarkdownPasteboardHTML.swift` in
+  place of Markdig and no per-profile typing method or Shift+Enter override, since the Mac has no typing method
+  setting; a change here should check that port and its `PORTING-PLAN.md` rows.
 
 ## Text insertion: the space after a dictation (read before touching DictationInsertion)
 

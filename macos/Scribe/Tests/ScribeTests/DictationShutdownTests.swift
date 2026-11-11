@@ -68,7 +68,8 @@ final class DictationShutdownTests: XCTestCase {
 
         await harness.dictate()
         await waitUntil("A's paste holds after Command-V") { injection.pacer.isHolding }
-        XCTAssertEqual(injection.pasteboard.string(forType: .string), "first dictation ")
+        // The space after the dictation is typed once the paste has settled, so the pasteboard holds the text alone.
+        XCTAssertEqual(injection.pasteboard.string(forType: .string), "first dictation")
 
         await harness.dictate()
         let recognizerStarted = await FileGate.waitForFile(at: ready, timeout: .seconds(30))

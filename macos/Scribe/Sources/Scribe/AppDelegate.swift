@@ -68,6 +68,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let terminationApproval = ApplicationTerminationApproval()
     private var dictationMenuItem: NSMenuItem?
     private var pauseMenuItem: NSMenuItem?
+    private var plainTextOnceMenuItem: NSMenuItem?
+    /// The next recording's plain-text choice, armed from the menu bar menu (`PlainTextOnce`).
+    private let plainTextOnce = PlainTextOnce()
     private var aiCleanupMenuItem: NSMenuItem?
     private var overlayPositionMenu: NSMenu?
     private lazy var microphoneMenu = MicrophoneMenu()
@@ -116,7 +119,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             prepare: { [weak self] in
                 await self?.settingsWindowController?.prepareForApplicationTermination() ?? true
             },
-            proceed: { [weak self] in _ = self?.termination.request() },
+            proceed: { [weak self] in
+                // Quitting clears it, with no notice.
+                self?.plainTextOnce.shutDown()
+                _ = self?.termination.request()
+            },
             reject: { NSApp.reply(toApplicationShouldTerminate: false) })
     }
 
@@ -144,6 +151,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DictationNoticeConfiguration(
                 microphoneUID: AudioDeviceStore.live.selectedDeviceUID, shortcut: HotkeySettingsStore.live.binding)
         }
+        let plainTextOnce = plainTextOnce
+        configuration.consumePlainTextOnce = {
+            let taken = plainTextOnce.consumeForAdmittedRecording()
+            // Admission can happen inside the event tap's callback, so the menu and the notice change later.
+            if let change = taken.change {
+                Task { @MainActor in plainTextOnce.notify(change) }
+            }
+            return taken.consumed
+        }
+        plainTextOnce.onChange = { [weak self] state in self?.plainTextOnceChanged(state) }
         let controller = DictationController(
             services: DictationController.Services(
                 capture: LiveDictationCapture(engine: audioCaptureEngine),
@@ -368,6 +385,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let pauseItem = NSMenuItem(title: "Pause Dictation", action: #selector(togglePaused(_:)), keyEquivalent: "")
         pauseItem.state = paused ? .on : .off
         menu.addItem(pauseItem)
+        let plainTextOnceItem = NSMenuItem(
+            title: PlainTextOnceText.menuTitle, action: #selector(togglePlainTextOnce(_:)), keyEquivalent: "")
+        plainTextOnceItem.toolTip = PlainTextOnceText.help
+        menu.addItem(plainTextOnceItem)
         menu.addItem(.separator())
         menu.addItem(recentDictationsMenu.item)
         menu.addItem(
@@ -384,6 +405,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         dictationMenuItem = dictationItem
         aiCleanupMenuItem = aiCleanupItem
         pauseMenuItem = pauseItem
+        plainTextOnceMenuItem = plainTextOnceItem
         trayPresenter.dictationMenuItem = dictationItem
         trayPresenter.pauseMenuItem = pauseItem
         trayPresenter.statusButton = item.button
@@ -420,6 +442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         guard menu === statusItem?.menu else { return }
         aiCleanupMenuItem?.state = isAiCleanupEnabled ? .on : .off
+        showPlainTextOnce(plainTextOnce.current)
         refreshOverlayPositionChecks()
         retryHotkeyIfPermitted()
     }
@@ -446,6 +469,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let paused = !dictationController.isPaused
         UserDefaults.standard.set(paused, forKey: Self.isPausedDefaultsKey)
         dictationController.setPaused(paused)
+    }
+
+    /// Arms Plain text once for the next recording within 60 seconds, or cancels it, as Windows' tray item does.
+    @objc private func togglePlainTextOnce(_ sender: NSMenuItem) {
+        if plainTextOnce.current.isArmed {
+            plainTextOnce.cancel()
+            ScribeLog.info(.app, "Plain text once cancelled from the menu bar")
+        } else {
+            plainTextOnce.arm()
+            ScribeLog.info(.app, "Plain text once armed from the menu bar")
+        }
+    }
+
+    private func plainTextOnceChanged(_ state: PlainTextOnceState) {
+        showPlainTextOnce(state)
+        if state.status == .consumed || state.status == .expired {
+            ScribeLog.info(.app, "Plain text once cleared", .name("because", state.status))
+        }
+        if let notice = DictationNotice.plainTextOnce(state) {
+            notifier.notify(notice)
+        }
+    }
+
+    private func showPlainTextOnce(_ state: PlainTextOnceState) {
+        plainTextOnceMenuItem?.state = state.isArmed ? .on : .off
+        plainTextOnceMenuItem?.title = state.isArmed ? PlainTextOnceText.armedMenuTitle : PlainTextOnceText.menuTitle
+        plainTextOnceMenuItem?.toolTip = state.isArmed ? PlainTextOnceText.armedHelp : PlainTextOnceText.help
+        plainTextOnceMenuItem?.isEnabled = state.status != .shutdown
     }
 
     @objc private func quit(_ sender: Any?) {
