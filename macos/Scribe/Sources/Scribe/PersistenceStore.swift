@@ -119,6 +119,17 @@ struct DictionaryImportSummary: Equatable, Sendable {
     let unchanged: Int
 }
 
+/// What committing reviewed Learn from history suggestions changed: the rules added, and the rules repaired in place,
+/// each as stored.
+struct DictionarySuggestionCommit: Equatable, Sendable {
+    var added: [DictionaryEntry] = []
+    var repaired: [DictionaryEntry] = []
+
+    var isEmpty: Bool {
+        added.isEmpty && repaired.isEmpty
+    }
+}
+
 /// What every dictation applies: the enabled dictionary rules, the enabled snippets and the app
 /// profiles, read together so they agree with each other.
 struct PersistenceRuleSet: Equatable, Sendable {
@@ -959,6 +970,70 @@ final class PersistenceStore: Sendable {
                 return added
             }
         }
+    }
+
+    /// Commits reviewed Learn from history suggestions, deciding and writing in one transaction. A suggestion whose
+    /// spoken form no stored rule has is added. One whose spoken form a rule has repairs that rule in place, as
+    /// Windows updates the row (0.5.15): the rule keeps its id, spoken form and whole-word choice, takes the suggested
+    /// written form and is turned on. A rule that already writes the suggestion and is on is left as it is, and a
+    /// suggestion repeating an earlier one's spoken form is skipped. Spoken forms are compared as the suggester
+    /// compares them (`AIDictionarySuggester.spokenKey`).
+    func addOrRepairDictionaryEntries(_ entries: [DictionaryEntry]) async throws -> DictionarySuggestionCommit {
+        guard !entries.isEmpty else {
+            return DictionarySuggestionCommit()
+        }
+        let commit = try await owner.withSessionAsync(.foreground) { session in
+            try session.transaction(.write) { () -> DictionarySuggestionCommit in
+                let stored = try Self.readDictionaryEntries(enabledOnly: false, session)
+                var storedBySpoken: [String: DictionaryEntry] = [:]
+                for entry in stored {
+                    let key = AIDictionarySuggester.spokenKey(entry.pattern)
+                    if !key.isEmpty, storedBySpoken[key] == nil {
+                        storedBySpoken[key] = entry
+                    }
+                }
+
+                var result = DictionarySuggestionCommit()
+                var taken = Set<String>()
+                for entry in entries {
+                    let key = AIDictionarySuggester.spokenKey(entry.pattern)
+                    guard !key.isEmpty, taken.insert(key).inserted else {
+                        continue
+                    }
+                    if let existing = storedBySpoken[key] {
+                        guard existing.replacement != entry.replacement || !existing.enabled else {
+                            continue
+                        }
+                        let repaired = DictionaryEntry(
+                            id: existing.id,
+                            pattern: existing.pattern,
+                            replacement: entry.replacement,
+                            wholeWord: existing.wholeWord,
+                            enabled: true)
+                        try Self.updateDictionaryEntry(repaired, in: session)
+                        guard session.changes == 1 else {
+                            throw PersistenceError.rowMissing(operation: .write)
+                        }
+                        result.repaired.append(repaired)
+                    } else {
+                        let id = try Self.insertDictionaryEntry(entry, in: session)
+                        result.added.append(
+                            DictionaryEntry(
+                                id: id,
+                                pattern: entry.pattern,
+                                replacement: entry.replacement,
+                                wholeWord: entry.wholeWord,
+                                enabled: entry.enabled))
+                    }
+                }
+                return result
+            }
+        }
+        // A repair replaces a written form, so the old text is gone from the database as an edit's is.
+        if !commit.repaired.isEmpty {
+            removedText.record()
+        }
+        return commit
     }
 
     func fetchEnabledDictionaryEntries() throws -> [DictionaryEntry] {

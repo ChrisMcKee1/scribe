@@ -78,7 +78,23 @@ final class LocalAppSetupTests: XCTestCase {
             LocalServerState(reach: .reached, models: [], loaded: [], failureDetail: nil),
             nil,
             idleMinutes: 10)
-        XCTAssertEqual(empty.text, "Ollama has no models yet. Download one in Ollama, then choose Check again.")
+        XCTAssertEqual(empty.text, "Ollama has no models yet. Use Download another model below.")
+        let emptyLMStudio = LocalAppSetup.describe(
+            .lmStudio,
+            LocalServerState(reach: .reached, models: [], loaded: [], failureDetail: nil),
+            nil,
+            idleMinutes: 10)
+        XCTAssertEqual(
+            emptyLMStudio.text, "LM Studio has no models yet. Download one in LM Studio, then choose Check again.")
+
+        let listed = LocalServerState(
+            reach: .reached, models: [LocalServerModel("gemma4:e2b", "gemma4:e2b", 1)], loaded: [], failureDetail: nil)
+        XCTAssertEqual(
+            LocalAppSetup.describe(.ollama, listed, "deepseek-r1", idleMinutes: 10).text,
+            "Ollama doesn't list deepseek-r1. Choose another model, or use Download another model below.")
+        XCTAssertEqual(
+            LocalAppSetup.describe(.lmStudio, listed, "deepseek-r1", idleMinutes: 10).text,
+            "LM Studio doesn't list deepseek-r1. Choose another model, or download it in LM Studio.")
 
         let needsKey = LocalAppSetup.describe(.lmStudio, .needsKey, "google/gemma-4-e2b", idleMinutes: 10)
         XCTAssertEqual(needsKey.kind, .warning)

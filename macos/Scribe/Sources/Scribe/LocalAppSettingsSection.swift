@@ -81,9 +81,13 @@ final class LocalAppSettingsModel: ObservableObject {
         return states[app]
     }
 
-    func refresh(for app: LocalServerApp, endpoint: String?) async {
+    /// Reads the app again and shows what it found unless a newer refresh began meanwhile. Returns that reading either
+    /// way, so a caller that needs this answer (a finished model download) does not depend on what is shown, which
+    /// another Check again can clear; `nil` when nothing was read.
+    @discardableResult
+    func refresh(for app: LocalServerApp, endpoint: String?) async -> LocalServerState? {
         guard app != .none, let endpoint, !Task.isCancelled else {
-            return
+            return nil
         }
         let owner = UUID()
         refreshOwners[app] = owner
@@ -95,8 +99,11 @@ final class LocalAppSettingsModel: ObservableObject {
             }
         }
         let state = await read(endpoint)
-        guard refreshOwners[app] == owner, !Task.isCancelled else { return }
-        states[app] = state
+        guard !Task.isCancelled else { return nil }
+        if refreshOwners[app] == owner {
+            states[app] = state
+        }
+        return state
     }
 
     func unload(for app: LocalServerApp, endpoint: String?, model: String) async {
@@ -122,6 +129,7 @@ struct CleanupProviderSettingsSection: View {
     @ObservedObject var model: CleanupSettingsModel
     @ObservedObject var drafts: SettingsDrafts
     @StateObject private var local = LocalAppSettingsModel()
+    @StateObject private var ollamaDownload = OllamaModelDownloadModel()
     @StateObject private var vocabularyStatus: CleanupVocabularyStatusModel
 
     init(
@@ -171,6 +179,17 @@ struct CleanupProviderSettingsSection: View {
             }
             await local.refresh(for: app, endpoint: model.localAppEndpoint(for: choice))
         }
+        // The form is gone, or disabled with its Cancel button, once Ollama on this Mac is no longer what AI cleanup
+        // uses, so its download stops then.
+        .onChange(of: localRefreshKey) { _ in
+            if !showsOllamaDownload {
+                ollamaDownload.stop()
+            }
+        }
+    }
+
+    private var showsOllamaDownload: Bool {
+        model.values.isEnabled && model.providerSelection == .onThisMac && model.localAppChoice == .ollama
     }
 
     private var localRefreshKey: String {
@@ -300,6 +319,15 @@ struct CleanupProviderSettingsSection: View {
         }
         if let notice = local.freeMemoryNotice {
             Text(notice).font(.caption).foregroundStyle(.secondary)
+        }
+        if app == .ollama {
+            let reader = local
+            let settings = model
+            OllamaModelDownloadSection(
+                download: ollamaDownload,
+                endpoint: settings.localAppEndpoint(for: .ollama),
+                refresh: { endpoint in await reader.refresh(for: .ollama, endpoint: endpoint) },
+                useModel: { name in settings.setLocalModel(name, for: .ollama) })
         }
     }
 

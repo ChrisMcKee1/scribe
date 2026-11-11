@@ -262,9 +262,13 @@ final class DictionarySettingsModel: ObservableObject {
         }
     }
 
+    static let nothingFoundAfterAI =
+        "Your AI model and the history scan didn't find any new words to add. Keep dictating and try again later."
+
     /// Mines recent history for recurring jargon and adds the terms no stored rule covers. The store decides what is
-    /// new inside the transaction that writes it, so a rule the tab has not loaded is never added twice.
-    func learnFromHistory() async {
+    /// new inside the transaction that writes it, so a rule the tab has not loaded is never added twice. `afterAI`
+    /// says Learn from history asked the AI service first and it found nothing usable, as Windows says it.
+    func learnFromHistory(afterAI: Bool = false) async {
         guard !isLearning else {
             return
         }
@@ -279,10 +283,13 @@ final class DictionarySettingsModel: ObservableObject {
         guard succeeded else {
             return
         }
-        statusMessage =
-            learned.isEmpty
-            ? "No new recurring terms found in your dictation history yet."
-            : "Learned \(learned.count) new entr\(learned.count == 1 ? "y" : "ies") from your dictation history."
+        if learned.isEmpty {
+            statusMessage =
+                afterAI ? Self.nothingFoundAfterAI : "No new recurring terms found in your dictation history yet."
+        } else {
+            statusMessage =
+                "Learned \(learned.count) new entr\(learned.count == 1 ? "y" : "ies") from your dictation history."
+        }
     }
 
     /// Scores the stored rules against recent history and, when some never come up, opens the review. Nothing is

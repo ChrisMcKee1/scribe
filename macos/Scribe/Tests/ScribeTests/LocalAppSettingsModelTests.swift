@@ -24,7 +24,9 @@ final class LocalAppSettingsModelTests: XCTestCase {
         await model.refresh(for: .ollama, endpoint: "new")
         XCTAssertEqual(model.state(for: .ollama), current)
         await oldGate.open()
-        await old.value
+        // The older refresh still answers with what it read, though it no longer decides what is shown.
+        let oldReading = await old.value
+        XCTAssertEqual(oldReading, .failed)
         XCTAssertEqual(model.state(for: .ollama), current)
     }
 
@@ -44,10 +46,12 @@ final class LocalAppSettingsModelTests: XCTestCase {
         let newer = Task { await model.refresh(for: .lmStudio, endpoint: "new") }
         await newGate.waitForArrival()
         await oldGate.open()
-        await old.value
+        let oldReading = await old.value
+        XCTAssertEqual(oldReading, current)
         XCTAssertNil(model.state(for: .lmStudio))
         await newGate.open()
-        await newer.value
+        let newerReading = await newer.value
+        XCTAssertEqual(newerReading, current)
         XCTAssertEqual(model.state(for: .lmStudio), current)
     }
 
@@ -66,7 +70,8 @@ final class LocalAppSettingsModelTests: XCTestCase {
         await gate.waitForArrival()
         task.cancel()
         await gate.open()
-        await task.value
+        let cancelledReading = await task.value
+        XCTAssertNil(cancelledReading)
         XCTAssertEqual(model.state(for: .ollama), .notRunning)
     }
 
@@ -91,7 +96,8 @@ final class LocalAppSettingsModelTests: XCTestCase {
         }
         await cancelled.value
         await gate.open()
-        await held.value
+        let heldReading = await held.value
+        XCTAssertEqual(heldReading, current)
         XCTAssertEqual(model.state(for: .ollama), current)
     }
 }
