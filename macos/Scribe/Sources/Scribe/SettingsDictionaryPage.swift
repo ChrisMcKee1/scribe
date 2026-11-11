@@ -442,10 +442,10 @@ struct DictionarySettingsTab: View {
         }
         if !aiSuggestions.hasBoundCompletion {
             Text(
-                "AI suggestions use only raw recognized text from the latest Try dictation report, not saved history. "
+                "AI suggestions use only what Scribe heard in the latest Try dictation report, not saved history. "
                     + "The request may also include applicable dictionary and permitted word pack vocabulary. "
-                    + "Snippet templates are never sent. Suggestions stay disabled until the saved-provider request "
-                    + "handoff can enforce recipient checks and cancellation."
+                    + "Snippet templates are never sent. Suggestions stay disabled until the request handoff to the "
+                    + "saved AI service can enforce recipient checks and cancellation."
             )
             .foregroundStyle(.secondary)
             .font(.caption)
@@ -1104,10 +1104,6 @@ struct DictionaryWordPacksSettingsTab: View {
 
     private func wordPackError(_ error: Error) -> String {
         error.localizedDescription
-            .replacingOccurrences(of: "libraries", with: "word packs")
-            .replacingOccurrences(of: "Libraries", with: "Word packs")
-            .replacingOccurrences(of: "library", with: "word pack")
-            .replacingOccurrences(of: "Library", with: "Word pack")
     }
 }
 

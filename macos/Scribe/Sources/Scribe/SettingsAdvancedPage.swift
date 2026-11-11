@@ -26,18 +26,18 @@ struct SettingsAdvancedPage: View {
                         title: "Processor threads",
                         value: "Automatic",
                         description:
-                            "Scribe does not pass a processor-thread setting to Foundry Local. The foundry transcribe command chooses how to run on this Mac."
+                            "Scribe does not pass a processor-thread setting to Foundry Local, which chooses how to run on this Mac."
                     )
                 }
                 SettingsCard(searchID: "advanced.free-memory") {
                     readOnlyCard(
                         title: "Free memory when Scribe is not used",
-                        value: "Managed by the recognizer",
+                        value: "Managed by Foundry Local",
                         description:
-                            "Scribe starts a recognizer subprocess for each dictation and keeps only a warm status for timing. Foundry Local manages its own model cache."
+                            "Scribe starts Foundry Local's speech recognition for each dictation and keeps only a warm status for timing. Foundry Local manages its own model cache."
                     )
                 }
-                Text("Changes to the recognizer backend take effect on the next dictation.")
+                Text("Changes to the speech model take effect on the next dictation.")
                     .cardDescription()
 
                 SettingsGroupHeader("Recording")
@@ -46,7 +46,7 @@ struct SettingsAdvancedPage: View {
                         title: "Trim silence",
                         value: "No separate trim step",
                         description:
-                            "macOS sends the captured recording to the recognizer as recorded. Silence auto-stop can end toggle and test dictations, but there is no separate silence trimming stage."
+                            "macOS sends the recording to speech recognition as recorded. Stop when I stop talking can end press-to-start-and-stop and test dictations, but there is no separate step that trims silence."
                     )
                 }
                 SettingsCard(searchID: "advanced.longest-recording") {
@@ -155,8 +155,8 @@ struct SettingsAdvancedPage: View {
                         newlineStore.newlineMode = mode
                     })
             ) {
-                Text("Smart flatten for terminals").tag(NewlineInjectionMode.smartFlatten)
-                Text("Always flatten to spaces").tag(NewlineInjectionMode.alwaysFlatten)
+                Text("Automatic: one line in command windows").tag(NewlineInjectionMode.smartFlatten)
+                Text("Always one line").tag(NewlineInjectionMode.alwaysFlatten)
                 Text("Keep line breaks").tag(NewlineInjectionMode.keepNewlines)
             }
             .pickerStyle(.menu)
@@ -187,7 +187,7 @@ struct SettingsAdvancedPage: View {
     private func description(for mode: NewlineInjectionMode) -> String {
         switch mode {
         case .smartFlatten:
-            return "Scribe keeps paragraphs in editors and flattens line breaks only for known terminal apps."
+            return "Scribe keeps paragraphs in editors and puts text on one line only in known command windows."
         case .alwaysFlatten:
             return "Scribe replaces every line break with a space before insertion."
         case .keepNewlines:

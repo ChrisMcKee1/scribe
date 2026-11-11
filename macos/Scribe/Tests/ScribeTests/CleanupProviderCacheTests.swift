@@ -796,7 +796,7 @@ final class CleanupProviderCacheTests: XCTestCase {
 
         XCTAssertTrue(check.reachable, check.message)
         XCTAssertTrue(
-            check.message.hasPrefix("OpenAI-compatible endpoint is connected: the model answered the test in "),
+            check.message.hasPrefix("Another AI service is connected: the model answered the test in "),
             check.message)
         let probe = try XCTUnwrap(rig.requests.all.first)
         XCTAssertEqual(probe.url?.absoluteString, "http://127.0.0.1:1234/v1/chat/completions")
@@ -974,7 +974,7 @@ final class CleanupProviderCacheTests: XCTestCase {
 
         XCTAssertFalse(check.reachable)
         XCTAssertTrue(
-            check.message.hasPrefix("OpenAI-compatible endpoint did not finish the test within"), check.message)
+            check.message.hasPrefix("Another AI service did not finish the test within"), check.message)
         await waitBounded("URLSession to stop the held request") { _ = await stopped.value }
     }
 
@@ -1110,7 +1110,7 @@ final class CleanupProviderCacheTests: XCTestCase {
 
         XCTAssertTrue(check.reachable, check.message)
         XCTAssertTrue(
-            check.message.hasPrefix("OpenAI-compatible endpoint is connected: the model answered the test in "),
+            check.message.hasPrefix("Another AI service is connected: the model answered the test in "),
             check.message)
         XCTAssertTrue(check.message.hasSuffix("so Scribe asked once more without one, and it answered."), check.message)
         XCTAssertFalse(check.message.contains("clean"), "a check claims no cleanup: \(check.message)")
@@ -1153,7 +1153,7 @@ final class CleanupProviderCacheTests: XCTestCase {
         alwaysLength.store.openAIBaseURL = "http://127.0.0.1:1235/v1"
         let check = try await boundedCheck(alwaysLength.cache)
         XCTAssertEqual(
-            check.message, "OpenAI-compatible endpoint: The model reached its output limit before writing any text.")
+            check.message, "Another AI service: The model reached its output limit before writing any text.")
     }
 
     /// An empty answer that did not stop at the ceiling, or an answer that is no completion at all, still fails, and
@@ -1193,7 +1193,7 @@ final class CleanupProviderCacheTests: XCTestCase {
 
         XCTAssertFalse(check.reachable)
         XCTAssertEqual(
-            check.message, "OpenAI-compatible endpoint: The model reached its output limit before writing any text.")
+            check.message, "Another AI service: The model reached its output limit before writing any text.")
         XCTAssertEqual(rig.requests.count, 3)
     }
 
@@ -1280,7 +1280,7 @@ final class CleanupProviderCacheTests: XCTestCase {
         let check = try XCTUnwrap(result.value)
         XCTAssertFalse(check.reachable)
         XCTAssertTrue(
-            check.message.hasPrefix("OpenAI-compatible endpoint did not finish the test within"), check.message)
+            check.message.hasPrefix("Another AI service did not finish the test within"), check.message)
         XCTAssertEqual(rig.requests.count, 0, "nothing is sent after a build that outlasted the deadline")
         XCTAssertEqual(apiKeys.reads, 1)
     }
@@ -1300,7 +1300,7 @@ final class CleanupProviderCacheTests: XCTestCase {
         }
         await waitBounded("the cancelled check to end") { await checking.value }
 
-        XCTAssertEqual(result.value?.message, "OpenAI-compatible endpoint: The check was cancelled.")
+        XCTAssertEqual(result.value?.message, "Another AI service: The check was cancelled.")
         XCTAssertEqual(apiKeys.reads, 0)
         XCTAssertEqual(rig.requests.count, 0)
     }

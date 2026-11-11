@@ -195,19 +195,19 @@ so resizing cannot subtract the title bar from the space reserved for the page a
   light is on with nothing recording: your next tap turns it off and starts nothing, and the tap after it starts a
   new dictation
 - Overlay pill with a 9-anchor position picker and live recording/processing state, and a short notice
-  that names what went wrong (for example "Cleanup failed, raw text used" or "Not inserted, text kept").
+  that names what went wrong (for example "AI cleanup failed, typing as heard" or "Not inserted, text kept").
   A notice never covers a recording and never replaces a newer failure; one that cannot be shown waits
   for the pill. Microphone, empty-audio and recognition problems also have plain-language notifications,
   once per problem episode, reset when that stage works again or the saved microphone or shortcut changes.
   A cleanup fallback that cannot be shown at once is posted once until cleanup recovers or its setup changes.
-  Every failed insertion still has its own Copy Transcript recovery action; those are never suppressed.
+  Every failed insertion still has its own Copy Dictation recovery action; those are never suppressed.
   Known near-silent audio is not sent to the recognizer, and an empty recognition on real audio says
   "No words recognized", rather than disappearing. No modal alerts while you dictate
 - If a chosen microphone is unavailable, Scribe says when it uses the system default instead, once until the
   chosen microphone works again or the saved selection changes. A selection that cannot be confirmed says so
   without claiming which microphone recorded. Recent Dictations reports whether copying succeeded; Quick Add
   says "Saved to your dictionary" only once the new rules are in use, otherwise "Saved, but not in use yet".
-  Notifications contain no dictated text. Copy Transcript retains only the last five texts in memory and
+  Notifications contain no dictated text. Copy Dictation retains only the last five texts in memory and
   Clear history withdraws those copies. See the [notice trigger matrix](PORTING-PLAN.md#tray-and-dictation-notices)
   for the Windows mapping and platform-specific limits
 - Releasing the key never waits for the recording to be finished off: that happens in the background,
@@ -364,7 +364,7 @@ so resizing cannot subtract the title bar from the space reserved for the page a
   and never a template-like replacement)
 - Dictation recovery: last 5 transcripts survive both the current run and an app restart (seeded
   from persisted history), in a Recent Dictations submenu that fills itself as it opens, plus a
-  notification with Copy Transcript for a dictation that did not go in. After Clear history neither
+  notification with Copy Dictation for a dictation that did not go in. After Clear history neither
   an entry already on show nor an earlier notification copies the deleted text
 - Startup problems (a database that could not be read, missing Input Monitoring or Accessibility) are
   reported once, in a notification that opens the right System Settings pane. Scribe tries the
@@ -384,7 +384,7 @@ so resizing cannot subtract the title bar from the space reserved for the page a
   first maintenance pass of each launch, about 30 seconds after Scribe starts or sooner, checkpoints too.
   Text deleted by an earlier build, before this was set, can remain in free pages until they are reused or
   reclaimed.
-  Settings > History chooses the limit (7, 30, 90 days, 1 year or Forever) and clears all history after a
+  Settings > History chooses the limit (7, 30, 90 days, 1 year or Until I delete them) and clears all history after a
   confirmation, which also empties Recent Dictations and the Playground's last dictation and closes an open
   Quick Add window
 - Scribe removes only what it made: the private recording it hands the recognizer, as soon as the recognizer

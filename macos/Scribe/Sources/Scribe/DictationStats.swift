@@ -118,3 +118,36 @@ enum DictationStats {
         return sortedAscending[lower] + (sortedAscending[upper] - sortedAscending[lower]) * weight
     }
 }
+
+/// How fast speech recognition ran, in the Settings glossary's words: "times faster than real time", never a
+/// real-time factor or a percentile. A port of Windows' `TryDictationTiming.SpeedLabel`.
+enum DictationSpeedText {
+    /// "20 times faster than real time" for a real-time factor of 0.05, at least "1 times"; empty for a factor that
+    /// is not a positive, finite number.
+    static func speedLabel(realTimeFactor: Double) -> String {
+        guard realTimeFactor > 0, realTimeFactor.isFinite else {
+            return ""
+        }
+        let faster = max(1, min((1 / realTimeFactor).rounded(.toNearestOrAwayFromZero), 1_000_000_000))
+        return "\(Int(faster).formatted()) times faster than real time"
+    }
+
+    /// The Diagnostics line: the fastest dictation, the typical one, and the speed 19 in 20 dictations reach. A
+    /// factor that says nothing leaves its sentence out.
+    static func summary(fastest: Double, typical: Double, slowest: Double) -> String {
+        var sentences: [String] = []
+        let best = speedLabel(realTimeFactor: fastest)
+        if !best.isEmpty {
+            sentences.append("Fastest: \(best).")
+        }
+        let usual = speedLabel(realTimeFactor: typical)
+        if !usual.isEmpty {
+            sentences.append("Typical: \(usual).")
+        }
+        let most = speedLabel(realTimeFactor: slowest)
+        if !most.isEmpty {
+            sentences.append("19 in 20: \(most) or more.")
+        }
+        return sentences.joined(separator: " ")
+    }
+}

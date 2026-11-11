@@ -18,7 +18,7 @@ enum HistoryRetention: Hashable, Sendable {
 
     /// Settings hint under the retention picker.
     static let hint =
-        "Dictation text older than this is removed automatically while Scribe runs. Choose Forever to keep it all."
+        "Dictation text older than this is removed automatically while Scribe runs. Choose Until I delete them to keep it all."
 
     /// Shown while no limit is on record, which is how every history that predates the setting starts.
     static let notChosenHint = "No limit has been chosen, so Scribe keeps all of your dictation history."
@@ -33,7 +33,7 @@ enum HistoryRetention: Hashable, Sendable {
     var label: String {
         switch self {
         case .keepForever:
-            return "Forever"
+            return "Until I delete them"
         case .days(1):
             return "1 day"
         case .days(365):

@@ -61,7 +61,7 @@ private struct SettingsDictationControls: View {
             SettingsCard(searchID: "dictation.shortcut") { shortcutCard }
             SettingsCard(searchID: "dictation.silence-stop") { autoStopCard }
 
-            SettingsGroupHeader("Text insertion")
+            SettingsGroupHeader("Typing")
             SettingsCard(searchID: "dictation.space") { InputTypingSettingsSection() }
             SettingsCard(searchID: "dictation.app-format") { InputFormattingSettingsSection() }
 

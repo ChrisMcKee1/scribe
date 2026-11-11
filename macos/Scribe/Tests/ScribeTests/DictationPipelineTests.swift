@@ -712,8 +712,8 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertTrue(harness.presenter.noticesShown().contains(.typedWithoutCleanup))
     }
 
-    /// A provider that fails, or cannot be built, falls back to the raw transcript with the pill's own "raw text
-    /// used" notice, never the insertion failure's.
+    /// A provider that fails, or cannot be built, falls back to the raw transcript with the pill's own "typing as
+    /// heard" notice, never the insertion failure's.
     func testACleanupFailureFallsBackToTheRawTranscriptWithItsOwnNotice() async throws {
         let harness = makeHarness()
         harness.cleanup.isEnabled = true

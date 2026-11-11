@@ -44,25 +44,25 @@ enum TranscriptionError: LocalizedError, Equatable {
         case .backendMissing(.whisperModelNotFound):
             return "Could not find the Whisper model. Download ggml-tiny.en.bin or set SCRIBE_WHISPER_MODEL."
         case .unsupportedAudioFile:
-            return "The speech recognizer reads WAV files only. Convert the file to 16 kHz mono WAV first."
+            return "Speech recognition reads WAV files only. Convert the file to 16 kHz mono WAV first."
         case .audioWriteFailed(let code):
-            return "Scribe could not write the recording for the speech recognizer (error \(code))."
+            return "Scribe could not write the recording for speech recognition (error \(code))."
         case .launchFailed(let code):
-            return "The speech recognizer could not be started (error \(code))."
+            return "Speech recognition could not be started (error \(code))."
         case .timedOut:
-            return "The speech recognizer did not finish in time, so Scribe stopped it."
+            return "Speech recognition did not finish in time, so Scribe stopped it."
         case .cancelled:
-            return "The transcription was cancelled."
+            return "Speech recognition was cancelled."
         case .exitCode(let status):
-            return "The speech recognizer failed with exit status \(status)."
+            return "Speech recognition failed with exit status \(status)."
         case .terminatedBySignal(let signal):
-            return "The speech recognizer was ended by signal \(signal)."
+            return "Speech recognition was ended by signal \(signal)."
         case .backendReportedError:
             return "Foundry Local reported an error. Run `foundry transcribe` in Terminal to see why."
         case .emptyOutput:
-            return "The speech recognizer returned no text."
+            return "Speech recognition returned no text."
         case .malformedOutput:
-            return "The speech recognizer's reply could not be read."
+            return "Speech recognition's reply could not be read."
         case .speechModelNotCached:
             return
                 "The selected speech model is not downloaded. Open Advanced settings and download it before dictating."

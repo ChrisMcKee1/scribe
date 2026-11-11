@@ -140,7 +140,7 @@ final class AIDictionarySuggestionsTests: XCTestCase {
             destination: "Microsoft Foundry")
 
         XCTAssertTrue(message.contains("123 characters"))
-        XCTAssertTrue(message.contains("raw text recognized"))
+        XCTAssertTrue(message.contains("latest text Scribe heard"))
         XCTAssertTrue(message.contains("suggestion instructions"))
         XCTAssertTrue(message.contains("permitted word pack vocabulary"))
         XCTAssertTrue(message.contains("Snippet templates are never included"))
@@ -152,7 +152,7 @@ final class AIDictionarySuggestionsTests: XCTestCase {
         let unavailable = AIDictionarySuggestionModel(reports: reports, access: access())
         XCTAssertFalse(unavailable.canSuggest)
         unavailable.prepareConsent()
-        XCTAssertTrue(unavailable.errorMessage?.contains("safe saved-provider handoff") == true)
+        XCTAssertTrue(unavailable.errorMessage?.contains("safe handoff to the saved AI service") == true)
         unavailable.requestSuggestions()
         XCTAssertTrue(unavailable.suggestions.isEmpty)
 

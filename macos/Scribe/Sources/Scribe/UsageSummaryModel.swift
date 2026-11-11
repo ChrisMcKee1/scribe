@@ -97,7 +97,7 @@ final class UsageSummaryModel: ObservableObject {
             if let parsed = UsageInsight.parse(DashNormalizer.normalize(reply)) {
                 summary = parsed
             } else {
-                errorMessage = "The AI provider returned no usable summary."
+                errorMessage = "The AI service returned no usable summary."
             }
         case .failure(let error):
             // Settings may show the provider's own explanation; nothing here is logged.

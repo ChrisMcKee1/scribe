@@ -19,9 +19,9 @@ final class SettingsSearchIndexTests: XCTestCase {
         assertSearch("playground", contains: "Try dictation", on: .tryDictation)
         assertSearch("model", contains: "Model alias", on: .aiCleanup)
         assertSearch("writing style", contains: "Writing style", on: .aiCleanup)
-        assertSearch("local guardrail prompt", contains: "Local guardrail prompt", on: .aiCleanup)
-        assertSearch("detailed prompt", contains: "Detailed guardrail prompt", on: .aiCleanup)
-        assertSearch("restore default", contains: "Restore default guardrail prompts", on: .aiCleanup)
+        assertSearch("local guardrail prompt", contains: "Short instructions", on: .aiCleanup)
+        assertSearch("detailed prompt", contains: "Detailed instructions", on: .aiCleanup)
+        assertSearch("restore default", contains: "Restore default instructions", on: .aiCleanup)
         assertSearch("Foundry API key", contains: "Microsoft Foundry API key", on: .aiCleanup)
         assertSearch("startup", contains: "Start Scribe when you log in", on: .dictation)
         assertSearch("boot", contains: "Start Scribe when you log in", on: .dictation)
@@ -44,7 +44,7 @@ final class SettingsSearchIndexTests: XCTestCase {
 
         XCTAssertLessThanOrEqual(results.count, 8)
         XCTAssertEqual(results.first?.label, "Model alias")
-        XCTAssertEqual(results.first?.context, "On this PC")
+        XCTAssertEqual(results.first?.context, "On this Mac")
         XCTAssertTrue(results.contains { $0.displayText == "Speech model on Advanced" })
         XCTAssertTrue(results.prefix { $0.label.localizedCaseInsensitiveContains("model") }.count > 0)
     }
@@ -55,7 +55,7 @@ final class SettingsSearchIndexTests: XCTestCase {
 
         let foundryModel = SettingsSearchIndex.search("foundry model", maxResults: 20)
             .first { $0.entry.id == "ai.model" }
-        XCTAssertEqual(foundryModel?.displayText, "Model alias (On this PC) on AI cleanup")
+        XCTAssertEqual(foundryModel?.displayText, "Model alias (On this Mac) on AI cleanup")
     }
 
     func testNoTwoEntriesHaveTheSameDisplayText() {
