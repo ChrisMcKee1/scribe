@@ -34,7 +34,11 @@ struct TypingSettingsStore {
     /// kind, or none, reads as on.
     var appAwareFormatting: Bool {
         get {
-            (defaults.object(forKey: Self.appAwareFormattingDefaultsKey) as? Bool) != false
+            // `as? Bool` also accepts a stored number (0 reads as false), so only a real Boolean may turn it off.
+            guard let stored = defaults.object(forKey: Self.appAwareFormattingDefaultsKey) as? NSNumber,
+                CFGetTypeID(stored) == CFBooleanGetTypeID()
+            else { return true }
+            return stored.boolValue
         }
         nonmutating set {
             defaults.set(newValue, forKey: Self.appAwareFormattingDefaultsKey)
