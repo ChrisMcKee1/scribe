@@ -247,6 +247,15 @@ so resizing cannot subtract the title bar from the space reserved for the page a
   built once per configuration and reused across dictations, Test Connection sends a real
   cleanup request for a test word and passes only if the model answers with text, and em and en
   dashes are rewritten out of the model's answer
+- Ollama on this Mac has Download another model, as on Windows: a model name (or a pasted `ollama run` or
+  `ollama pull` command, read only for its one model name and never run) goes to Ollama's own `/api/pull` on its
+  loopback address, with no proxy and no redirect, and nothing else is sent. Web addresses, extra options and cloud
+  tags are refused before anything is sent; a name without a tag asks for latest. Progress and Cancel download are
+  shown, a cancelled download leaves its parts for Ollama to resume, and an answer without Ollama's `success` is a
+  failure. Ollama's exact missing-manifest error gets a fixed notice that names the model and tag problem; no other
+  server text is shown or logged. A finished download refreshes the model list without choosing it, and only Use model
+  in the question that follows changes the model AI cleanup uses. Choosing another app or place, turning AI cleanup
+  off or closing Settings stops the download. Scribe does not start or stop Ollama itself.
 - For Ollama and LM Studio on this Mac, each recording checks whether the selected model is resident at the needed
   context size; only a missing or differently sized model gets a fixed local readying request. It contains no dictated
   text or vocabulary, has a bounded wait, and a failure leaves dictation text intact while cleanup is skipped. Cleanup
