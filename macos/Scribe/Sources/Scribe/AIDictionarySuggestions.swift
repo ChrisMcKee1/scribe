@@ -3,12 +3,16 @@ import Foundation
 
 struct AIDictionarySuggestionAccess: Sendable {
     var loadEntries: @Sendable () async throws -> [DictionaryEntry]
-    var addIfAbsent: @Sendable ([DictionaryEntry]) async throws -> [DictionaryEntry]
+    /// The newest `limit` dictations as they were typed, newest first, within the chosen retention.
+    var loadHistory: @Sendable (_ limit: Int) async throws -> [String]
+    /// Adds the reviewed suggestions and repairs the rules they correct, in one transaction.
+    var addOrRepair: @Sendable ([DictionaryEntry]) async throws -> DictionarySuggestionCommit
 
     static func live(_ store: PersistenceStore) -> AIDictionarySuggestionAccess {
         AIDictionarySuggestionAccess(
             loadEntries: { try await store.loadAllDictionaryEntries() },
-            addIfAbsent: { try await store.addDictionaryEntriesIfAbsent($0) })
+            loadHistory: { try await store.loadRecentTranscripts(limit: $0) },
+            addOrRepair: { try await store.addOrRepairDictionaryEntries($0) })
     }
 }
 
@@ -44,199 +48,218 @@ struct AIDictionarySuggestionService {
 
 struct AIDictionarySuggestionConsent: Identifiable {
     let id: UUID
+    let title: String
     let message: String
 
     fileprivate let admission: AIDictionarySuggestionAdmission
-    fileprivate let reportID: UInt64
+    fileprivate let attempt: UInt64
     fileprivate let sample: String
 }
 
-/// Opt-in AI suggestions use only the raw transcript from the volatile Playground report. They never read history,
-/// whose text is post-processed and may contain a snippet expansion or template-like replacement.
+/// Learn from history (Settings > Dictionary > Your words), as on Windows. While AI cleanup serves a configuration,
+/// the most recent dictations from saved history (`AIDictionarySuggester.buildHistorySample`) go to that AI service,
+/// after asking unless it is Foundry Local (`CleanupDisclosure.suggestionConsentIsNeeded`), and the reviewed
+/// suggestions are added or repair the rule with the same spoken form. Otherwise, or when the AI service finds nothing
+/// usable, the history scan (`DictionaryHistoryLearner`) runs instead.
+///
+/// The request carries the suggestion instructions and the sample only: no dictionary, writing style or audio. The
+/// sample is history as it was typed, so it can hold words the dictionary and snippets added, which the question says.
+/// The admission is captured before the question and checked again before the request, after the answer and on every
+/// settings change, and the one-off handoff checks it on every send, so the dictations go where the question said or
+/// nowhere, and an answer from a configuration that changed meanwhile is discarded.
 @MainActor
 final class AIDictionarySuggestionModel: ObservableObject {
-    static let maxSampleCharacters = 6_000
-    static let maxSuggestions = 25
-
+    /// The instructions sent with the history sample, word for word as Windows sends them
+    /// (`AiDictionarySuggester.SystemPrompt`).
     static let systemPrompt =
-        "You help build a personal dictation dictionary. Find technical terms, product names, acronyms, and jargon "
-        + "in the user's raw speech-recognition transcript that a recognizer may spell incorrectly, mis-case, or "
-        + "mishear. Return only a JSON array of objects with exactly the keys \"spoken\" and \"written\". "
-        + "\"spoken\" is the lowercase phrase the recognizer may produce; \"written\" is the correct form. "
-        + "Only suggest terms present in the transcript. Skip ordinary words and uncertain guesses. Do not return "
-        + "templates, signatures, or multi-line text. Return at most 25 suggestions."
+        "You help build a personal dictation dictionary. You are given a sample of text that a "
+        + "speech-to-text system produced from one user's recent dictation. Read the surrounding sentence, "
+        + "topic, and nearby dictations carefully: just because a phrase was transcribed or rewritten into "
+        + "valid words does not mean it was written as the right term. Find the technical terms, product "
+        + "names, brand names, acronyms, commands, and jargon in the sample that speech-to-text or an "
+        + "earlier rewrite got wrong in context, or is likely to spell wrong, mis-case, or mishear.\n\n"
+        + "For each such term (a short word or phrase, never a full sentence), output two fields:\n"
+        + "- \"written\": the correct way to write the term in context (correct spelling, casing, punctuation, "
+        + "hyphenation).\n"
+        + "- \"spoken\": how that term came out in the sample when misheard or mis-rewritten, or how it most "
+        + "likely comes out of a speech-to-text system when the user says it out loud, written in plain "
+        + "lowercase the way a recognizer transcribes the sound. For an acronym said letter by letter, use "
+        + "single spaced letters (for example \"a p i m\" for APIM). For a term said as a word, use its "
+        + "phonetic lowercase spelling (for example \"cube control\" for kubectl, \"post gres\" for "
+        + "PostgreSQL). For a term that is only mis-cased, use the lowercase of the written form.\n\n"
+        + "Rules:\n"
+        + "- Only include terms that actually appear in the sample (either as the spoken mishearing or the written "
+        + "term).\n"
+        + "- Prefer high-value, unambiguous terms backed by the surrounding context. Skip ordinary English "
+        + "words, full sentences, and anything you are unsure about.\n"
+        + "- If existing vocabulary rules are listed below, use them as supporting evidence for the user's "
+        + "domain to infer what a failed or mis-rewritten dictation in the sample was meant to say. Do not "
+        + "assume every existing rule is accurate: if an existing rule maps a spoken form to the wrong written "
+        + "term or casing in context, include that spoken form with the corrected written form so the "
+        + "dictionary can self-heal; skip only spoken forms whose existing written replacement is already right.\n"
+        + "- \"spoken\" must be lowercase, and \"spoken\" must not be identical to \"written\".\n"
+        + "- Return at most 25 items, fewer is fine.\n"
+        + "- Output ONLY a JSON array of objects, each with exactly the keys \"spoken\" and \"written\". "
+        + "No commentary, no code fences, no other text.\n\n"
+        + "Example output:\n"
+        + "[{\"spoken\":\"a p i m\",\"written\":\"APIM\"},{\"spoken\":\"cosmos db\",\"written\":\"Cosmos DB\"},"
+        + "{\"spoken\":\"post gres\",\"written\":\"PostgreSQL\"}]"
+
+    static let nothingToLearnFrom =
+        "There are no recent dictations to learn from yet. Keep dictating and try again later."
+    static let historyUnreadable = "Couldn't read your dictation history. Nothing was sent."
+    static let dictionaryUnreadable = "Couldn't read your dictionary, so no suggestion was added."
+    static let changedBeforeSending =
+        "Where AI cleanup runs changed before the request went out, so Scribe sent nothing. Choose Learn from "
+        + "history again to decide for the AI service in use now."
+    static let changedAfterSending =
+        "Where AI cleanup runs changed after the request went out, so Scribe discarded the suggestions and added "
+        + "nothing. Choose Learn from history again."
+    static let requestFailed = "Couldn't get AI suggestions. Nothing was added."
+    static let commitFailed = "Couldn't add the reviewed suggestions to your dictionary."
+
+    /// Runs the history scan; `afterAI` says the AI service ran first and found nothing usable.
+    typealias HistoryScan = @MainActor @Sendable (_ afterAI: Bool) async -> Void
 
     @Published private(set) var consent: AIDictionarySuggestionConsent?
     @Published private(set) var suggestions: [DictionaryEntry] = []
     @Published private(set) var selectedSpokenForms: Set<String> = []
+    @Published private(set) var isPreparing = false
     @Published private(set) var isRequesting = false
     @Published private(set) var isCommitting = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var statusMessage: String?
     @Published private(set) var isReviewPresented = false
+    /// Moves after every change this model writes to the dictionary, so the Your words list reads its rows again.
+    @Published private(set) var dictionaryRevision: UInt64 = 0
+    /// Reading history and asking the AI service.
     private(set) var inFlight: Task<Void, Never>?
+    /// The history scan, which leaving the tab does not stop, as it never did.
+    private(set) var scanTask: Task<Void, Never>?
 
-    private let rawReport: @MainActor @Sendable () -> (id: UInt64, text: String)?
     private let access: AIDictionarySuggestionAccess
     private let service: AIDictionarySuggestionService?
     private let onChanged: @MainActor @Sendable () -> Void
     private var requestID: UInt64 = 0
-    private var activeReportID: UInt64?
     private var requestRecipient: AIDictionarySuggestionAdmission?
     private var reviewRecipient: AIDictionarySuggestionAdmission?
+    private var historyScan: HistoryScan?
+    /// What each suggested spoken form is written as now, for the suggestions that repair a rule.
+    private var currentReplacements: [String: String] = [:]
     private var observation: SettingsNotificationObservation?
-    private var reportObservation: AnyCancellable?
 
     init(
-        reports: PipelineReportStore,
         access: AIDictionarySuggestionAccess,
         service: AIDictionarySuggestionService? = nil,
         center: NotificationCenter = .default,
         onChanged: @escaping @MainActor @Sendable () -> Void = {}
     ) {
-        rawReport = {
-            guard let report = reports.latest, let rawText = report.rawText else { return nil }
-            return (report.dictationID, rawText)
-        }
         self.access = access
         self.service = service
         self.onChanged = onChanged
-        reportObservation = reports.$latest.sink { [weak self] report in
-            MainActor.assumeIsolated {
-                self?.invalidateIfSampleChanged(report?.dictationID)
-            }
-        }
         observation = SettingsNotificationObservation(UserDefaults.didChangeNotification, center: center) {
             [weak self] in
             self?.invalidateIfRecipientChanged()
         }
     }
 
-    var canSuggest: Bool {
-        guard let service, service.admit() != nil,
-            let report = rawReport(),
-            Self.boundedRawSample(report.text) != nil
-        else {
-            return false
-        }
-        return true
+    var isBusy: Bool {
+        isPreparing || isRequesting || isCommitting || consent != nil
     }
 
-    var hasBoundCompletion: Bool {
-        service != nil
+    /// Whether Learn from history would ask the AI service now, rather than scan history on this Mac.
+    var usesAIService: Bool {
+        service?.admit() != nil
     }
 
     var canCommitSelection: Bool {
         !isCommitting && !selectedSpokenForms.isEmpty
     }
 
-    static func boundedRawSample(_ rawText: String?, maxCharacters: Int = maxSampleCharacters) -> String? {
-        guard maxCharacters > 0,
-            let text = rawText?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !text.isEmpty
-        else {
-            return nil
-        }
-        return String(text.prefix(maxCharacters))
-    }
-
-    static func consentMessage(sampleCharacters: Int, destination: String) -> String {
-        "Scribe will send up to \(sampleCharacters.formatted()) characters of the latest text Scribe heard, before "
-            + "your dictionary, word packs and snippets changed it, plus suggestion instructions, to \(destination). "
-            + "The cleanup service may also receive applicable dictionary and permitted word pack vocabulary for "
-            + "this request. Snippet templates are never included. Review suggestions before adding them."
-    }
-
-    /// Captures the currently served recipient and raw in-memory report before presenting consent. No unsaved cleanup
-    /// settings draft is consulted. The recipient and report are checked again when the user confirms.
-    func prepareConsent() {
-        guard !isRequesting, !isCommitting, let service,
-            let admission = service.admit(),
-            let report = rawReport(),
-            let sample = Self.boundedRawSample(report.text)
-        else {
-            errorMessage =
-                "AI suggestions are unavailable until cleanup is on and a safe handoff to the saved AI service is ready."
-            return
-        }
-
+    /// Learn from history. With AI cleanup serving a configuration, reads the most recent dictations and asks before
+    /// sending them unless that configuration is Foundry Local; without one, runs `scanHistory` at once.
+    func learnFromHistory(scanHistory: @escaping HistoryScan) {
+        guard !isBusy else { return }
         errorMessage = nil
         statusMessage = nil
-        consent = AIDictionarySuggestionConsent(
-            id: UUID(),
-            message: Self.consentMessage(
-                sampleCharacters: sample.count,
-                destination: Self.destination(for: admission.recipient)),
-            admission: admission,
-            reportID: report.id,
-            sample: sample)
-        activeReportID = report.id
-        suggestions = []
-        selectedSpokenForms = []
-        reviewRecipient = nil
-    }
-
-    /// Called only by the affirmative consent action. The injected completion owns the per-send recipient checks and
-    /// release/use barrier. This model checks before and after the operation and never publishes a stale answer.
-    func requestSuggestions() {
-        guard !isRequesting, !isCommitting, let consent,
-            consent.admission.isCurrent(),
-            rawReport()?.id == consent.reportID
-        else {
-            self.consent = nil
-            errorMessage = "AI cleanup changed before the request could start. Nothing was sent. Try again."
+        historyScan = scanHistory
+        guard let service, let admission = service.admit() else {
+            scanTask = Task { await scanHistory(false) }
             return
         }
 
-        self.consent = nil
         requestID &+= 1
         let attempt = requestID
-        requestRecipient = consent.admission
-        isRequesting = true
-        errorMessage = nil
-        statusMessage = nil
-        let complete = consent.admission.complete
+        requestRecipient = admission
+        isPreparing = true
         let access = self.access
         inFlight = Task { [weak self] in
-            guard let self else { return }
+            let history: [String]
             do {
+                history = try await access.loadHistory(AIDictionarySuggester.historyLimit)
                 try Task.checkCancellation()
-                let response = try await complete(Self.systemPrompt, consent.sample)
-                try Task.checkCancellation()
-                guard self.isCurrent(attempt, admission: consent.admission, reportID: consent.reportID) else {
-                    return
-                }
-                let existing = try await access.loadEntries()
-                try Task.checkCancellation()
-                guard self.isCurrent(attempt, admission: consent.admission, reportID: consent.reportID) else {
-                    return
-                }
-                let parsed = Self.parseSuggestions(response, existing: existing)
-                self.inFlight = nil
-                self.requestRecipient = nil
-                self.isRequesting = false
-                guard !parsed.isEmpty else {
-                    self.activeReportID = nil
-                    self.statusMessage = "The AI service returned no new usable suggestions."
-                    return
-                }
-                self.suggestions = parsed
-                self.selectedSpokenForms = Set(parsed.map { Self.spokenFormKey($0.pattern) })
-                self.reviewRecipient = consent.admission
-                self.isReviewPresented = true
             } catch is CancellationError {
-                self.finishCancelled(attempt)
+                self?.finish(attempt)
+                return
             } catch {
-                guard self.isCurrent(attempt, admission: consent.admission, reportID: consent.reportID) else {
-                    return
-                }
-                self.finishFailed(attempt)
+                guard let self, self.requestID == attempt else { return }
+                self.finish(attempt)
+                self.errorMessage = Self.historyUnreadable
+                return
             }
+            guard let self, self.stillServes(attempt, admission, otherwise: Self.changedBeforeSending) else {
+                return
+            }
+
+            let sample = AIDictionarySuggester.buildHistorySample(history)
+            guard !sample.isEmpty else {
+                self.finish(attempt)
+                self.statusMessage = Self.nothingToLearnFrom
+                return
+            }
+            guard !CleanupDisclosure.suggestionConsentIsNeeded(for: admission.recipient.target) else {
+                self.finish(attempt)
+                self.consent = AIDictionarySuggestionConsent(
+                    id: UUID(),
+                    title: CleanupDisclosure.suggestionConsentTitle,
+                    message: CleanupDisclosure.suggestionConsent(for: admission.recipient.target),
+                    admission: admission,
+                    attempt: attempt,
+                    sample: sample)
+                return
+            }
+            await self.send(sample, admission: admission, attempt: attempt)
         }
+    }
+
+    /// The affirmative answer to `consent`. The consent is passed in, since the question can be dismissed, clearing
+    /// `consent`, before its button's action runs.
+    func requestSuggestions(_ answered: AIDictionarySuggestionConsent? = nil) {
+        guard let consent = answered ?? consent else { return }
+        self.consent = nil
+        guard !isPreparing, !isRequesting, !isCommitting, requestID == consent.attempt,
+            consent.admission.isCurrent()
+        else {
+            errorMessage = Self.changedBeforeSending
+            return
+        }
+        isRequesting = true
+        requestRecipient = consent.admission
+        inFlight = Task { [weak self] in
+            await self?.send(consent.sample, admission: consent.admission, attempt: consent.attempt)
+        }
+    }
+
+    func cancelConsent() {
+        consent = nil
+    }
+
+    func isSelected(_ entry: DictionaryEntry) -> Bool {
+        selectedSpokenForms.contains(AIDictionarySuggester.spokenKey(entry.pattern))
     }
 
     func toggleSelection(for entry: DictionaryEntry, selected: Bool) {
-        let key = Self.spokenFormKey(entry.pattern)
+        let key = AIDictionarySuggester.spokenKey(entry.pattern)
         if selected {
             selectedSpokenForms.insert(key)
         } else {
@@ -244,223 +267,174 @@ final class AIDictionarySuggestionModel: ObservableObject {
         }
     }
 
-    /// Writes only the entries selected in the review sheet. Persistence rechecks spoken forms against the stored
-    /// dictionary in its transaction, so an intervening edit or import cannot create duplicate rules.
+    /// What Scribe writes now for a suggestion that repairs a rule, or nil for a new word.
+    func currentReplacement(for entry: DictionaryEntry) -> String? {
+        currentReplacements[AIDictionarySuggester.spokenKey(entry.pattern)]
+    }
+
+    /// Writes only the entries selected in the review sheet. The store decides, in its transaction, which are new and
+    /// which repair a stored rule, so an edit or import made meanwhile cannot create duplicate rules.
     func commitSelectedSuggestions() async {
         guard canCommitSelection else { return }
-        let selected = suggestions.filter { selectedSpokenForms.contains(Self.spokenFormKey($0.pattern)) }
+        let selected = suggestions.filter { isSelected($0) }
         isCommitting = true
         defer { isCommitting = false }
         do {
-            let added = try await access.addIfAbsent(selected)
-            suggestions = []
-            selectedSpokenForms = []
-            isReviewPresented = false
-            activeReportID = nil
-            reviewRecipient = nil
-            statusMessage =
-                added.isEmpty
-                ? "Those spoken forms are already in your dictionary."
-                : "Added \(added.count) reviewed \(added.count == 1 ? "word" : "words") to your dictionary."
-            if !added.isEmpty {
+            let commit = try await access.addOrRepair(selected)
+            dismissReview()
+            statusMessage = Self.commitSummary(commit)
+            if !commit.isEmpty {
+                dictionaryRevision &+= 1
                 onChanged()
             }
         } catch {
-            errorMessage = "Couldn't add the reviewed suggestions to your dictionary."
-        }
-    }
-
-    func cancelConsent() {
-        consent = nil
-        if !isRequesting, !isReviewPresented {
-            activeReportID = nil
+            errorMessage = Self.commitFailed
         }
     }
 
     func dismissReview() {
         suggestions = []
         selectedSpokenForms = []
+        currentReplacements = [:]
         isReviewPresented = false
-        activeReportID = nil
         reviewRecipient = nil
     }
 
+    /// Stops reading history and asking the AI service, and closes the question and the review. A history scan
+    /// already running finishes.
     func cancel() {
         requestID &+= 1
         inFlight?.cancel()
         inFlight = nil
         requestRecipient = nil
+        isPreparing = false
         isRequesting = false
-        activeReportID = nil
         consent = nil
         dismissReview()
     }
 
-    static func parseSuggestions(
-        _ response: String?,
-        existing: [DictionaryEntry],
-        maxSuggestions: Int = maxSuggestions
-    ) -> [DictionaryEntry] {
-        guard maxSuggestions > 0, let json = extractArray(response),
-            let raw = try? JSONDecoder().decode([RawSuggestion].self, from: Data(json.utf8))
-        else {
-            return []
+    static func commitSummary(_ commit: DictionarySuggestionCommit) -> String {
+        let added = commit.added.count
+        let repaired = commit.repaired.count
+        switch (added, repaired) {
+        case (0, 0):
+            return "Those words are already in your dictionary."
+        case (_, 0):
+            return "Added \(words(added)) to your dictionary."
+        case (0, _):
+            return "Fixed how Scribe writes \(words(repaired)) in your dictionary."
+        default:
+            return "Added \(words(added)) to your dictionary and fixed how Scribe writes \(words(repaired))."
         }
-
-        var known = Set(existing.map { spokenFormKey($0.pattern) }.filter { !$0.isEmpty })
-        var result: [DictionaryEntry] = []
-        for suggestion in raw {
-            guard let spoken = normalize(suggestion.spoken),
-                let written = normalize(suggestion.written),
-                spoken.count <= 80, written.count <= 80,
-                spoken.caseInsensitiveCompare(written) != .orderedSame,
-                spoken == spoken.lowercased(),
-                !known.contains(spokenFormKey(spoken))
-            else {
-                continue
-            }
-            known.insert(spokenFormKey(spoken))
-            result.append(DictionaryEntry(pattern: spoken, replacement: written))
-            if result.count == maxSuggestions { break }
-        }
-        return result
     }
 
-    private func isCurrent(
-        _ attempt: UInt64, admission: AIDictionarySuggestionAdmission, reportID: UInt64
+    private static func words(_ count: Int) -> String {
+        count == 1 ? "1 word" : "\(count) words"
+    }
+
+    private func send(_ sample: String, admission: AIDictionarySuggestionAdmission, attempt: UInt64) async {
+        guard requestID == attempt else { return }
+        isPreparing = false
+        isRequesting = true
+        requestRecipient = admission
+
+        let response: String
+        do {
+            try Task.checkCancellation()
+            response = try await admission.complete(Self.systemPrompt, sample)
+            try Task.checkCancellation()
+        } catch is CancellationError {
+            finish(attempt)
+            return
+        } catch is CleanupSendHandoff.Refusal {
+            guard requestID == attempt else { return }
+            invalidate(Self.changedBeforeSending)
+            return
+        } catch {
+            guard stillServes(attempt, admission, otherwise: Self.changedAfterSending) else { return }
+            finish(attempt)
+            errorMessage = Self.requestFailed
+            return
+        }
+        guard stillServes(attempt, admission, otherwise: Self.changedAfterSending) else { return }
+
+        let existing: [DictionaryEntry]
+        do {
+            existing = try await access.loadEntries()
+            try Task.checkCancellation()
+        } catch is CancellationError {
+            finish(attempt)
+            return
+        } catch {
+            guard requestID == attempt else { return }
+            finish(attempt)
+            errorMessage = Self.dictionaryUnreadable
+            return
+        }
+        guard stillServes(attempt, admission, otherwise: Self.changedAfterSending) else { return }
+
+        // Windows normalizes dashes in every one-off answer before it is read. A dash written as a JSON escape survives
+        // that, so a suggestion still holding one is left out, as this parser always left them out.
+        let parsed = AIDictionarySuggester.parseSuggestions(DashNormalizer.normalize(response), existing: existing)
+            .filter { !DashNormalizer.containsDash($0.pattern) && !DashNormalizer.containsDash($0.replacement) }
+        finish(attempt)
+        guard !parsed.isEmpty else {
+            if let historyScan {
+                scanTask = Task { await historyScan(true) }
+            }
+            return
+        }
+
+        var writtenBySpoken: [String: String] = [:]
+        for entry in existing {
+            let key = AIDictionarySuggester.spokenKey(entry.pattern)
+            if !key.isEmpty, writtenBySpoken[key] == nil {
+                writtenBySpoken[key] = entry.replacement
+            }
+        }
+        currentReplacements = [:]
+        for suggestion in parsed {
+            let key = AIDictionarySuggester.spokenKey(suggestion.pattern)
+            if let current = writtenBySpoken[key] {
+                currentReplacements[key] = current
+            }
+        }
+        suggestions = parsed
+        selectedSpokenForms = Set(parsed.map { AIDictionarySuggester.spokenKey($0.pattern) })
+        reviewRecipient = admission
+        isReviewPresented = true
+    }
+
+    /// True while `attempt` is the newest and its configuration still serves; otherwise discards it with `message`
+    /// when the configuration changed.
+    private func stillServes(
+        _ attempt: UInt64, _ admission: AIDictionarySuggestionAdmission, otherwise message: String
     ) -> Bool {
         guard requestID == attempt else { return false }
-        guard admission.isCurrent(), requestRecipient != nil, rawReport()?.id == reportID
-        else {
-            invalidateForSettingsChange()
-            errorMessage =
-                "AI cleanup or the raw dictation sample changed while suggestions were requested. The reply was discarded."
+        guard admission.isCurrent() else {
+            invalidate(message)
             return false
         }
         return true
     }
 
-    private func finishCancelled(_ attempt: UInt64) {
+    private func finish(_ attempt: UInt64) {
         guard requestID == attempt else { return }
         inFlight = nil
         requestRecipient = nil
+        isPreparing = false
         isRequesting = false
-        activeReportID = nil
-    }
-
-    private func finishFailed(_ attempt: UInt64) {
-        guard requestID == attempt else { return }
-        inFlight = nil
-        requestRecipient = nil
-        isRequesting = false
-        activeReportID = nil
-        errorMessage = "Couldn't get AI dictionary suggestions. No suggestion was added."
-    }
-
-    private func invalidateIfSampleChanged(_ reportID: UInt64?) {
-        guard let activeReportID, activeReportID != reportID else { return }
-        invalidateForSettingsChange()
-        errorMessage =
-            "The recent dictation changed while suggestions were being prepared. The request or result was discarded."
     }
 
     private func invalidateIfRecipientChanged() {
-        guard service != nil else {
-            cancel()
+        guard let expected = consent?.admission ?? requestRecipient ?? reviewRecipient, !expected.isCurrent() else {
             return
         }
-        let expected = consent?.admission ?? requestRecipient ?? reviewRecipient
-        guard let expected else { return }
-        guard expected.isCurrent() else {
-            invalidateForSettingsChange()
-            errorMessage =
-                "AI cleanup changed while suggestions were being prepared. The request or result was discarded."
-            return
-        }
+        invalidate(isRequesting || isReviewPresented ? Self.changedAfterSending : Self.changedBeforeSending)
     }
 
-    private func invalidateForSettingsChange() {
-        requestID &+= 1
-        inFlight?.cancel()
-        inFlight = nil
-        requestRecipient = nil
-        isRequesting = false
-        activeReportID = nil
-        consent = nil
-        dismissReview()
-    }
-
-    private static func destination(for recipient: CleanupConnection) -> String {
-        switch recipient.target {
-        case .foundryLocal:
-            return "Foundry Local on this Mac"
-        case .ollama:
-            return "Ollama on this Mac"
-        case .microsoftFoundry:
-            return "Microsoft Foundry"
-        case .openAICompatible(let serviceURL, _, _, _):
-            return LocalAiServer.appAt(serviceURL.absoluteString) == .none
-                ? "your configured OpenAI-compatible service"
-                : "a local AI service on this Mac"
-        }
-    }
-
-    private static func spokenFormKey(_ value: String) -> String {
-        value.trimmingCharacters(in: .whitespacesAndNewlines).folding(
-            options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
-    }
-
-    private static func normalize(_ value: String?) -> String? {
-        guard let value, !value.isEmpty,
-            !value.unicodeScalars.contains(where: {
-                CharacterSet.controlCharacters.contains($0) || $0.value == 0x2013 || $0.value == 0x2014
-            })
-        else {
-            return nil
-        }
-        let normalized = value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        guard !normalized.isEmpty else { return nil }
-        return normalized
-    }
-
-    private static func extractArray(_ response: String?) -> String? {
-        guard let response, let start = response.firstIndex(of: "[") else { return nil }
-        var depth = 0
-        var inString = false
-        var escaped = false
-        var index = start
-        while index < response.endIndex {
-            let character = response[index]
-            if inString {
-                if escaped {
-                    escaped = false
-                } else if character == "\\" {
-                    escaped = true
-                } else if character == "\"" {
-                    inString = false
-                }
-            } else {
-                switch character {
-                case "\"":
-                    inString = true
-                case "[":
-                    depth += 1
-                case "]":
-                    depth -= 1
-                    if depth == 0 {
-                        return String(response[start...index])
-                    }
-                default:
-                    break
-                }
-            }
-            response.formIndex(after: &index)
-        }
-        return nil
-    }
-
-    private struct RawSuggestion: Decodable {
-        let spoken: String?
-        let written: String?
+    private func invalidate(_ message: String) {
+        cancel()
+        errorMessage = message
     }
 }

@@ -383,7 +383,10 @@ size and turn on "Send your whole vocabulary when it fits", AI cleanup fits your
 whole vocabulary into that context size with each cleanup request, and
 requesting AI dictionary suggestions sends your dictionary, the word packs you
 let AI cleanup use, and as much of your dictation history as fits in that
-context window. If you request an AI usage insight,
+context window. The native macOS app sends the same standard suggestion
+request from your saved dictation history and asks first unless AI cleanup
+runs in Foundry Local on the Mac; it has no full-context suggestion request.
+If you request an AI usage insight,
 Scribe sends aggregate usage totals and the labels of recurring terms your
 dictionary covers, leaving out any label whose replacement text spans more than
 one line or is longer than 100 characters. It sends no transcripts, audio,

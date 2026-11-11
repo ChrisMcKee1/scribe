@@ -388,8 +388,7 @@ private struct SnapshotSettingsShell: View {
                 persistenceStore: dependencies.persistenceStore,
                 dictionaryLibraryService: dependencies.dictionaryLibraryService,
                 onChanged: {},
-                drafts: dependencies.drafts,
-                pipelineReportStore: dependencies.pipelineReportStore)
+                drafts: dependencies.drafts)
         case .voiceSnippets:
             SettingsVoiceSnippetsPage(
                 persistenceStore: dependencies.persistenceStore,
