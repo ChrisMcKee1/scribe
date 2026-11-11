@@ -1313,7 +1313,7 @@ final class LocalModelLifecycleTests: XCTestCase {
         let clock = ManualClock()
         let lifecycle = make(fake, clock: clock)
         let release = Task { await lifecycle.release(.freeMemory, target: lmTarget()) }
-        for _ in 0..<200 where fake.models.isEmpty { await Task.yield() }
+        try await fake.modelStarted.wait()
         let use = Task { try await lifecycle.beginUse(lmTarget()) }
         await clock.waitForSleepers(1)
         clock.fire()
