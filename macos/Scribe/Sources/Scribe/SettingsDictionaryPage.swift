@@ -1100,10 +1100,6 @@ struct DictionaryWordPacksSettingsTab: View {
 
     private func wordPackError(_ error: Error) -> String {
         error.localizedDescription
-            .replacingOccurrences(of: "libraries", with: "word packs")
-            .replacingOccurrences(of: "Libraries", with: "Word packs")
-            .replacingOccurrences(of: "library", with: "word pack")
-            .replacingOccurrences(of: "Library", with: "Word pack")
     }
 }
 

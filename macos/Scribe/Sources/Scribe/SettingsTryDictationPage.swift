@@ -80,15 +80,16 @@ struct PlaygroundSettingsTab: View {
                         timingRow("Speech recognition", report.decodeDuration)
                         if let cleanupDuration = report.cleanupDuration {
                             timingRow(
-                                report.cleanupApplied ? "AI cleanup" : "AI cleanup, raw text used",
+                                report.cleanupApplied ? "AI cleanup" : "AI cleanup, not used",
                                 cleanupDuration)
                         }
                         timingRow("Dictionary and snippets", report.postProcessingDuration)
                         timingRow("Typing", report.injectionDuration)
                         Divider()
                         timingRow("Processing, all steps", report.totalDuration)
-                        if let rtf = report.realTimeFactor {
-                            Text("Real-time factor: \(String(format: "%.2fx", rtf))")
+                        let speed = report.realTimeFactor.map { DictationSpeedText.speedLabel(realTimeFactor: $0) }
+                        if let speed, !speed.isEmpty {
+                            Text("Speed: \(speed)")
                                 .foregroundStyle(.secondary)
                         }
                     }

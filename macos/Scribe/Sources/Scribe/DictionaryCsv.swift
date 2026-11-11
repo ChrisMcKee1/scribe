@@ -14,11 +14,11 @@ enum DictionaryCsv {
     static let template = """
         # Scribe dictionary template
         #
-        # One row per substitution: what the transcriber usually hears, and what you
+        # One row per substitution: what Scribe usually hears, and what you
         # want written instead. Fill it in, then use Import in Scribe's Dictionary
         # settings. Lines starting with # are ignored.
         #
-        # pattern     - the spoken word or phrase as it gets transcribed (required)
+        # pattern     - the spoken word or phrase as Scribe hears it (required)
         # replacement - what to write instead (required)
         # whole_word  - true to match on word boundaries only, false for phrase
         #               replacement anywhere (optional, default true)

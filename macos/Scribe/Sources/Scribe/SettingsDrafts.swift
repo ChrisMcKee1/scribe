@@ -107,7 +107,7 @@ final class SettingsDrafts: ObservableObject {
     var footerText: String {
         if isBusy { return "Saving..." }
         if hasUnsavedChanges { return "Unsaved changes: \(unsavedSections.joined(separator: ", "))." }
-        return "No unsaved changes."
+        return "All changes saved."
     }
 
     func loadWordPacks(using service: DictionaryLibraryService) async throws {

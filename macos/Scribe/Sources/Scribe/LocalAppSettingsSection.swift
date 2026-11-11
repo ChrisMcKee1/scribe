@@ -11,7 +11,7 @@ enum CleanupProviderSelection: String, CaseIterable, Identifiable, Sendable {
     var displayName: String {
         switch self {
         case .onThisMac:
-            return "On this PC"
+            return "On this Mac"
         case .otherService:
             return "Another AI service"
         case .microsoftFoundry:
@@ -140,9 +140,9 @@ struct CleanupProviderSettingsSection: View {
 
     var body: some View {
         Group {
-            Section("Provider") {
+            Section("Where AI cleanup runs") {
                 Picker(
-                    "Provider",
+                    "Where AI cleanup runs",
                     selection: Binding(
                         get: { model.providerSelection },
                         set: { model.setProviderSelection($0) })
@@ -179,7 +179,7 @@ struct CleanupProviderSettingsSection: View {
 
     @ViewBuilder
     private var onThisMacSection: some View {
-        Section("On this PC") {
+        Section("On this Mac") {
             Picker(
                 "Runs through",
                 selection: Binding(
@@ -203,7 +203,7 @@ struct CleanupProviderSettingsSection: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text(
-                    "Runs fully on-device via Foundry Local. "
+                    "Runs fully on this Mac with Foundry Local. "
                         + FoundryLocalSetupText.installationHint() + " The model downloads on first use."
                 )
                 .font(.caption)
@@ -231,7 +231,7 @@ struct CleanupProviderSettingsSection: View {
                 Text(minutes == 0 ? "Never" : "\(minutes) minutes").tag(minutes)
             }
         }
-        Text("Applies to Ollama and LM Studio. Save applies the change; the speech recognizer manages its own memory.")
+        Text("Applies to Ollama and LM Studio. Save applies the change; speech recognition manages its own memory.")
             .font(.caption)
             .foregroundStyle(.secondary)
         Picker(
@@ -306,7 +306,7 @@ struct CleanupProviderSettingsSection: View {
     private var otherServiceSection: some View {
         Section("Another AI service") {
             TextField(
-                "Base URL (e.g. https://openrouter.ai/api/v1)",
+                "Server address (e.g. https://openrouter.ai/api/v1)",
                 text: Binding(
                     get: { model.otherServiceEndpoint },
                     set: { model.setOtherServiceEndpoint($0) }))
@@ -345,7 +345,7 @@ struct CleanupProviderSettingsSection: View {
             }
             Text(
                 "For OpenRouter, llama.cpp, or any other OpenAI-compatible server. If you want Ollama or LM Studio "
-                    + "on this Mac, choose On this PC above. The API key, if any, is stored in Keychain, never in "
+                    + "on this Mac, choose On this Mac above. The API key, if any, is stored in Keychain, never in "
                     + "plain text."
             )
             .font(.caption)
@@ -415,7 +415,7 @@ struct CleanupProviderSettingsSection: View {
                 .foregroundStyle(.secondary)
             } else {
                 Text(
-                    "Uses the signed-in 'az login' session on this Mac. Install the Azure CLI and run 'az login' once."
+                    "Uses your Azure CLI sign-in on this Mac. Install the Azure CLI and run 'az login' in Terminal once."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

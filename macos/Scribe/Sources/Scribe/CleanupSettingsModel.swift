@@ -9,7 +9,7 @@ enum AzureAuthenticationSelection: String, CaseIterable, Identifiable, Sendable 
 
     var label: String {
         switch self {
-        case .azureCli: return "Azure CLI (az login)"
+        case .azureCli: return "Your Azure account (Azure CLI)"
         case .servicePrincipal: return "Service principal"
         case .apiKey: return "API key"
         }

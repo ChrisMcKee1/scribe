@@ -5,7 +5,7 @@ enum CustomAPIStyleText {
     static let responsesStoreNotice = "With Responses, Scribe asks the service not to store responses."
     static let addressHint =
         "The service's OpenAI-compatible address, usually ending in /v1. An address that ends in /chat/completions "
-        + "or /responses is used as it is. For Ollama or LM Studio on this Mac, choose On this PC instead."
+        + "or /responses is used as it is. For Ollama or LM Studio on this Mac, choose On this Mac instead."
 
     static func name(of style: CustomAPIStyle) -> String {
         style == .responses ? "Responses" : "Chat Completions"

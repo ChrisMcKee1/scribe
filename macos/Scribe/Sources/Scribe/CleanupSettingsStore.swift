@@ -15,7 +15,7 @@ enum CleanupProviderKind: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .foundryLocal: return "Foundry Local (recommended)"
         case .ollama: return "Local model (Ollama managed)"
-        case .openAICompatible: return "OpenAI-compatible endpoint"
+        case .openAICompatible: return "Another AI service"
         case .microsoftFoundry: return "Microsoft Foundry (cloud)"
         }
     }
@@ -26,7 +26,7 @@ enum CleanupProviderKind: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .foundryLocal: return "Foundry Local"
         case .ollama: return "Ollama"
-        case .openAICompatible: return "OpenAI-compatible endpoint"
+        case .openAICompatible: return "Another AI service"
         case .microsoftFoundry: return "Microsoft Foundry"
         }
     }
