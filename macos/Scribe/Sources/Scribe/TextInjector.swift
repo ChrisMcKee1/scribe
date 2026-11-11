@@ -585,7 +585,7 @@ final class TextInjector {
     /// typed space goes through the editor's typing path, which every editor has to get right. Only spaces:
     /// a tab or a line break typed would move focus or press Return, and a no-break space survives a paste.
     /// Text with no trailing space comes back whole with nothing to type.
-    static func splitTrailingSpaces(_ text: String) -> (pasted: String, typedAfter: String) {
+    nonisolated static func splitTrailingSpaces(_ text: String) -> (pasted: String, typedAfter: String) {
         let scalars = text.unicodeScalars
         var end = scalars.endIndex
         while end > scalars.startIndex {
