@@ -10,11 +10,11 @@ author the exact scenario to construct.
 **Dispatch trigger:** any `src/**` or `tools/**` change, or any `tests/**` change.
 **Severity cap:** 🟡 Important. **Findings cap: 3** (the top three gaps by risk, no more).
 
-**Review data on disk.** Read `diff.patch` and `metadata.json` from the cache directory named in your
-dispatch prompt. On a re-review you are given `delta.patch`; that is your scope, and `diff.patch` is
-context. The reviewed branch may not be checked out, so never use Read or Grep to confirm a diff line
-exists on disk. Do use Read and Grep freely on `tests/Scribe.Core.Tests/**` and on the surrounding
-source, because you cannot rank a gap you have not read the code around.
+**Review data on disk.** Read `diff.patch` and `metadata.json` from `artifacts/scribe-code-review/<run-id>/`
+using `view` (`delta.patch` instead on a re-review). The reviewed branch may not be checked out, so never
+use `view` or `grep` to confirm a diff line exists on disk. Do use `view`, `grep`, and `glob` freely on
+`tests/Scribe.Core.Tests/**`, `macos/Scribe/Tests/**`, `AGENTS.md`, and the surrounding source, because you
+cannot rank a gap you have not read the code around.
 
 ---
 
@@ -65,18 +65,18 @@ structure and again under Boundaries: *"New behavior lands in Core with a test."
 repeats it. There is no acceptable reason for a new pure decider in Core to ship without a test, so
 that gap is a hard flag, not a Question.
 
-**The WPF and WinUI projects have no test project at all, and cannot get one cheaply.**
-`Scribe.slnx` declares exactly one test project, and
-`tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj` carries a single `ProjectReference`, to
-`src/Scribe.Core/Scribe.Core.csproj`. So a decision that lands in a `.xaml.cs` is not "untested yet",
-it is **untestable by construction**. When you find one:
+**Normal unit tests target `Scribe.Core` directly; WinUI has no test project.** `Scribe.Core.Tests.csproj`
+references `Scribe.Core` directly, references `Scribe.App` only with `ReferenceOutputAssembly="false"` for
+BAML/dialog inspection (`TryDictationWindowTests`, `DictionaryWordWindowTests`, `PrivateDesktopTest`), and
+compiles isolated helpers via linked `<Compile>` items; `Scribe.Overlay` has no direct runtime test
+project, though source-contract tests (`OverlayPipeProtocolTests`, `OverlayPillSourceTests`,
+`OverlayTextScaleSourceTests`) guard its pipe verbs, enum twins, and XAML. When a pure decision lands in a
+`.xaml.cs` instead of `Scribe.Core`:
 
-- The finding is *move the decider into `Scribe.Core` and test it there*, never *add a test for the
-  code-behind*.
-- Say that the code-behind is out of the test project's reach, so the author does not go looking for
-  a way to test it in place.
-- Cross-reference `core-app-layering`, which owns the layering half. If that lens also fired, defer to
-  it under the synthesis specificity order and keep your row in the matrix.
+- The finding is *move the decider into `Scribe.Core` and test it there*, rather than adding heavy UI
+  scaffolding to test business logic in code-behind.
+- Cross-reference `core-app-layering`, which owns the layering half. If that lens also fired, defer to it
+  under the synthesis specificity order and keep your row in the matrix.
 
 **The unit tests are not coverage for the native engine.** `AGENTS.md` is explicit under Architecture
 support: the model-dependent tests *"load sherpa-onnx and Silero too, but only when models are found
@@ -104,10 +104,10 @@ for a Core test of a Core decision, and none of them is replaceable by one.
 dotnet test tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj
 ```
 
-**1098 tests pass today** (776 `[Fact]` methods plus 322 `[InlineData]` cases). The count only ever
-grows. A diff that lands new Core behavior and leaves the count flat is exactly what this lens exists
-to catch. A diff that *lowers* it is a different problem: removed or skipped tests belong to
-`guardrail-erosion`, so note it in one line and hand it over rather than spending a finding slot.
+**The suite.** xUnit, `tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj` (over 10,000 tests; on macOS,
+`swift test --package-path macos/Scribe --parallel` runs `ScribeTests` and `ScribeScenarioTests`). The
+count only ever grows. A diff that lands new Core behavior and adds no test is what this lens exists to
+catch; removed or skipped tests belong to `guardrail-erosion`.
 
 ---
 
@@ -168,25 +168,16 @@ A schema or migration change is also an **"Ask first"** item in `AGENTS.md`, so 
 
 ### 3.3 A new pipe command between the engine and the overlay
 
-Be precise here, because the obvious ask is impossible. The sending side lives in
-`src/Scribe.App/Overlay/OverlayProcessClient.cs` and the handling side in
-`src/Scribe.Overlay/Ipc/OverlayIpcServer.cs` (`Dispatch` switches on the verb around line 101).
-**Neither project is referenced by the test project**, so the wire itself cannot be unit tested at
-all. Do not ask for a test of `Dispatch`.
+`OverlayPipeProtocolTests` pins verb and outcome parity between `Scribe.Core.Overlay.OverlayPipeProtocol`,
+`OverlayProcessClient`, and `OverlayIpcServer.Dispatch`, and pins `OverlayPosition` and `OverlayAnchor`
+name equality from source. What still needs coverage on a new command or state:
 
-What you can legitimately ask for:
-
-- A test of whatever **Core-side decision produces the argument**: the enum, the selector, the
-  formatter, the throttle. That is a normal pure-decider gap and a hard flag.
-- The **live-log verification** `AGENTS.md` prescribes after an overlay change, named explicitly:
-  look for `installer layout`, `size=462x192`, `transparent=True backdrop=TransparentBackdrop`, and a
-  surviving overlay PID with zero `IOException`s after launch.
-
-Note also that **nothing in the suite asserts `Scribe.Core.Models.OverlayPosition` and
-`Scribe.Overlay.OverlayAnchor` still agree by name.** The overlay holds no reference to Core by
-design, so no test can compare them, and a value added to one and not the other is caught by review
-alone. If the diff touches either enum, say so in one line and cross-reference
-`overlay-process-contract`, which owns the contract.
+- A test of whatever **Core-side decision produces the command or lifetime transition** (`PillOutcome`,
+  `OverlayHelperLifetime`, `OverlayPreviewGate`, `PillGeometry`), plus extending `OverlayPipeProtocolTests`
+  for the new verb's formatting and parsing.
+- The **live-log verification** `AGENTS.md` prescribes after an overlay change: `installer layout`,
+  `size=462x192` (scaled by `textScale=`), `transparent=True backdrop=TransparentBackdrop`, a surviving
+  overlay PID, and zero `IOException`s after launch.
 
 ### 3.4 A new dictionary or snippet rule
 

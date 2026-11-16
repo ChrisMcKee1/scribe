@@ -7,14 +7,16 @@ Scribe's entire product claim is that it is private and offline. `AGENTS.md` sta
 paragraph: audio is captured, transcribed in memory on the CPU, and discarded, and nothing is
 uploaded. The only optional online feature is AI cleanup against a user-configured Azure, Foundry, or
 OpenAI-compatible endpoint, or GitHub Copilot, which never sends audio and is strictly opt-in. What each
-request does send is exact and pinned: the recognized text, the cleanup instructions with the writing
-style, and the vocabulary glossary (every enabled dictionary and library term within its budget, whether
-or not the dictation mentions it). `CleanupDisclosure` and `PRIVACY.md` say so, and
-`CleanupDisclosureTests` holds them to the code. `AGENTS.md` "Never" list carries the hardest line in the repository: *"Send audio anywhere
-off the device."* A missed egress is the worst outcome this product can have, which is why this lens
-runs on `opus` and is one of the panel lenses.
+cleanup request sends is exact and pinned: the recognized text, the cleanup instructions with the writing
+style, and the vocabulary glossary (the terms from your dictionary and the word packs you let AI cleanup
+use that the dictation appears to mention, within its budget; for a model on this PC with its
+whole-vocabulary switch on, fitted to its context). `CleanupDisclosure` and `PRIVACY.md` say so, and
+`CleanupDisclosureTests` holds them to the code. `AGENTS.md` "Never" list carries the hardest line in the
+repository: *"Send audio anywhere off the device."* A missed egress is the worst outcome this product can
+have, which is why this lens is always corroborated on panels.
 
-**Dispatch trigger.** `src/Scribe.Core/Cleanup/**`, `src/Scribe.Core/Diagnostics/**`,
+**Dispatch trigger.** `src/Scribe.Core/Cleanup/**`, `src/Scribe.Core/Vocabulary/**`,
+`src/Scribe.Core/Libraries/AiVocabularyPolicy.cs`, `src/Scribe.Core/Diagnostics/**`,
 `src/Scribe.Core/Security/**`, `src/Scribe.Core/Persistence/**`, `PRIVACY.md`, or the diff adds an
 `HttpClient`, a chat or agent call, a telemetry tag, a new diagnostics-bundle member, or a log
 statement carrying transcript-shaped data.
@@ -22,9 +24,10 @@ statement carrying transcript-shaped data.
 **Severity cap: 🔴 Critical. Findings cap: 5.**
 
 **Review data on disk.** Read `diff.patch` (or `delta.patch` on a re-review) and `metadata.json` from
-the cache. The reviewed branch may not be checked out, so never use Read or Grep to confirm that a
-diff line exists on disk. Do use Read and Grep freely for surrounding context: the boundary files
-named below, their callers, the fail-closed tests, and `PRIVACY.md`.
+`artifacts/scribe-code-review/<run-id>/` using `view`. The reviewed branch may not be checked out, so
+never use `view` or `grep` to confirm that a diff line exists on disk. Do use `view`, `grep`, and `glob`
+freely for surrounding context: the boundary files named below, their callers, the fail-closed tests,
+`AGENTS.md`, and `PRIVACY.md`.
 
 ---
 
@@ -87,39 +90,35 @@ The blessed shape for everything in this section is **P-8 in `references/pattern
 control that sets the safe value explicitly, returns the safe value when it meets a shape it does not
 recognize, and is pinned by a test. Cite the pattern by number when you flag a departure.
 
-## §2. The cloud stored-output control (the highest-value check in this lens)
+## §2. Stored-output, prompt-cache, and vocabulary-admission controls
 
-The Azure Responses API **defaults to `store=true`**, which retains every cleaned dictation server
-side. `TextCleanupService.WithStoredOutputDisabled`
-(`src/Scribe.Core/Cleanup/TextCleanupService.cs:1854`) sets `StoredOutputEnabled = false` through
-`ChatOptions.RawRepresentationFactory`, and when the inner factory returns anything that is not a
-`CreateResponseOptions` it builds a fresh one with the flag off rather than forwarding the unknown
-object. `AGENTS.md`: *"This is a privacy control, not a preference: if it silently stops applying,
-Scribe breaks its own promise. There is a test pinning the fail-closed behaviour; do not relax it."*
+The Azure Responses API and OpenAI `/responses` **default to `store=true`**, which retains cleaned
+dictations server-side. `TextCleanupService.WithStoredOutputDisabled` chooses per surface
+(`IChatClient.GetService`):
 
-It reaches the wire through `DisableStoredOutput` (`TextCleanupService.cs:1851`), which wraps the
-`IChatClient` and is passed as `clientFactory:` on **both** Azure paths inside `InitAzureAsync`: the
-Foundry project path (`:2430`) and the classic account path (`:2469`).
+- **Responses** (Microsoft Foundry and another AI service configured for `/responses` via
+  `CustomServiceAddress`): always sets `StoredOutputEnabled = false` (`CleanupStoredOutputWireTests`,
+  `CustomApiStyleTests`).
+- **Chat Completions** (Azure fallback and custom `/chat/completions`): never sets `store` true.
+- **Unknown representation**: fails closed to Responses options with `StoredOutputEnabled = false`.
+- **Prompt caching off (`AppSettings.AiCleanupPromptCaching == false`)**: `PromptCachePolicy.TurnOff`
+  adds `prompt_cache_options: {"mode":"explicit"}` with zero breakpoints (`PromptCacheWireTests`). If a
+  deployment rejects the field with HTTP 400, cleanup fails cleanly (`PromptCacheServiceTests`) and
+  **never retries without the field**.
+- **Vocabulary hand-off (`ILibraryVocabularySource.TryHandOff`)**: every outbound OpenAI/Ollama HTTP
+  client must pass through `VocabularyHandOffHandler` (`ConfigureClient`) and every Copilot session
+  through `GitHubCopilotCleanupAgent` (with per-dictation bounded `DeleteSessionAsync` via
+  `GitHubCopilotClientLifetime`; `GitHub.Copilot.SDK` stays at `1.0.14` because `1.0.15`-`1.0.17` force
+  `COPILOT_RUNTIME_PROCESS_FILE_LOGGING=1`).
 
 Hard-flag 🔴 when the diff:
 
-- Adds a new Azure or Responses-API client construction that does not pass `clientFactory:
-  DisableStoredOutput`. **This is the classic partial conversion in this file**: two callsites exist
-  today, so a third provider path added alongside them and given only one of the two treatments
-  ships a silent server-side retention of dictated text. Grep for every `AsAIAgent(` and every
-  `GetResponsesClient()` in `src/Scribe.Core/Cleanup/**` and judge each survivor.
-- Changes the unrecognized-representation branch to return `raw`, to return `null`, to rethrow, or to
-  skip building a fresh `CreateResponseOptions`. Any of those is a fail-open rewrite of a fail-closed
-  control.
-- Removes or loosens `TextCleanupServiceTests.cs:140`, including softening its assertion from
-  `Assert.False(raw.StoredOutputEnabled)` to a presence check.
-- Adds a hand-rolled HTTP call to a Responses endpoint that omits `store = false` from the body, the
-  way `ProbeAzureApiKeyAsync` includes it at `SettingsWindow.xaml.cs:3000`.
-
-**Not a finding:** the OpenAI-compatible provider (`InitOpenAiCompatibleAsync`,
-`TextCleanupService.cs:2362`) uses `GetChatClient`, the Chat Completions surface, which has no
-`store` parameter. Do not demand the Responses wrapper there. Foundry Local runs on the device and
-never leaves it at all.
+- Adds an Azure or `/responses` client construction without `DisableStoredOutput` / `WithStoredOutputDisabled`,
+  relaxes a fail-closed branch, or retries a `PromptCachePolicy` 400 with caching enabled.
+- Builds an outbound cleanup client without `VocabularyHandOffHandler` / `FeatureUsageTokenHandler`, or
+  lets a word pack with AI permission off reach any outbound prompt.
+- Weakens `secure_delete=ON` (`SecureDeleteTests`) or drops `StorageMaintenance.NoteDeletion` WAL
+  `TRUNCATE` checkpointing (`StorageMaintenanceWalTests`).
 
 ## §3. Payload widening on the opt-in AI paths
 
@@ -353,34 +352,16 @@ Trim that line to the boundaries the diff actually touched. Do not assert a boun
 
 ## Exceptions
 
-Do not flag any of the following. Each is either the established design or a decision `AGENTS.md`
-already closed, and re-opening one is drift rather than review.
+Do not flag any of the following; each is established design or closed in `AGENTS.md`:
 
-- **Foundry Local.** It is the default provider and it runs on the device. Its model downloads, its
-  execution-provider probing, and its prompts are not egress. Its startup telemetry event is, and §1 lists it.
-- **A `localhost` or private-network custom endpoint.** Ollama, LM Studio, and vLLM are documented
-  supported targets for `AiCleanupCustomEndpoint`. Sending text to a server on the user's own machine
-  is what that feature is.
-- **The OpenAI-compatible path not using the Responses stored-output wrapper.** It is on Chat
-  Completions (`TextCleanupService.cs:2382`), which has no `store` parameter. See §2.
-- **Model, update, and Store downloads.** `TranscriptionModelInstaller`, Velopack, and
-  `StoreUpdateService` fetch bytes inbound and verify them. `PRIVACY.md` already discloses that the
-  hosting service sees ordinary request metadata.
-- **The `az` CLI and Entra token traffic.** Azure sign-in is by design, `AzureCredentialFactory` is the
-  single owner, and the credential and role behavior belong to `azure-credential`, not here.
-- **Local persistence under an existing opt-in.** `StoreAudioHistory` writing to `audio_blobs`, and
-  history rows holding transcripts, are the shipped design. Only a *new* kind of sensitive content, or
-  a change of retention, earns the Question in §10.
-- **The clipboard-history caveat on rewriting selected text.** `PRIVACY.md` documents at length that
-  the source application, not Scribe, places the selection on the clipboard and marks it, and that
-  Scribe cannot suppress that history entry. Do not re-derive it as a finding.
-- **The `Win32ClipboardTests` and `Scribe.InjectionLab` em dash fixtures.** They round-trip an em dash
-  on purpose. Not a privacy matter and not a dash-ban violation; `comment-and-dash-hygiene` owns that
-  file list.
-- **Pre-existing behavior the diff only moved.** If a log line, a tag, or a payload field already
-  existed on `main` and the hunk merely relocated or reformatted it, it is not this change's finding.
-  Note it in Questions at most.
-- **Cosmetic wording in `PRIVACY.md`.** This lens fires on a claim becoming false, not on prose edits.
+- **Foundry Local** (default on-device runtime; its single startup `ProcessInfo` event is disclosed in §1)
+  and **loopback/private custom endpoints** (Ollama, LM Studio, vLLM).
+- **Chat Completions omitting `store`** (Chat Completions only stores when `store: true`; custom
+  `/responses` *does* apply `DisableStoredOutput`), **inbound model/update GETs**, and **Azure CLI / Entra
+  token traffic** (`azure-credential` owns identity/role checks).
+- **Local persistence under existing opt-ins** (`StoreAudioHistory` -> `audio_blobs`; history transcripts),
+  the two deliberate U+2014 round-trip strings in `Win32ClipboardTests` and `Scribe.InjectionLab`,
+  cosmetic `PRIVACY.md` prose edits, or pre-existing fields merely relocated by the diff.
 
 ---
 
@@ -391,8 +372,3 @@ End your output with this exact line, on its own, with nothing after it:
 ```
 [[agent-done:privacy-egress findings=<n> coverage=complete]]
 ```
-
-`<n>` is the number of findings you rendered, `0` on a clean pass. Use `coverage=incomplete` and name
-the gap in one trailing clause when you could not read `diff.patch`, or when the diff referenced files
-you needed for context and could not open. SKILL.md Step 3 counts a lens as "results used" only when
-this line is present, so a clean pass still emits it.

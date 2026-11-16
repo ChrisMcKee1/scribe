@@ -14,12 +14,12 @@ any of them.
 
 **Severity cap:** 🔴 Critical. **Findings cap: 4.**
 
-**Review data on disk.** Read `diff.patch` (and `delta.patch` on a re-review); it is authoritative for
-what the change adds, edits, or deletes. Do not use Read or Grep to confirm a diff line exists on disk,
-because the reviewed branch may not be checked out. Do use Read and Grep freely for surrounding
-context: `AzureCredentialFactory`, its callers, the settings save path, the docs, and the long `why`
-comments this area is built on. `AGENTS.md` "Azure authentication (read before touching credentials)"
-is the source of record and `references/patterns.md` **P-9** is the cataloged shape.
+**Review data on disk.** Read `diff.patch` (and `delta.patch` on a re-review) from
+`artifacts/scribe-code-review/<run-id>/` using `view`; it is authoritative for what the change adds,
+edits, or deletes. Do not use `view` or `grep` to confirm a diff line exists on disk, because the
+reviewed branch may not be checked out. Do use `view`, `grep`, and `glob` freely for surrounding
+context: `AzureCredentialFactory`, `CachingCliTokenCredential`, its callers, the settings save path, the
+docs, and `AGENTS.md` "Azure authentication (read before touching credentials)" (**P-9**).
 
 ---
 
@@ -45,12 +45,12 @@ wrong review happens here.
 ## §1. One owner builds the `TokenCredential`
 
 `src/Scribe.Core/Cleanup/AzureCredentialFactory.cs` is the single place in the shipped app that builds
-a `TokenCredential`. `Create(AzureCredentialRequest)` (line 43) is the only entry point, and the only
-two credentials it ever returns are `ClientSecretCredential` (line 86) for service principal mode and
-`SerializedAzureCliCredential(new AzureCliCredential(options))` (line 109) for CLI mode. Both real
-consumers go through it: `TextCleanupService` at lines 3302 (the Responses path, which serves both a
-project URL and an account URL through the account's `/openai/v1/` inference endpoint) and 2398 (the
-Chat Completions fallback), and `AzureFoundryDiscovery` at lines 231 and 273.
+a `TokenCredential`. `Create(AzureCredentialRequest, bool cacheCliTokens = false)` is the only entry
+point, returning `ClientSecretCredential` for service principal mode and
+`SerializedAzureCliCredential(new AzureCliCredential(options))` (wrapped in `CachingCliTokenCredential`
+for cleanup's two serving clients unless `PerfFlags.CliTokenEveryRequest` is set; Settings ARM discovery
+and Test connection call uncached `Create(request)`) for CLI mode. Both `TextCleanupService` (Responses
+and Chat Completions fallback, normalized to `/openai/v1/`) and `AzureFoundryDiscovery` go through it.
 
 **🔴 `DefaultAzureCredential` is banned in `src/**`, with or without `Exclude*` options.** It was tried
 and shipped a real bug: `ManagedIdentityCredential` probed a nonexistent IMDS endpoint on a desktop and
@@ -201,25 +201,21 @@ Hard rules, each a 🔴 when a diff breaks it:
 - A secret in a **log or telemetry** call is a 🔴 regardless of level. Cross-reference `privacy-egress`
   when you find one; do not duplicate the finding, note the overlap.
 
-## §7. The `OpenAI` 2.12.0 pin is part of this surface
+## §7. The `OpenAI` and AI SDK lockstep set is part of this surface
 
-`Directory.Packages.props` (the `OpenAI` entry, around line 75, and the comment above it) pins `OpenAI`
-at `2.12.0` on purpose. `Microsoft.Extensions.AI.OpenAI` 10.9.0 declares `[2.12.0, 2.13.0)`, so taking
-2.13.0 alone breaks restore with **NU1608**. The rule is stricter than the range, and it is the reason
-it lives in a credential lens rather than only in `build-packaging`: `Microsoft.Extensions.AI.OpenAI`
-and `Microsoft.Agents.AI.OpenAI` are compiled against one `OpenAI` build and bind to its members at
-runtime, so an `OpenAI` that merely satisfies a declared range can still **compile perfectly and throw
-`MissingMethodException` at runtime**. That happened once: `ProjectResponsesClient` (from
-`Azure.AI.Projects`, reached through `Microsoft.Agents.AI.Foundry`) needed a constructor that exists
-only in 2.13.0. Both packages were removed in 0.4.3. A Foundry project URL is now normalized to the
-account's `/openai/v1/` inference endpoint (`AzureOpenAIResponsesClientFactory.GetV1Endpoint`) and
-served by `TextCleanupService.CreateAzureResponsesAgent`, the same path as an account URL.
+`Directory.Packages.props` moves `OpenAI`, `Microsoft.Extensions.AI.*`, and `Microsoft.Agents.AI.*`
+together as one binary-compatible set (currently `OpenAI` `2.14.0`, `Microsoft.Extensions.AI` and
+`.OpenAI` `10.11.0`, `.Evaluation` `10.10.0`, and `Microsoft.Agents.AI.*` `1.27.0`). Because the AI
+packages bind to `OpenAI` members at runtime, an `OpenAI` version that merely satisfies a NuGet range can
+still compile cleanly and throw `MissingMethodException` at runtime (`ProjectResponsesClient` from
+`Azure.AI.Projects`, removed in 0.4.3 with `Microsoft.Agents.AI.Foundry`, did exactly that; `OpenAI`
+`2.14.0` also must never pair with `Microsoft.Extensions.AI.OpenAI` `10.10.0`). Both Foundry project URLs
+and classic account URLs normalize to the account's `/openai/v1/` inference endpoint via
+`AzureOpenAIResponsesClientFactory.GetV1Endpoint`.
 
 Flag 🔴 when the diff moves `OpenAI` without moving `Microsoft.Extensions.AI.*` and
-`Microsoft.Agents.AI.*` in the same change to the set built against it (2.13.0 with 10.10.0 and
-1.22.0; never 2.14.0 with `Microsoft.Extensions.AI.OpenAI` 10.10.0), or when it reintroduces
-`Azure.AI.Projects`, `Microsoft.Agents.AI.Foundry`, `AIProjectClient` or `ProjectResponsesClient`. Do
-not write "this will fail the build" for the second case: it will not, which is the entire point.
+`Microsoft.Agents.AI.*` in lockstep, or reintroduces `Azure.AI.Projects`, `Microsoft.Agents.AI.Foundry`,
+`AIProjectClient`, or `ProjectResponsesClient`.
 
 ---
 

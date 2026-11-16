@@ -3,15 +3,16 @@
 You answer one question every per-file lens misses: **did the new decision land in `Scribe.Core` with a
 test, or did it drift back into a `.xaml.cs`?**
 
-Dispatch on every change. When the diff touches no file under `src/**`, there is nothing to place: emit
-the clean-pass line and stop. Fire hardest on a method **added** to any `*.xaml.cs`.
+Dispatch on every change. When the diff touches no file under `src/**`, emit the clean-pass line and
+stop. Fire hardest on a decision method **added** to any `*.xaml.cs` or `SettingsWindow*.cs` partial.
 
 Severity cap: 🔴 Critical. Findings cap: **5**.
 
-**Diff on disk.** `diff.patch`, or `delta.patch` on a re-review, is authoritative for what the change
-adds. Read and Grep the codebase freely for context: the Core folder that would own the new logic, the
-sibling builder that already solves the same shape, the test that pins it. Do not use Read or Grep to
-confirm that a diff line exists on disk; the reviewed branch may not be checked out.
+**Diff on disk.** `diff.patch`, or `delta.patch` on a re-review, in `artifacts/scribe-code-review/<run-id>/`
+is authoritative for what the change adds. Use `view`, `grep`, and `glob` freely on the codebase and
+`AGENTS.md` for context: the Core folder that would own the new logic, the sibling builder that already
+solves the same shape, and the test that pins it. Do not use `view` or `grep` to confirm that a diff line
+exists on disk; the reviewed branch may not be checked out.
 
 ---
 
@@ -45,14 +46,17 @@ The **Boundaries / Always** list repeats it: *"Put new logic in `Scribe.Core` wi
 
 Two verified facts turn that from a preference into a hard rule:
 
-- **The test suite cannot see the shells.** `tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj:23` carries
-  exactly one `ProjectReference`, to `src/Scribe.Core/Scribe.Core.csproj`. There is no reference to
-  `Scribe.App` and none to `Scribe.Overlay`. A decision that lands in a shell file is not "harder to
-  test", it is unreachable by every test in the repository.
-- **The shells are already heavy.** `src/Scribe.App/Settings/SettingsWindow.xaml.cs` is 5,714 lines,
-  `src/Scribe.App/App.xaml.cs` is 1,287, and `src/Scribe.App/Dictation/DictationController.cs` is 1,265.
-  Each new decision method placed there is a real, compounding cost, and the next agent editing this
-  repository copies whatever shape it finds.
+- **Normal unit tests target `Scribe.Core` directly.** `tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj`
+  references `Scribe.Core` directly, while referencing `Scribe.App` only with
+  `ReferenceOutputAssembly="false"` for reflection/BAML dialog checks (`TryDictationWindowTests`,
+  `DictionaryWordWindowTests`) and compiling isolated helpers via linked `<Compile>` items. Ordinary
+  unit tests cannot call instance methods on WPF windows, and private-desktop window tests are far
+  heavier than pure Core tests.
+- **The shells stay adapters across partial files.** `SettingsWindow` is split across `SettingsWindow*.cs`
+  partials (`SettingsWindow.WordPacks.cs`, `SettingsWindow.YourWords.cs`, `SettingsWindow.Formatting.cs`,
+  etc.), `App.xaml.cs` wires startup/teardown, and `DictationController.cs` is a thin shell over
+  `DictationLifecycle` in `Scribe.Core/Lifecycle/`. Each new decision placed in a shell file compounds
+  complexity and invites the next agent to copy it.
 
 Size alone is never the finding. It is the reason the rule exists, not evidence that a rule was broken.
 

@@ -11,11 +11,10 @@ none of those, emit the clean-pass line and stop.
 fail is serious, but the production defect it fails to catch belongs to whichever lens owns that
 surface; hand it over rather than escalating here.
 
-**Review data on disk.** Read `diff.patch` and `metadata.json` from the cache path you were given
-(`delta.patch` instead on a re-review). The reviewed branch may not be checked out, so treat the
-patch as authoritative for what changed, and use Read and Grep freely for surrounding context:
-the test file's neighbours, the production type under test, and the `why` comments this repository
-leans on.
+**Review data on disk.** Read `diff.patch` and `metadata.json` from `artifacts/scribe-code-review/<run-id>/`
+using `view` (`delta.patch` instead on a re-review). The reviewed branch may not be checked out, so treat
+the patch as authoritative for what changed, and use `view`, `grep`, and `glob` freely for surrounding
+context: the test file's neighbours, `AGENTS.md`, the production type under test, and the `why` comments.
 
 **No em dashes or en dashes** in anything you write.
 
@@ -227,19 +226,15 @@ itself.
   `CleanupModelCatalogTests.cs:81` gets this right by asserting against a hand-written literal array
   of the two winners rather than against a projection of `Curated`.
 
-**The flagship wrong-universe case in this repository is the twin enums.**
-`Scribe.Core.Models.OverlayPosition` (`src/Scribe.Core/Models/Enums.cs:29`) and
-`Scribe.Overlay.OverlayAnchor` (`src/Scribe.Overlay/OverlayAnchor.cs:8`) are kept in sync **by
-name**, and the overlay deliberately holds no reference to `Scribe.Core`. The test project
-references only `src/Scribe.Core`, so nothing in `tests/Scribe.Core.Tests` can see `OverlayAnchor`
-at all. A test that iterates `OverlayPosition` and asserts each value produces a `POSITION` wire
-token therefore asserts Core against itself and stays green when the overlay is missing the twin,
-which is the exact silent failure. Say that plainly, do not accept such a test as evidence the pair
-is complete, and hand the pairing itself to `overlay-process-contract`.
+**Source-contract tests must read both sides independently.** `OverlayPipeProtocolTests` gets the twin-enum
+and pipe-verb case right by parsing `src/Scribe.Overlay/OverlayAnchor.cs` and `OverlayIpcServer.cs` from
+disk and comparing them against `OverlayPosition` and `OverlayPipeProtocol.Verbs`. By contrast, a test that
+only iterates `OverlayPosition` and asserts each value produces `"POSITION " + p` asserts Core against
+itself and stays green when the overlay side is missing.
 
-The oracle has to be independent: a literal table written by hand from the spec, a checked-in golden
-file, a second implementation, or a value that came from outside the managed code. Flag 🟡 and name
-the independent oracle the test should assert against.
+The oracle has to be independent: a literal table written by hand from the spec, a checked-in golden file,
+a reference implementation (`CaptureSignalAnalyzerDifferentialTests`, `LibraryCompositionStatusOracleTests`),
+or the actual wire/file on the other side of the boundary. Flag 🟡 and name the independent oracle.
 
 ---
 
@@ -268,9 +263,29 @@ the independent oracle the test should assert against.
 
 ## §7. Scribe-specific quality notes
 
-**Never write through the real data root.** Tests that touch `AppPaths` or the shared daily log must
-pass an explicit root, or they will collide with a running Scribe instance's database and logs on
-the maintainer's own machine. The established shapes:
+**Never call `SqliteConnection.ClearAllPools()` in a test (hard 🟡).** xUnit runs test classes in parallel,
+and clearing all pools process-wide disposes pooled connections other classes are actively using. Call
+`DatabasePools.Release(new AppPaths(root))` or `TempDatabaseFolder.ReleasePooledConnections()` from
+`StorageTestSupport` instead.
+
+**Scribe test-harness traps that silently invalidate assertions (each 🟡):**
+
+- **Lone surrogates in `[InlineData]`:** xUnit serializes string theory rows through UTF-8 and hands the
+  test `U+FFFD`. Build lone-surrogate strings inside the test body or pass an index into a table.
+- **Exact byte allocations without dynamic PGO warm-up:** instrumented tier-0/tier-1 JIT allocates extra
+  profiling state; warm across tier-up and assert a bound or `AllocationMeasurement.AssertZero` on a
+  difference.
+- **Testing `TryHandOff` / `WhileServing` admission with `CleanupHarness`:** `CleanupHarness` replaces
+  `options.Transport` (`ScriptedHttpHandler.Install`), bypassing `VocabularyHandOffHandler`! Admission and
+  hand-off refusal tests must use `VocabularyCleanupHarness` (`InnerHttpHandlerForTesting`).
+- **WPF dialog/window test hosts:** install `DispatcherSynchronizationContext` before constructing
+  `SettingsWindow` (so async loaders do not resume on pool threads), load compiled WPF-UI theme/control
+  dictionaries plus the seeded font ramp rather than parsing `App.xaml` (`DictionaryWordWindowTests`), and
+  run real keyboard-focus tests in a child process born on a private desktop (`PrivateDesktopTest`).
+
+**Never write through the real data root.** Tests that touch `AppPaths` or the shared daily log must pass
+an explicit temp root, or they will collide with a running Scribe instance's database and logs on the
+maintainer's own machine. The established shapes:
 
 - `new AppPaths(root)` with a temp root: `AppPathsTests.cs:42`, `SnippetMigrationTests.cs:41`,
   `DatabaseSalvageTests.cs:31`, `PackagedDataMigrationTests.cs:53`.

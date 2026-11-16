@@ -24,11 +24,12 @@ Default everything else to 🟡 Important.
 **Findings cap: 5.** Consolidate repeats into one named finding (three deleted tests in one file are
 one finding, not three).
 
-**Data on disk.** `diff.patch` is authoritative for what this change adds, changes, and removes; on a
-re-review it is `delta.patch`. Read `metadata.json` for the description. Use Read and Grep freely for
-surrounding context: the guarded code, the test that pins it, the `why` comment above it. Do **not** use
-Read or Grep to confirm that a diff line exists on disk, because the reviewed branch may not be checked
-out. Do not call `gh`.
+**Data on disk.** `diff.patch` (or `delta.patch` on a re-review) in `artifacts/scribe-code-review/<run-id>/`
+is authoritative for what this change adds, changes, and removes. Read `metadata.json` with `view` for
+the description. Use `view`, `grep`, and `glob` freely for surrounding context: the guarded code, the
+test that pins it, `AGENTS.md`, and the `why` comment above it. Do **not** use `view` or `grep` to
+confirm that a diff line exists on disk, because the reviewed branch may not be checked out. Do not run
+`gh`.
 
 ---
 
@@ -96,60 +97,52 @@ gate**, which is precisely why a new suppression matters here and why "CI would 
 available as a counter-argument.
 
 Erosion looks like a new `#pragma warning disable`, a first `NoWarn` or `TreatWarningsAsErrors=false`
-appearing in a `.csproj` or `Directory.Build.props`, or a `.editorconfig` diagnostic severity lowered.
-Require a stated reason in the code or the description.
+appearing in a `.csproj` or `Directory.Build.props`, or a `.editorconfig` diagnostic severity lowered
+(for example weakening `SYSLIB1045` or `CA1875` in `src/.editorconfig`, which `AnalyzerPolicyTests`
+pins). Require a stated reason in the code or the description.
 
 **The blessed suppression shapes already in the tree, which are acknowledgements rather than erosion:**
 
-- `#pragma warning disable OPENAI001` around the experimental `CreateResponseOptions` and Responses API
-  surface: `src/Scribe.Core/Cleanup/TextCleanupService.cs:1861` (inside `WithStoredOutputDisabled`) and
-  `:2448`, `#pragma warning disable MAAI001, OPENAI001` at
-  `src/Scribe.Core/Cleanup/AzureOpenAIResponsesClientFactory.cs:7`, and the matching pragmas in
-  `tests/Scribe.Core.Tests/TextCleanupServiceTests.cs` and `tools/Scribe.Evals/**`. These acknowledge a
-  provider SDK's experimental-API attribute. They do not hide a defect.
-- `#pragma warning disable CS0649` at `src/Scribe.App/Overlay/OverlayProcessClient.cs:692`, over the
-  Win32 job-object structs whose fields the marshaller populates. The comment above it states exactly
-  that.
+- `#pragma warning disable OPENAI001`, `MAAI001`, and `SCME0001` around experimental OpenAI / Responses /
+  `JsonPatch` surfaces in `src/Scribe.Core/Cleanup/**`, `tests/Scribe.Core.Tests/**`, and
+  `tools/Scribe.Evals/**`. These acknowledge a provider SDK's experimental-API attribute.
+- `#pragma warning disable CS0649` over Win32 job-object / interop structs whose fields the marshaller
+  populates.
 
 A new suppression that matches one of those shapes, scoped tightly and explained, is not a finding. A
 new suppression over Scribe's own code, or a file-wide or project-wide one, is 🟡.
 
-### G-3: The fail-closed stored-output branch (🔴 when weakened)
+### G-3: The fail-closed stored-output, prompt-cache, and vocabulary hand-off controls (🔴 when weakened)
 
-`AGENTS.md` (line 84): _"There is a test pinning the fail-closed behaviour; do not relax it."_
+The Azure Responses API and OpenAI `/responses` default to `store=true`, which retains cleaned
+dictations server-side. `TextCleanupService.WithStoredOutputDisabled` chooses per surface
+(`IChatClient.GetService`): Responses always sets `StoredOutputEnabled = false`, Chat Completions never
+sets `store` true, unknown raw representations fail closed to Responses options with storage off, and
+`PromptCachePolicy.TurnOff` fails closed on a 400 (never retrying without the option). Outbound cleanup
+requests pass through `VocabularyHandOffHandler` (`ILibraryVocabularySource.TryHandOff`) and
+`FeatureUsageTokenHandler` (stripping Agent Framework's `(feat=v1.<hex>)` telemetry token).
 
-The Azure Responses API defaults to `store=true`, which would retain every cleaned dictation server
-side. `TextCleanupService.WithStoredOutputDisabled`
-(`src/Scribe.Core/Cleanup/TextCleanupService.cs:1854`) sets `StoredOutputEnabled = false` through
-`ChatOptions.RawRepresentationFactory`, and when the inner factory returns something that is not a
-`CreateResponseOptions` it builds a fresh one with the flag off rather than forwarding the unknown
-object. The comment says it outright: _"Fail CLOSED."_ This is `references/patterns.md` P-8.
+Pinned by `CleanupStoredOutputWireTests`, `StoredOutputWireContractTests`, `CustomApiStyleTests`,
+`PromptCacheWireTests`, `PromptCacheServiceTests`, `FeatureUsageTokenWireTests`,
+`CleanupProbeVocabularyTests`, and `LibraryVocabularyRealSourceTests`.
 
-Its pins live in `tests/Scribe.Core.Tests/TextCleanupServiceTests.cs`:
+Erosion, all 🔴: deleting, skipping, or relaxing any of those wire/contract tests, changing an
+unrecognized-shape branch to pass `raw` or `null` through, retrying without `prompt_cache_options` when
+caching is off, or building an outbound cleanup client without `ConfigureClient` / `TryHandOff`.
 
-- `Stored_output_override_creates_responses_options_with_storage_disabled` (line 109)
-- `Stored_output_override_preserves_existing_responses_options` (line 121)
-- `Stored_output_override_fails_closed_on_an_unrecognised_raw_representation` (line 140)
+### G-4: Source-level privacy, UI-contract, and banner pins (🔴 for privacy, 🟡 for UI/protocol)
 
-Erosion, all 🔴: deleting or skipping any of those three, changing the unknown-shape branch to return
-`raw` or `null` instead of a fresh options object, removing the `StoredOutputDisabledChatClient` wrapper
-from a provider path, or adding a new outbound cleanup client that does not go through it. Also 🔴: a
-new `RawRepresentationFactory` set anywhere in Scribe, because the comment at
-`TextCleanupService.cs:1868` records that nothing sets one today and the branch exists for the day a
-package version starts to.
+`SessionBannerTests.Banner_never_contains_a_secret` pins the banner against planted keys, secrets,
+endpoints, and prompts; `LogPrivacyGuardTests` (`LogCallScanner`) forbids passing exception objects,
+`.Message`, `.StackTrace`, `.Data`, or `.ToString()` to log calls across App and provider-facing Core;
+`TelemetrySourceContractTests` enforces `TraceTagPolicy` allowlisting; `CleanupDisclosureTests` pins
+Settings and `PRIVACY.md` disclosures; and `GlossarySourceTests`, `XamlFontSizeSourceTests`,
+`ThemeColorSourceTests`, `BusyAnimationSourceTests`, `OverlayPipeProtocolTests`, and
+`OverlayPillSourceTests` enforce UI and IPC invariants from source.
 
-### G-4: `SessionBannerTests.Banner_never_contains_a_secret` (🔴 when weakened)
-
-`AGENTS.md` (line 276): _"asserts it; keep it passing."_ The logging privacy contract is that no
-transcript, dictionary entry, snippet body, prompt, endpoint, or key reaches the log; shapes only,
-meaning counts, enum names, `configured` or `unset`.
-
-The pin is `tests/Scribe.Core.Tests/SessionBannerTests.cs:56`. Erosion, 🔴: deleting or skipping it,
-narrowing what it asserts against, or removing a needle from the settings it seeds so the assertion no
-longer covers a field that `SessionBanner` now prints. A new field added to
-`src/Scribe.Core/Diagnostics/SessionBanner.cs` with no corresponding needle in that test is the same
-erosion arriving as an addition rather than a deletion. Related: never let `scribe.db` into
-`DiagnosticsBundle`; it holds every dictation and the saved API keys.
+Erosion: 🔴 when weakening `SessionBannerTests`, `LogPrivacyGuardTests`, `LogCallScanner`,
+`TraceTagPolicy`, `CleanupDisclosureTests`, or `DiagnosticsBundleTests`; 🟡 when widening an allowlist or
+excluding a file without justification in the UI/overlay source-contract tests.
 
 ### G-5: The SQLite CVE pin (🔴 when weakened)
 
@@ -201,10 +194,14 @@ native silicon** rather than trusted to compile-time checks.
   with `fail-fast: false` (line 28). The comment records that `windows-11-arm` will fail on a private
   repo and that this is intentional, because the repo's visibility changing is something to find out
   about. Dropping a leg, or flipping `fail-fast` to `true` so one failure hides the other, is erosion.
-- **The AsrCheck step** (line 90, `dotnet run --project tools/Scribe.AsrCheck -c Release`). `AGENTS.md`
-  ("Architecture support"): _"A decode through the real native engine is what proves it works"_, because
-  the model-dependent unit tests pass vacuously without models. Removing it means a wrongly packaged
-  native can pass every test and fail on the user's first dictation.
+- **The AsrCheck and scenario steps** (`dotnet run --project tools/Scribe.AsrCheck -c Release`,
+  `--model parakeet-unified-en-0.6b-int8`, and `--scenarios --quick`). `AGENTS.md`: _"A decode through
+  the real native engine is what proves it works"_, because the model-dependent unit tests pass vacuously
+  without models. Removing any of these lets a broken native or bundled model ship unnoticed.
+- **The macOS workflow** (`.github/workflows/macos.yml`): builds debug/release across macOS 15, 26, and
+  15-intel with zero warnings, runs `swift test --parallel`, runs thread/address sanitizers, checks bundle
+  signatures and libraries, fails on U+2014/U+2013 under `macos/`, and enforces
+  `swift format lint --strict`. Weakening any of those gates is 🟡.
 - **Publish plus verify** (lines 111 and 117). Publishing is what the installer does, so the payload
   check runs against a real publish, not against build output.
 - **The unit test step** (line 74) and the overlay build (line 70, with `-p:Platform=` per leg).

@@ -8,11 +8,12 @@ version bump only) there is nothing to compare against. Emit the clean-pass line
 
 Severity cap: 🔴 Critical. Findings cap: **5**.
 
-**Data on disk.** Read `diff.patch` and `metadata.json` from the review cache. `diff.patch` is
+**Data on disk.** Read `diff.patch` (or `delta.patch` on a re-review) and `metadata.json` from the
+workspace review cache (`artifacts/scribe-code-review/<run-id>/`) using `view`. `diff.patch` is
 authoritative for what the change adds, removes, or edits: the reviewed branch may not be checked out,
-so never use Read or Grep to confirm that a diff line exists on disk. Do use Read and Grep freely for
-surrounding context. This lens cannot be done from the hunk alone: both questions require comparing the
-change against siblings that already exist in the tree.
+so never use `view` or `grep` to confirm that a diff line exists on disk. Do use `view`, `grep`, and
+`glob` freely for surrounding context and `AGENTS.md`. This lens cannot be done from the hunk alone:
+both questions require comparing the change against siblings that already exist in the tree.
 
 ---
 
@@ -102,29 +103,31 @@ Three projects, and the seams between them are load bearing.
 
 **`Scribe.Core` owns the decisions.** It has no UI: no `UseWPF`, no WinUI, no XAML. New behavior lands
 here **with a test** in `tests/Scribe.Core.Tests`. `AGENTS.md` names the failure mode directly: *"Do not
-let logic drift back into the code-behind; that is a recurring smell."* `SettingsWindow.xaml.cs` is
-already 5,714 lines, which is exactly why the next decision must not land there. Flag a `.xaml.cs`
-gaining validation, merging, deduplication, planning, or preset selection when a Core builder shape
-already covers it.
+let logic drift back into the code-behind; that is a recurring smell."* Flag a `SettingsWindow*.cs` or
+other `.xaml.cs` partial gaining validation, merging, deduplication, planning, or preset selection when
+a Core builder shape (`src/Scribe.Core/Settings/`, `Libraries/`, `Vocabulary/`, `Appearance/`,
+`Lifecycle/`, `Overlay/`) already covers it.
 
 **`Scribe.App` owns the pixels and the wiring.** It references `Scribe.Core` and consumes its **public**
-surface. `Scribe.Core.csproj:39-41` grants `InternalsVisibleTo` to `Scribe.Core.Tests`,
-`Scribe.Evals`, and `Scribe.Benchmarks`, and deliberately **not** to `Scribe.App`. A diff adding
-`Scribe.App` to that list, or reaching a Core internal by reflection, is reaching around a boundary
-rather than widening it honestly: the right move is a narrow public entry point, which is what P-2 is.
-App also holds no raw SQL today; every read and write goes through a repository registered in
-`CoreServiceCollectionExtensions`.
+surface. `Scribe.Core.csproj` grants `InternalsVisibleTo` to `Scribe.Core.Tests`, `Scribe.Evals`, and
+`Scribe.Benchmarks`, and deliberately **not** to `Scribe.App`. A diff adding `Scribe.App` to that list,
+or reaching a Core internal by reflection, is reaching around a boundary rather than widening it
+honestly: the right move is a narrow public entry point, which is what P-2 is. App also holds no raw SQL;
+every read and write goes through a repository registered in `CoreServiceCollectionExtensions`.
 
-**`Scribe.Overlay` is a separate process with zero reference to `Scribe.Core`.** Its csproj has no
-`ProjectReference` at all, and that is not an oversight: it ships as its own self-contained executable
-built for one `Platform` (WinUI has no AnyCPU story), and the two by-name enum twins in P-6 exist
-precisely so the two processes can share a vocabulary without sharing an assembly. **A diff adding a
-project reference from `Scribe.Overlay` to `Scribe.Core` is a 🔴 boundary break**, not a simplification.
-The pipe is one way by design; a request/response addition is a contract change, not a refactor.
+**`Scribe.Overlay` is a separate process with zero `ProjectReference` to `Scribe.Core`.** Its csproj
+carries no `ProjectReference` at all: it ships as its own self-contained executable built for one
+`Platform` (`x64` or `ARM64`), and shares pure zero-dependency helpers (`PillGeometry.cs`,
+`PillTextScale.cs`, `PillLevelBars.cs`, `AppendOnlyFile.cs`) only via explicit `<Compile Include="..." />`
+source links so `Scribe.Core`'s native and SDK dependency graph never enters the overlay payload. **A diff
+adding a `ProjectReference` from `Scribe.Overlay` to `Scribe.Core` is a 🔴 boundary break**, not a
+simplification. The pipe is one way by design (`OverlayPipeProtocol`); a request/response addition is a
+contract change, not a refactor.
 
-**`tools/**` reference `Scribe.Core` only.** All four (`Scribe.Evals`, `Scribe.AsrCheck`,
-`Scribe.Benchmarks`, `Scribe.InjectionLab`) reference `src/Scribe.Core/Scribe.Core.csproj` and nothing
-else in `src/`. A tool taking a dependency on `Scribe.App` or `Scribe.Overlay` is a boundary break.
+**`tools/**` reference `Scribe.Core` only** (`Scribe.Evals`, `Scribe.AsrCheck`, `Scribe.Benchmarks`,
+`Scribe.InjectionLab`), and `macos/Scribe` (`Package.swift`) is a separate Swift 6 package with zero
+build-time link to the C# projects; when `Scribe.Core` changes mirrored domain behavior, check whether
+`macos/Scribe` and `macos/PORTING-PLAN.md` need a parity update or staleness note.
 
 **Composition is not a shortcut.** `App.OnStartup` builds a host and calls
 `builder.Services.AddScribeCore()` (`src/Scribe.App/App.xaml.cs:101-102`), then resolves concrete
@@ -232,11 +235,12 @@ Do not flag any of these.
   `CoreServiceCollectionExtensions.AddScribeCore` and construction plus `GetRequiredService` wiring in
   `src/Scribe.App/App.xaml.cs` are the composition root doing its job. Only reach-through shortcuts are
   findings. See §2.
+- **Linked `<Compile Include="..." />` items in `Scribe.Overlay.csproj` and `Scribe.Core.Tests.csproj`.**
+  Compiling pure zero-dependency files (`PillGeometry`, `PillTextScale`, `PillLevelBars`,
+  `AppendOnlyFile`) directly into `Scribe.Overlay` without a `ProjectReference` is the documented
+  mechanism that keeps `Scribe.Core`'s transitive payload out of the overlay.
 - **A genuinely novel construct with no sibling.** Note the absence as a Question if it matters. Never
   force an analogy to the nearest catalog entry.
-- **The existing `CleanupFailed?.Invoke` shape** at `src/Scribe.App/Dictation/DictationController.cs:1141`.
-  It predates P-3 and the catalog says so explicitly. It is not a finding unless this diff copies it for
-  a **new** multicast event.
 - **`Win32ClipboardTests` and `tools/Scribe.InjectionLab` round-tripping an em dash on purpose.** They
   are the two deliberate exceptions to the repository dash ban, proving Unicode survives the clipboard
   and injection paths. Dash hygiene is `comment-and-dash-hygiene`'s lens anyway.

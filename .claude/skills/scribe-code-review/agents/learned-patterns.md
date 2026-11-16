@@ -20,12 +20,12 @@ mining run's.
 
 **Findings cap: 3.**
 
-**Review data on disk.** Read `diff.patch` and `metadata.json` from the cache directory named in your
-dispatch prompt. On a re-review you are given `delta.patch`; that is your scope and `diff.patch` is
-context. The reviewed branch may not be checked out, so never use Read or Grep to confirm that a diff
-line exists on disk. Do use Read and Grep freely on the surrounding source: you cannot judge whether a
-rule's exception applies without reading the code around the hunk, and the exceptions are where this
-lens does its damage when it is careless.
+**Review data on disk.** Read `diff.patch` and `metadata.json` from `artifacts/scribe-code-review/<run-id>/`
+using `view`. On a re-review you are given `delta.patch`; that is your scope and `diff.patch` is context.
+The reviewed branch may not be checked out, so never use `view` or `grep` to confirm that a diff line
+exists on disk. Do use `view`, `grep`, and `glob` freely on `.claude/skills/scribe-code-review/docs/derived-rules/`
+and on the surrounding source: you cannot judge whether a rule's exception applies without reading the
+code around the hunk.
 
 ---
 

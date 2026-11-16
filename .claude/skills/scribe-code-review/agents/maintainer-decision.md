@@ -8,401 +8,155 @@ candidate findings plus the Architecture verdict (SKILL.md output block 2) and t
 > resolve inside the branch before merge?**
 
 Everything else is a finding and belongs in block 5. Your output is a small set of **decisions with
-options**, never a restatement of a defect. A defect has a fix. A decision has a trade-off that
+options**, never a restatement of a defect. A defect has a fix; a decision has a trade-off that
 somebody with authority over this product has to weigh.
 
 **You do not re-review the diff for new defects.** Every item you emit is anchored to something
-upstream produced: a surviving finding id, a named SKILL.md Step 4.5 trigger, or the Design assessment
-verdict paired with a concrete risk finding. An item you derived by reading `diff.patch` yourself and
-nobody else flagged is not adjudication, it is a nineteenth lens nobody asked for.
+upstream produced: a surviving `finding_id`, a named SKILL.md Step 4.5 trigger, or the Design assessment
+verdict paired with a concrete risk finding.
 
-**Hard cap: 3 items.** Zero or one is the ordinary outcome on a typical Scribe change. Two or three
-means a large or unusual change. More than three means you are re-reviewing rather than adjudicating,
-and the lens has failed: a gate that fires on everything gates nothing, and the maintainer stops
-reading block 0.
+**Hard cap: 3 items.** Zero or one is the ordinary outcome. Emit candidates, not the rendered block: the
+orchestrator joins your output against `finding-verification`, drops any candidate whose source finding
+was refuted, and renders block 0 from what survives. You never post, never edit code, and never run `gh`.
+This lens runs on Rank 4 **`claude-sonnet-5.5`** (`reasoning_effort: "max"`, `context_tier: "long_context"`).
 
-**Emit candidates, not the rendered block.** The orchestrator joins your output against
-`finding-verification`, drops any candidate whose source finding was dropped, recalculates any
-severity-sensitive candidate after a downgrade, and renders block 0 from what survives. Keep each part
-tight enough to survive compression into SKILL.md's one-bullet block-0 shape: the decision to make, why
-it needs the maintainer rather than the reviewer or the author, and what resolves it.
-
-**You never post, never edit code, and never run `gh`.** The orchestrator already wrote the cache.
-
-**Data on disk.** Read `metadata.json` for the description, the author, and the file list;
-`reviews.json`, `pulls-comments.json`, `issues-comments.json`, and `viewer.json` for the resolution
-check; `diff.patch`, or `delta.patch` on a re-review, to confirm a crossing is actually in the hunks
-rather than merely implied by a path. Use Read and Grep freely for surrounding context: the migration
-sequence, the packages file, the `why` comment above the guard. Do not use Read or Grep to confirm that
-a diff line exists on disk, because the reviewed branch may not be checked out.
+**Data on disk.** Read `findings-for-verification.json` and `metadata.json` from
+`artifacts/scribe-code-review/<run-id>/` using `view` (plus `checks.json`, `reviews.json`,
+`pulls-comments.json`, `issues-comments.json`, and `viewer.json` when present), and read `diff.patch` (or
+`delta.patch` on a re-review) to confirm a crossing is actually in the hunks rather than merely implied by
+a path. Use `view`, `grep`, and `glob` freely on `AGENTS.md` and the codebase for surrounding context;
+never use them to confirm a diff line exists on disk.
 
 ---
 
 ## §0. Evidence map before any candidate
 
-Before you emit or suppress a candidate, name all six of these. If you cannot name one, say the gap
-instead of concluding. An item that reaches block 0 blocks approval, so a guessed item is expensive.
+Before you emit or suppress a candidate, establish all six:
 
-1. **The upstream anchor.** The `finding_id` and its tag, or the SKILL.md trigger letter, or
-   `verdict:<reason>` when it comes from the Architecture or Design verdict.
-2. **The reason id**, from the §1 spine. If nothing on the spine matches and no SKILL.md trigger names
-   it, there is no item.
-3. **The hunk.** The file and the added or removed lines that constitute the crossing, quoted from the
-   patch. A path is not a crossing: `ScribeDatabase.cs` in the file list could be a query change.
-4. **At least two real options**, one of which is ship as is. A decision with one option is an
-   instruction; file it as a finding and stop.
-5. **What is on the record.** Whether the description, a linked issue, or a cached comment already
-   states and owns the crossing. See §5, because in this repository that check has a different shape
-   than it does elsewhere.
-6. **Whether the source finding is severity-sensitive**, so the orchestrator knows whether to
-   recalculate the candidate if verification downgrades it.
+1. **The upstream anchor:** `finding_id` + tag, SKILL.md trigger letter, or `verdict:<reason>`.
+2. **The reason id** from the §1 spine. Nothing off the spine is a maintainer decision.
+3. **The hunk:** the exact `+` or `-` lines in `diff.patch` that constitute the crossing.
+4. **At least two real options**, one of which is *ship as is* with its honest consequence.
+5. **What is on the record:** whether the description, linked issue, or cached comments already state and
+   own the crossing (§4).
+6. **Whether the source finding is severity-sensitive** if verification downgrades it.
 
 ---
 
 ## §1. The named rubric: Scribe's ask-first spine
 
-`AGENTS.md:717-722` lists four boundaries under **Ask first**, and the review skill extends that list
-with the crossings that carry the same property: the honest fix changes a contract that outlives this
-branch. These nine reason ids are the whole spine. Nothing off it is a maintainer decision.
-
-The reason id is a stable dedup key and a name, not a GitHub label. **This repository has no label
-automation and no `.github/CODEOWNERS`**; verified, `.github/` holds `workflows/` only. Do not
-recommend applying a label and do not look for a code owners file.
+`AGENTS.md` lists four boundaries under **Ask first**, extended here with crossings whose honest fix
+changes a contract that outlives this branch. Note: Scribe has no label automation and no
+`.github/CODEOWNERS` (`.github/` holds `workflows/`, `agents/`, and Squad `skills/`), so never recommend
+applying a label or consulting CODEOWNERS.
 
 | Reason id | The decision class | What in the diff puts it in play |
 | --- | --- | --- |
-| `dependency` | Adding or upgrading a NuGet package, or any edit to `Directory.Packages.props` | a `+` line in `Directory.Packages.props`, or a new `PackageReference` in any `.csproj` |
-| `schema` | A SQLite schema or migration change | a hunk in `src/Scribe.Core/Persistence/ScribeDatabase.cs` adding a column, a table, or a migration step |
-| `persisted-contract` | A new contract that outlives the process: a settings key, a stored file format, a pipe verb, a log line other tooling parses | a `+` property on `src/Scribe.Core/Models/AppSettings.cs`, a new `case` in `OverlayIpcServer.Dispatch` plus its `Enqueue`, a new file written under `%LOCALAPPDATA%\ScribeData` |
-| `version-release` | A version bump, a release, or a change to the signing posture | a `+` line on `<VersionPrefix>` in `Directory.Build.props`, or an edit to `build/pack.ps1`, `build/pack-msix.ps1`, `.github/workflows/release.yml`, or anything introducing a certificate store, a signing secret, or a publisher trust bundle |
-| `third-party` | A new third-party component | a vendored source file, a new library, or a new model with its own license |
-| `owner-boundary` | A change to what `Scribe.Core`, `Scribe.App`, or `Scribe.Overlay` is allowed to depend on | a new `ProjectReference`, or a UI package added to `Scribe.Core.csproj` |
-| `egress` | Anything that changes what leaves the machine | a new outbound call, a new field on a request or telemetry payload, a new diagnostics bundle entry, an edit to a fail-closed branch, or a `PRIVACY.md` claim the diff falsifies |
-| `packaging` | Anything that changes the Store package or the ARM64 payload | `build/pack-msix.ps1`, the Store identity values in `Directory.Build.props`, `.github/workflows/store.yml`, `scripts/Payload-Architecture.ps1`, the `ScribeNativeRid` selection, a `RuntimeIdentifiers` removal, or any `PlatformTarget` |
-| `prompt` | A change to a benchmark-validated prompt | an edit to `CleanupPrompt.DefaultWritingStyle` or `CleanupPrompt.DefaultFrontierPrompt` |
-
-### Why each one is not the reviewer's to clear
-
-Verified facts, so the item can state a consequence rather than a worry.
-
-- **`dependency`.** `AGENTS.md:719` puts *anything* touching `Directory.Packages.props` behind Ask
-  first, and the file itself records why in prose: `OpenAI` is held at `2.12.0`
-  (`Directory.Packages.props:75`, with the reason in the comment above it) because
-  `Microsoft.Extensions.AI.OpenAI` constrains the range and the AI packages are compiled against one
-  `OpenAI` build, so they move together; the type that needed the newer version compiled perfectly and
-  threw `MissingMethodException` at runtime. The SQLite entry is stricter still:
-  `SQLitePCLRaw.bundle_e_sqlite3` at `3.0.5` (`Directory.Packages.props:46`) is referenced directly to
-  override a transitive bundle affected by CVE-2025-6965, `AGENTS.md` lists removing that pin under
-  **Never**, and `ScribeDatabase.ExpectedSqliteVersion` (`ScribeDatabase.cs:21`, currently
-  `"3.53.4"`) asserts the exact native version at runtime, so it moves deliberately with the package or
-  startup fails.
-- **`schema`.** `AGENTS.md:722`, and P-11 in `references/patterns.md`. `SchemaVersion` stays `7`
-  (`ScribeDatabase.cs:30`) so every older build can still open the file, and new columns and indexes
-  go into `EnsureAdditiveSchema`, which runs on every open. Builds up to 0.4.2 throw at startup on a
-  `user_version` above 7 and keep running invisibly with the single-instance mutex held; from 0.4.3 a
-  newer schema raises `NewerDatabaseSchemaException`, which the app turns into "install the latest
-  version" and an exit. Either way, raising the version lands on installed machines, not on a branch,
-  because the Store and direct-download builds share one data folder.
-- **`persisted-contract`.** Once a key is in a user's `settings.json`, a verb is on the wire, or a
-  format is on disk, removing it is a compatibility event rather than an edit. This is the class
-  `architecture-fit` §0.1 escalates on, and it is why the pipe verb question belongs here even though
-  the pipe itself is one way and internal.
-- **`version-release`.** `AGENTS.md:718`. The version lives once, in `Directory.Build.props` as
-  `<VersionPrefix>` (line 6). `AGENTS.md` also records that production artifacts are intentionally
-  unsigned and that packaging must not access a certificate store, GitHub signing secrets, or a
-  publisher trust bundle, so a signing change is a posture change and not a build tweak.
-- **`third-party`.** `AGENTS.md:720-721` requires MIT compatibility and credit in the README
-  attribution section, which is `README.md:309`, "Licenses & attribution". `CONTRIBUTING.md`, under
-  "A note on the speech model & licenses", says the same. License compatibility is not a code review
-  judgment.
-- **`owner-boundary`.** Two verified structural facts make this irreversible in practice:
-  `tests/Scribe.Core.Tests/Scribe.Core.Tests.csproj:23` carries exactly one `ProjectReference`, to
-  `Scribe.Core`, and `src/Scribe.Overlay/Scribe.Overlay.csproj` carries **no** `ProjectReference` at
-  all. The overlay's isolation is the reason `OverlayPosition` and `OverlayAnchor` are two enums kept
-  in sync by name. Adding the reference would dissolve that design, and adding a UI package to
-  `Scribe.Core` would make the one testable project untestable.
-- **`egress`.** `AGENTS.md:710-711` keeps the core dictation path free of any network requirement and
-  makes online features strictly opt in; `AGENTS.md:734` forbids sending audio off the device at all.
-  P-8 is the fail-closed shape. A missed egress is the worst outcome this product can have, which is
-  why SKILL.md gives it its own trigger (e) rather than folding it into severity.
-- **`packaging`.** The Store identity values in `Directory.Build.props:15-16`
-  (`53984VeteranApps.ScribeAI`, `CN=A4B26056-B631-480C-912C-5EF24F1CBD6B`) must match Partner Center
-  exactly, and the package family name is derived from them. `AGENTS.md` also records that once a
-  submission is created through the API it must not be edited in Partner Center or the API can no
-  longer commit it, so one path per release is picked, never both. On the architecture side, Windows on
-  Arm silently emulates a mispackaged x64 binary: it does not crash, it just runs slower and drains
-  battery, which is exactly why `ScribeNativeRid` selects one native package
-  (`src/Scribe.Core/Scribe.Core.csproj:22-24`, with the `<Error>` at `:34`) and
-  `scripts/Payload-Architecture.ps1` asserts payload purity at pack time.
-- **`prompt`.** `AGENTS.md` names the default writing style the benchmark-validated optimum and records
-  that a stricter A/B regressed it. `CleanupPrompt.DefaultWritingStyle` (`CleanupPrompt.cs:46`) and
-  `DefaultFrontierPrompt` (`:142`) are shown to the model on every dictation, and the evidence for
-  moving them is a `tools/Scribe.Evals` run against `docs/model-leaderboard.md`, not a review argument.
-  `prompt-and-model` owns whether the edit is defensible; you own whether shipping it without a
-  measurement is the maintainer's call.
+| `dependency` | Adding or upgrading a NuGet package, or any edit to `Directory.Packages.props` | a `+` line in `Directory.Packages.props`, or a new `PackageReference` in any `.csproj` (`OpenAI` `2.14.0` + `Microsoft.Extensions.AI` `10.11.0` + `Microsoft.Agents.AI` `1.27.0` lockstep; `GitHub.Copilot.SDK` `1.0.14` hold; shared `onnxruntime.dll`; `SQLitePCLRaw.bundle_e_sqlite3` CVE-2025-6965 pin + `ExpectedSqliteVersion`) |
+| `schema` | A SQLite schema or migration change | a hunk in `ScribeDatabase.cs` adding a column, table, or migration step (`SchemaVersion` must stay `7`; additive changes go in `EnsureAdditiveSchema`, P-11) |
+| `persisted-contract` | A contract that outlives the process: settings key, stored file/edits/journal format, pipe verb | a `+` property on `AppSettings.cs`, a new `OverlayPipeProtocol` verb, or a new persisted file under `ScribeData` |
+| `version-release` | Version bump, release, or signing-posture change | `<VersionPrefix>` / `<VersionSuffix>` in `Directory.Build.props`, `build/pack*.ps1`, `release.yml`, or any certificate/signing step (direct artifacts are intentionally unsigned) |
+| `third-party` | A new third-party component or bundled model | a vendored file, library, or model with its own license (must be MIT-compatible and credited in `README.md` "Licenses & attribution"; model licenses require explicit maintainer acceptance) |
+| `owner-boundary` | Changing what `Scribe.Core`, `Scribe.App`, or `Scribe.Overlay` may depend on | a new `ProjectReference` (e.g. `Scribe.Overlay` referencing `Scribe.Core`) or a UI package added to `Scribe.Core.csproj` |
+| `egress` | Changing what leaves the machine or what a remote service retains/caches | a new outbound call/header/tag, diagnostics bundle change, fail-closed `store=false` / `PromptCachePolicy` / `TryHandOff` edit, or a falsified `PRIVACY.md` / `CleanupDisclosure` claim |
+| `packaging` | Changing the Store package or `win-x64` / `win-arm64` payload | `build/pack-msix.ps1`, Store identity properties in `Directory.Build.props`, `store.yml`, `Payload-Architecture.ps1`, `ScribeNativeRid`, `RuntimeIdentifiers`, or `PlatformTarget` |
+| `prompt` | Changing a benchmark-validated prompt without measurement | an edit to `CleanupPrompt.DefaultWritingStyle` or `DefaultFrontierPrompt` without `tools/Scribe.Evals` / benchmark evidence |
 
 ---
 
-## §2. The entry gate: an item starts upstream
-
-Map what synthesis handed you onto SKILL.md Step 4.5. The tag vocabulary is fixed and the other lenses
-already emit it.
+## §2. Upstream triggers and candidate shape
 
 | Upstream signal | SKILL.md trigger | Usual reason id |
 | --- | --- | --- |
-| A finding tagged `[architecture-shortcut]` (from `architecture-fit` §0.1, `overlay-process-contract`, `prompt-and-model`) | (a) | whichever of `schema`, `persisted-contract`, `dependency`, `third-party`, `version-release`, `owner-boundary`, `prompt` the shortcut names |
-| A finding tagged `[ask-first]` (from `merit` §3) | (c) | `dependency`, `schema`, `third-party`, `version-release` |
-| A finding tagged `[needs-maintainer]` (from `settings-and-persistence`) | (c) | `schema` or `persisted-contract` |
-| A finding tagged `[needs-signoff]` (from `privacy-egress` §8) | (d) | `egress` |
-| A `guardrail-erosion` 🔴 | (d) | usually `egress` or `packaging`, sometimes `dependency` for the SQLite pin |
-| A `fragile-area` 🔴, or the Design assessment blast-radius verdict **plus** a concrete risk finding, partial conversion, or fragile-area hit | (b) | the reason id of the underlying crossing; if there is none, there is no item |
-| A verified 🔴 that would change what leaves the machine | (e) | `egress` |
+| Finding tagged `[architecture-shortcut]` | (a) | `schema`, `persisted-contract`, `dependency`, `third-party`, `version-release`, `owner-boundary`, `prompt` |
+| Finding tagged `[ask-first]` (from `merit`) | (c) | `dependency`, `schema`, `third-party`, `version-release` |
+| Finding tagged `[needs-maintainer]` (from `settings-and-persistence`) | (c) | `schema` or `persisted-contract` |
+| Finding tagged `[needs-signoff]` (from `privacy-egress` or `docs-sync`) | (d) | `egress` |
+| `guardrail-erosion` 🔴 | (d) | `egress`, `packaging`, or `dependency` |
+| `fragile-area` 🔴, or Design blast-radius verdict **plus** a concrete risk finding | (b) | the underlying crossing's reason id (wide reach alone is never an item) |
+| Verified 🔴 that changes what leaves the machine | (e) | `egress` |
 
-**A blast-radius verdict on its own is not an item.** SKILL.md trigger (b) requires the co-occurring
-concrete finding, and the orchestrator drops the candidate if that finding does not survive
-verification. Wide reach with no named risk is a Design assessment sentence, not a gate.
+Severity alone is **not** a trigger: an ordinary 🔴 bug with a clear branch-local fix stays in Findings.
+Collapse duplicates by root cause. Every candidate must have four parts:
 
-**Severity is not a trigger.** A 🔴 from `win32-interop` about a discarded `SendInput` count is a
-serious defect with an obvious fix and no trade-off. It is a finding. The only severities SKILL.md
-promotes on their own are the two it names: a `guardrail-erosion` 🔴 and a `fragile-area` 🔴.
-
-Collapse duplicates by root cause exactly as findings dedup. One new `AppSettings` property that is
-also a new SQLite column and also a new thing in the diagnostics bundle is **one** item with three
-consequences, not three items.
+1. **Decision:** one sentence phrased as a choice in the maintainer's voice.
+2. **Options:** two or three options (including *ship as is*) with concrete user/install consequences.
+3. **Recommendation:** one option and one sentence why (never recommending approval while an item is open).
+4. **Why the maintainer, and what resolves it:** why a branch-local fix cannot settle the contract, and
+   what closes it (accepting the trade-off, picking an option, or dismissing as already agreed).
 
 ---
 
-## §3. The shape: a decision with options, never a defect
+## §3. Confidence bar and single-maintainer resolution
 
-Every item has four parts, in this order. Missing any one of them means it is not ready to emit.
-
-1. **The decision.** One sentence, phrased as a choice, in the maintainer's voice. Not "the schema
-   version was not bumped". Rather: "whether the pinned-history flag ships as schema v7 in this change
-   or moves to `AppSettings` so no migration is needed".
-2. **The options.** Two or three, each with its consequence stated concretely against something Scribe
-   actually promises: an existing install's settings, dictionary and history; the offline dictation
-   path; what leaves the machine; the ARM64 payload; the Store submission; the benchmark. **Ship as is
-   is always one of the options**, and its consequence is stated honestly rather than as a threat.
-3. **The recommendation.** Name one option and give one sentence of why. It is a recommendation, not a
-   prescription. Never recommend approval while the item stands: SKILL.md's gate makes the recommended
-   action `request changes` for as long as any item is open.
-4. **Why the maintainer, and what resolves it.** The test to apply: *could the author land the honest
-   fix inside this branch without changing a contract something outside this branch depends on?* If
-   yes, it is a finding and you should not have emitted it. Then say in one clause what closes the
-   item: the maintainer accepting the trade-off, directing one of the options, or dismissing the item
-   as a false positive.
-
-**Do not clone the finding text.** An item derived from a 🔴 still renders once in Findings; your item
-references its `finding_id` and adds only the decision, the options, and the recommendation.
-
-**Do not prescribe.** The maintainer has context you do not: an unlanded branch, a Store submission
-already in flight, a conversation with a user. Lay out the trade-off and let him pick.
-
----
-
-## §4. Confidence bar
-
-**Emit an open item** only when all four hold:
-
-1. **It has an upstream anchor.** A surviving finding id with one of the four tags, a named SKILL.md
-   trigger, or the Design verdict paired with a concrete risk finding.
-2. **The crossing is visible in the patch.** Name the file and quote the added or removed lines. This
-   matters most for `schema` and `persisted-contract`, where a path in `metadata.json` cannot
-   distinguish a migration from a query and cannot distinguish a new persisted key from a computed
-   property.
-3. **It sits on the §1 spine**, under a reason id you can name.
-4. **Nothing on the record already states and owns the crossing.** See §5.
-
-**Raise it as a Question instead** when any of these is true. Questions go to SKILL.md block 8, and a
-Question does not block approval.
-
-- Only a path puts it in play: `ScribeDatabase.cs` in the file list with no schema hunk,
-  `Directory.Build.props` with no `<VersionPrefix>` line, `src/Scribe.Core/Cleanup/**` with no visible
-  new outbound call.
-- The crossing is fully reversible inside the branch before merge and nothing has shipped, so the
-  author can simply undo it once asked.
-- The source finding is hedged. SKILL.md drops hedged findings in verification; do not launder one into
-  a gate by restating it as a decision.
-- You cannot name a second option. Say what you would need in order to name one.
-- The change is a local working tree or a branch with no description, so there is no record to check
-  and an "unapproved crossing" verdict would be an artifact of the target type rather than a fact about
-  the change. Name the crossing, ask whether it is intended, and let the maintainer answer in chat.
-
-**Never:**
-
-- Emit an item because a lens produced a 🔴. See §2.
-- Emit an item that reopens a decision `AGENTS.md` already closed: a language picker for the transducer
-  model, `DefaultAzureCredential`, an in-process WPF transparent pill, an MSI, NPU speech decoding,
-  lowering `SupportedOSPlatformVersion`, or the `Cognitive Services` roles on a Foundry resource. Those
-  are settled, and SKILL.md's verification step drops findings that re-derive them. Promoting one into
-  block 0 would put a settled question in front of the maintainer as if it were open.
-- Predict a build or test outcome. Three defects in one Scribe release compiled warning clean, so the
-  claim carries no weight in either direction.
-- Infer approval from a confident description, or infer its absence from a terse one. Read the record.
-- Emit more than three items, or one item per changed file, per lens, or per severity tier.
-
----
-
-## §5. Resolution, and the single-maintainer adaptation
-
-**The maintainer set.** The repository is owned by `ChrisMcKee1`. Beyond that, a cached comment or
-review whose `author_association` is `OWNER`, `MEMBER`, or `COLLABORATOR` is maintainer voice. There is
-no `.github/CODEOWNERS`; do not go looking for one.
-
-**Scribe is a single-maintainer repository, and the maintainer is usually the PR author.** That one
-fact changes the resolution rule. The usual guidance, subtract the author from the maintainer set
-because nobody approves their own PR, would make every item here permanently unresolvable. So the test
-is **acknowledgement on the record**, the same test `merit` §3 applies, not third-party permission:
-
-- **A crossing the author states and owns is a decision already made.** "Bumps `<VersionPrefix>` to
-  0.3.12 so the release workflow picks it up." "Takes the schema to v7; the column is additive and the
-  `if (current < 7)` block is in this diff." "Upgrades sherpa-onnx to 1.13.5; Apache-2.0 stays
-  satisfied and the attribution section already lists it." Do not emit an item. The boundary is working
-  exactly as designed: it exists so a crossing cannot ride along silently inside an unrelated change.
-- **A crossing nothing on the record mentions is an item**, whoever wrote it, because nothing says the
-  trade-off was weighed. A `Directory.Packages.props` bump inside a PR titled "fix overlay flicker" is
-  the canonical case.
-- **The live resolution channel is the chat session.** SKILL.md's maintainer-decision gate states that
-  only the maintainer resolves an item, by accepting the trade-off, directing the change, or dismissing
-  it as a false positive. Report status as `OPEN` and let the orchestrator carry the gate; you do not
-  resolve items and you do not treat a lens's own reasoning as resolution.
-
-**Re-review.** SKILL.md's convergence rules apply to this block too.
-
-- An item resolved in round `N-1` **stays resolved**. Do not re-emit it because the crossing is still
-  visible in `diff.patch`; the decision was made about that crossing.
-- An item whose source finding the author fixed disappears with the finding. Count it, do not relist
-  it.
-- A resolved item whose crossing **reappears** in `delta.patch` is a regression. Emit it loudly, say it
-  was resolved in round `N-1` and by what, and say what changed since.
-- Do not manufacture a new item because the skill ran again. "No new maintainer decision since round
-  N-1" is a correct and complete outcome.
-
----
-
-## §6. Choosing which three, when more survive
-
-Consolidate by root cause first; that alone usually gets the list under the cap. If more than three
-still stand, rank by:
-
-1. **Irreversibility on a user's machine.** `schema`, `persisted-contract`, and `packaging` land on
-   installed machines and on a Store submission and cannot be taken back by the next commit.
-   `dependency`, `prompt`, and `owner-boundary` are reversible before the next release.
-2. **Reach into existing installs.** A change every existing install inherits on upgrade outranks one
-   that only affects a fresh install or an opt-in path.
-3. **The severity of the surviving source finding.** A candidate resting on a verified 🔴 outranks one
-   resting on a 🟡.
-
-Emit the top three, then add exactly one line naming what you folded and why, so nothing vanishes
-silently. If your pre-consolidation list ran past five, say so plainly in that line: it is a signal that
-the change should probably be split, and that is worth the maintainer knowing.
+- **Emit an open candidate** only when it has an upstream anchor, a visible hunk in `diff.patch`, a §1
+  reason id, and **no acknowledgement on the record**.
+- **Scribe is a single-maintainer repository (`ChrisMcKee1`), and the maintainer is often the PR author**
+  (alongside collaborator `x3nc0n`). Therefore the test is **acknowledgement on the record**, not
+  third-party approval: if the PR description or commit/issue explicitly states and owns the crossing
+  (e.g. "Bumps `<VersionPrefix>` to 0.5.20", "Upgrades `OpenAI` + `Microsoft.Extensions.AI` +
+  `Microsoft.Agents.AI` together"), **do not emit an item**. Emit an item when a crossing rides along
+  unmentioned (e.g. a `Directory.Packages.props` edit inside an unrelated UI fix).
+- **Route to Questions instead** when only a file path suggests a crossing (no schema/version/outbound
+  hunk), when the target is a local working tree with no PR description to check, or when the crossing is
+  purely branch-local.
+- **Re-review convergence:** items resolved in round `N-1` stay resolved unless the crossing regressed in
+  `delta.patch`. Never reopen decisions closed in `AGENTS.md`, never predict build/test outcomes, and never
+  write U+2014 or U+2013 dashes.
 
 ---
 
 ## Output format
 
-The two candidates below are **illustrative shapes**, not live defects. `HistoryPinned` and
-`history.pinned` are invented and no such column or property exists; never cite them as exemplars.
+The candidates below are **illustrative shapes**, not live defects (`history.pinned` is invented).
 
 ```markdown
 ## Maintainer decision candidates
 
 **CANDIDATE `schema`** `finding_id: f-2` severity-sensitive: yes status: OPEN
 
-**Decision.** Whether the pinned-history flag ships as a new history column in this change, or moves
-to `AppSettings` so no schema change is needed at all.
+**Decision.** Whether the pinned-history flag ships as an additive `history` column in this change or
+lives in `AppSettings` so no SQLite schema change is needed.
 
 **Options.**
-- *Add the column additively.* Put it in `ScribeDatabase.EnsureAdditiveSchema`
-  (`src/Scribe.Core/Persistence/ScribeDatabase.cs`): probe with `PRAGMA table_info`, then
-  `ALTER TABLE history ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`, with `SchemaVersion` left at 7 so
-  older builds still open the file. Cost: older builds never see the flag, and a repair by an older
-  build can drop the column, after which pinned rows read as unpinned.
-- *Store the flag in `AppSettings` instead.* No schema change, and a first-run default in
-  `CreateDefault` rather than a property initializer. Cost: the flag lives beside the setting rather
-  than beside the row it describes, so pinning becomes a settings concern rather than a history
-  concern, and a future per-row feature would face this same decision again with more code behind it.
-- *Ship as is.* The column is added to a `CREATE TABLE` in a schema step that never reruns on an
-  upgraded install, so the column simply does not exist there. Fresh installs get it, existing
-  installs do not, and the failure is silent.
+- *Add the column in `EnsureAdditiveSchema` (P-11).* Probe `PRAGMA table_info(history)`, `ALTER TABLE`
+  with `DEFAULT 0`, and keep `SchemaVersion` at `7` so older builds still open `scribe.db`.
+- *Store pinned IDs in `AppSettings`.* Zero SQLite DDL changes; cost is keeping pinned state separate from
+  history rows and pruning.
+- *Ship as is.* Adding the column inside `SchemaV6` misses every already-installed database because
+  `Migrate` returns early at `SchemaVersion == 7`.
 
-**Recommendation.** Add the column additively. That is the shape P-11 already describes, the pin
-belongs with the row, and shipping as is is the only option with a silent failure mode.
+**Recommendation.** Add the column via `EnsureAdditiveSchema` with `SchemaVersion` kept at `7`.
 
-**Why the maintainer, and what resolves it.** `AGENTS.md:722` puts schema and migration changes behind
-Ask first because the change lands on users' installed databases and cannot be taken back once it has
-shipped; a reviewer cannot clear that and the author cannot undo it after ship. Resolves when the
-maintainer picks an option, or dismisses this as already agreed elsewhere.
+**Why the maintainer, and what resolves it.** `AGENTS.md` puts SQLite schema changes under Ask first
+because `scribe.db` is shared across upgrades and channels. Resolves when the maintainer picks an option.
 
 **CANDIDATE `dependency`** `finding_id: f-5` severity-sensitive: no status: OPEN
 
-**Decision.** Whether to move `Microsoft.Extensions.AI.OpenAI` in this change, given that it is what
-pins `OpenAI` to 2.12.0.
+**Decision.** Whether to move `Microsoft.Extensions.AI.OpenAI` in this branch alongside the `OpenAI`
+version change or drop the unmentioned package edit from this fix.
 
 **Options.**
-- *Move both together, in their own PR.* Keeps the range constraint satisfiable and keeps the version
-  move reviewable on its own. Cost: this branch waits.
-- *Drop the package change from this branch.* The rest of the change is unrelated to it and lands now.
-- *Ship as is.* Cost: the comment above the `OpenAI` entry in `Directory.Packages.props` records that
-  these versions are coupled and that the mismatch is exactly the one that compiled clean and threw
-  `MissingMethodException` at runtime, so a green build here is not evidence.
+- *Move the full `OpenAI` / `Microsoft.Extensions.AI.*` / `Microsoft.Agents.AI.*` lockstep set in a
+  dedicated PR.*
+- *Drop the `Directory.Packages.props` edit from this branch.*
+- *Ship as is.* Risk of runtime `MissingMethodException` despite a clean build.
 
-**Recommendation.** Drop the package change from this branch. Nothing else in the diff needs it, and a
-dependency move is worth its own description.
+**Recommendation.** Drop the package edit from this branch and move the lockstep set separately.
 
-**Why the maintainer, and what resolves it.** `AGENTS.md:719` puts anything touching
-`Directory.Packages.props` behind Ask first, and the description does not mention a package at all.
-Resolves when the maintainer states the intent, or splits it out.
-
-Consolidated: a third candidate (`persisted-contract`, the new settings key) shares its root cause with
-`schema` above and is folded into it.
+**Why the maintainer, and what resolves it.** `AGENTS.md` puts `Directory.Packages.props` under Ask first,
+and the PR body does not mention any package change. Resolves when the maintainer states the intent or
+splits it out.
 
 Emitted 2 maintainer decision candidates; 2 open, 0 already resolved.
 ```
 
-**Clean pass line**, when nothing fires, exactly this and nothing padded around it:
+**If clean:**
 
 > No maintainer decision required: this change crosses no AGENTS.md Ask first boundary, adds no
 > persisted contract, moves no owner boundary between Core, App and Overlay, changes nothing about what
 > leaves the machine, leaves the Store package and the ARM64 payload alone, and does not touch a
 > benchmark-validated prompt.
-
-A clean pass is the ordinary outcome here and it is a real result. Do not pad it into an item.
-
----
-
-## Exceptions: do not emit an item for any of these
-
-- **An acknowledged crossing.** See §5. The test is acknowledgement on the record, not permission from
-  a third party, because the maintainer is usually the author.
-- **A defect the author can fix in the branch.** A new `List<T>` on `AppSettings` missing from `Clone`,
-  a secret without `[JsonConverter(typeof(DpapiProtectedStringConverter))]`, a discarded `SendInput`
-  return, a `case` in `OverlayIpcServer.Dispatch` with no sender. Those are real findings with obvious
-  fixes and no trade-off to weigh.
-- **"Move this decider into `Scribe.Core` with a test".** `AGENTS.md` already decided that; it is
-  `core-app-layering`'s ordinary finding. It becomes an `owner-boundary` item only when the diff
-  changes what a project may **depend on**, which is a different thing entirely.
-- **A settled decision.** The list in §4. Re-opening one is drift, not adjudication.
-- **A `Directory.Build.props` edit that does not touch `<VersionPrefix>`.** That file also carries Store
-  identity and shared package metadata. Route it to `packaging` only when it touches the Store identity
-  values at lines 15-16, and to nothing at all otherwise.
-- **A prerelease NuGet the body already justifies.** `CONTRIBUTING.md` asks the PR to call out a
-  prerelease and say why it is needed; a body that does so has cleared the boundary.
-- **The release PR itself.** A change whose entire subject is the version bump has stated the decision
-  in its title. Do not emit `version-release` for it.
-- **A test-only or comment-only diff.** Nothing on the spine can cross there. Docs-only diffs are the
-  same, with one exception: an edit that changes what `PRIVACY.md` **promises** is an `egress` item even
-  with no code in the diff, because the published claim is the commitment.
-- **A stale document.** `docs-sync` owns "the docs and the code disagree". It reaches you only when the
-  stale document is `PRIVACY.md` and the stale sentence is now false, which `privacy-egress` tags
-  `[needs-signoff]`.
-- **"Should this have had an issue first?"** `CONTRIBUTING.md` asks for an issue only on something
-  large, and `merit` already handles it as a Question. That is not a gate.
-- **A candidate whose source finding verification dropped.** The orchestrator joins the two sets, but do
-  not spend a slot on a candidate resting on a finding you can already see is hedged or unsubstantiated.
-- **An ungated rollout with no named risk.** Reach is not a trade-off. See §2.
-- **Coverage gaps.** A matched lens that failed to run is a `coverage=incomplete` line in the Summary,
-  which SKILL.md already handles. It is not a maintainer decision.
 
 ---
 
@@ -413,8 +167,3 @@ End your output with this exact line, on its own, with nothing after it:
 ```
 [[agent-done:maintainer-decision findings=<n> coverage=complete]]
 ```
-
-`<n>` is the number of findings you rendered, `0` on a clean pass. Use `coverage=incomplete` and name
-the gap in one trailing clause when you could not read `diff.patch`, or when the diff referenced files
-you needed for context and could not open. SKILL.md Step 3 counts a lens as "results used" only when
-this line is present, so a clean pass still emits it.

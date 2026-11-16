@@ -9,10 +9,9 @@ hand-roll a parallel one.
 Most of these shapes exist because the alternative shipped a bug. Where that is true the entry says so,
 because the incident is the argument.
 
-**Staleness guard.** Exemplars move and line numbers drift. Before citing one in a finding, `Grep` for
-the named symbol to confirm it still exists. If it is gone, find the current exemplar or drop the
-citation. A dead citation in a review is worse than no citation. Line numbers below were correct when
-this file was written; treat them as a hint and the symbol name as the anchor.
+**Staleness guard.** Exemplars move and line numbers drift. Before citing one in a finding, use `grep`
+for the named symbol to confirm it still exists. If it is gone, find the current exemplar or drop the
+citation. A dead citation in a review is worse than no citation. Treat the symbol name as the anchor.
 
 **Reuse is a default, not a law.** Diverging is correct when the situation genuinely differs. Hard-flag
 only a clean one-to-one match with no contextual reason to differ; otherwise raise it as a Question.
@@ -34,16 +33,18 @@ rubric.
   input, calls the Core type, and renders the result. The Core type gets a test; the window gets none
   and needs none.
 - **Exemplars:** `DictionaryEntryBuilder.Build` (`src/Scribe.Core/Settings/DictionaryEntryBuilder.cs`),
-  with its `readonly record struct Row` and `Result` carrying `DuplicateIndex`, called from
-  `src/Scribe.App/Settings/SettingsWindow.xaml.cs` (around line 4280). Siblings that follow exactly the
-  same shape: `SnippetBuilder`, `ProfileBuilder`, `DictionaryImportMerger.Merge`,
-  `DictionaryLibraryOverlapAnalyzer`, and `QuickDictionaryAdd` (`Tokenize`, `Toggle`, `Select`, `Build`,
-  `Apply`), which `src/Scribe.App/QuickAdd/QuickAddWindow.xaml.cs` describes in its own header as
-  "the surface" over decisions that live in Core.
+  with its `readonly record struct Row` and `Result` carrying `DuplicateIndex`, called from the
+  `SettingsWindow` partial classes (`src/Scribe.App/Settings/SettingsWindow*.cs`). Siblings following the
+  same shape include `SnippetBuilder`, `ProfileBuilder`, `DictionaryImportMerger.Merge`,
+  `LibraryWorkspace`, `LibraryEditor`, `LibraryImportPlanner`, `WordPackSaveProtocol`,
+  `HotkeyCaptureSession`, `StoredSettingsReapply`, `AiRequestConsent`, `AccentContrastPlanner`, and
+  `QuickDictionaryAdd` (`Tokenize`, `Toggle`, `Select`, `Build`, `Apply`), which
+  `src/Scribe.App/QuickAdd/QuickAddWindow.xaml.cs` describes in its header as "the surface" over
+  decisions that live in Core.
 - **Not:** duplicate detection, trimming rules, merge planning, or preset selection written inline in a
-  `.xaml.cs`. `AGENTS.md` names this by name: *"Do not let logic drift back into the code-behind; that
-  is a recurring smell."* `SettingsWindow.xaml.cs` is already more than 5,000 lines, which is precisely
-  why the next decision must not land there.
+  `.xaml.cs`. `AGENTS.md` names this directly: *"Do not let logic drift back into the code-behind; that
+  is a recurring smell."* The `SettingsWindow*.cs` partials are adapters over Core deciders, and new
+  decisions must land in `Scribe.Core` with tests.
 - **Tell:** a new `private bool Validate...` or `private List<...> Build...` method in a `.xaml.cs` with
   no corresponding test. Ask what the pure input and output types would be; if you can name them, the
   method belongs in Core.
@@ -54,11 +55,14 @@ rubric.
   entry, one formatting pass, one normalization step.
 - **Use:** expose a narrow entry point on the real implementation and call it. Take the same
   normalization, the same compiled matcher, the same guards.
-- **Exemplar:** `TextPostProcessor.ApplyRule` (`src/Scribe.Core/PostProcessing/TextPostProcessor.cs`,
-  around line 278). Its doc comment states the reasoning outright: it exists so the quick add popup can
-  repair the transcript a correction came from, and it *"deliberately calls the real implementation
-  rather than reproducing it, because a private copy of the matcher drifts silently: it would hand the
-  user a 'corrected' transcript that disagrees with what their very next dictation actually produces."*
+- **Exemplar:** `TextPostProcessor.ApplyRule` (`src/Scribe.Core/PostProcessing/TextPostProcessor.cs`).
+  Its doc comment states the reasoning outright: it exists so the quick add popup can repair the
+  transcript a correction came from, and it *"deliberately calls the real implementation rather than
+  reproducing it, because a private copy of the matcher drifts silently: it would hand the user a
+  'corrected' transcript that disagrees with what their very next dictation actually produces."*
+  Siblings: `CleanupPrompt.IsVocabularyReplacement` and `CleanupPrompt.ComposeVocabulary` (shared across
+  dictation cleanup, `GlossaryHint`, and `UsageAnalyzer.TermUsage.Shareable`), and `CleanupDisclosure`
+  (bound directly in XAML via `{x:Static cleanup:CleanupDisclosure.*}`).
 - **Not:** a small local regex or string replace in the calling window that "does the same thing". It
   will not, the moment the real matcher changes.
 - **Tell:** a new `Regex` or `string.Replace` in `Scribe.App` that operates on transcript text.
@@ -75,14 +79,14 @@ rubric.
   (`src/Scribe.Core/Infrastructure/ResilientEvent.cs`). It walks the invocation list itself, so a throw
   from one subscriber is reported and the remaining subscribers still run. The error callback is itself
   wrapped, because a logger that throws must not stop the fan-out it was only meant to describe.
-- **Exemplar:** `DictationController.Raise` (`src/Scribe.App/Dictation/DictationController.cs`, around
-  line 1153) for `StateChanged`. Pinned by `tests/Scribe.Core.Tests/ResilientEventTests.cs`.
+- **Exemplar:** `DictationController.Raise` (`src/Scribe.App/Dictation/DictationController.cs`) for
+  `StateChanged`, paired with `PresentationRelay` and `UiThreadDispatch` (`src/Scribe.Core/Lifecycle/`)
+  so dictation never blocks on `Dispatcher.Invoke` and stale revisions never overwrite newer states.
+  Pinned by `tests/Scribe.Core.Tests/ResilientEventTests.cs`.
 - **Not:** `Handler?.Invoke(x)` inside a single `try`/`catch`. It looks safe and is not: .NET stops
   walking the invocation list at the first exception. In production a disposed tray icon threw out of
   the first dictation-state subscriber, and every later subscriber, including the recording overlay,
-  froze on whatever state it last saw while dictation kept working. Note that the sibling
-  `CleanupFailed?.Invoke` a few lines above still uses the plain shape; do not copy that line for a new
-  multicast event.
+  froze on whatever state it last saw while dictation kept working.
 - **Tell:** a new `public event Action<T>` in Core or App raised with `?.Invoke`.
 
 ### P-4: Diagnostics that cannot take down the thing they describe
@@ -93,13 +97,17 @@ rubric.
   `IOException`, and swallow. Both processes append to the same file
   (`%LOCALAPPDATA%\ScribeData\logs\scribe-<yyyyMMdd>.log`) so dictation and overlay events interleave on
   one timeline, and a plain `File.AppendAllText` throws a sharing violation.
-  - Exemplars: `FileLoggerProvider.Append` (`src/Scribe.App/Infrastructure/FileLoggerProvider.cs`,
-    around line 86) and `OverlayLog.Write` (`src/Scribe.Overlay/Logging/OverlayLog.cs`, around line 53).
+  - Exemplars: `FileLoggerProvider` -> `BackgroundLogWriter` -> `DailyLogFile`
+    (`src/Scribe.App/Infrastructure/FileLoggerProvider.cs`, `src/Scribe.Core/Diagnostics/BackgroundLogWriter.cs`,
+    `DailyLogFile.cs`) and `OverlayLog.Write` (`src/Scribe.Overlay/Logging/OverlayLog.cs`), plus
+    `AppendOnlyFile.Open` / `AppendOnlyLogMode.DecideForLaunch` under `PerfFlags.AppendOnlyLog`.
 - **Use, on the caller side:** route any diagnostic near a destructive `catch` through a local
-  non-throwing `TryLog`.
-  - Exemplar: `OverlayProcessClient.TryLog` (`src/Scribe.App/Overlay/OverlayProcessClient.cs`, around
-    line 362). Its comment records the incident: the launch log line previously sat inside the `try`, a
-    transient log-file lock threw there, the surrounding `catch` read that as a launch failure and called
+  non-throwing `TryLog`, and log exceptions by shape (`FailureShape.Describe` / `DescribeWithStack`,
+  enforced across App and provider-facing Core by `LogPrivacyGuardTests` and `LogCallScanner`), never by
+  passing the exception object or reading `.Message` or `.ToString()`.
+  - Exemplar: `OverlayProcessClient.TryLog` (`src/Scribe.App/Overlay/OverlayProcessClient.cs`). Its
+    comment records the incident: the launch log line previously sat inside the `try`, a transient
+    log-file lock threw there, the surrounding `catch` read that as a launch failure and called
     `KillProcess()`, and that was a root cause of the intermittent "pill disappears" regressions.
 - **Not:** a logging call inside a `catch` that kills a process, tears down a window, or disables a
   feature. Not a log writer that opens without `FileShare.ReadWrite`. Not a retry loop that rethrows
@@ -122,9 +130,12 @@ rubric.
 - **Exemplar:** `TextInjector.RunOnStaThread<T>` (`src/Scribe.Core/TextInjection/TextInjector.cs`, around
   line 578). `Win32Clipboard` (`src/Scribe.Core/TextInjection/Win32Clipboard.cs`) states the requirement
   in its own summary: *"All methods must be called on an STA thread that owns a message queue."*
-- **Also part of this shape:** open the clipboard with bounded retries rather than once, restore what was
-  there afterward, and check the foreground window is still the expected one before and after, because
-  the target can change mid-sequence.
+- **Also part of this shape:** open the clipboard with bounded retries rather than once, verify ownership
+  via `ClipboardBorrower` (a 16-byte random receipt in Scribe's registered format plus sequence-number
+  validation while holding the clipboard lock; `keepWholeClipboard: true` and `MarkdownClipboardHtml` for
+  Markdown paste), type trailing spaces after paste (`SplitTrailingSpaces`), check the foreground window
+  is still the expected one before and during injection, and never paste into `RemoteClientProcesses`
+  (always type at `TypingPace` with `KeyScanCodes`).
 - **Not:** calling `Win32Clipboard` from a thread pool thread, an `async` continuation, or the WPF
   dispatcher without an STA guarantee. Not `Thread.Start()` without `Join()`, which turns a synchronous
   contract into a race.
@@ -138,16 +149,19 @@ rubric.
   the verb, switches on it, parses the argument, and on an unrecognized verb or argument logs a warning
   and ignores it rather than throwing. Wire tokens for a position are the **value names of two enums
   kept in sync by name**, because the overlay deliberately holds no reference to `Scribe.Core`.
-- **Exemplars:** `OverlayIpcServer.Dispatch` (`src/Scribe.Overlay/Ipc/OverlayIpcServer.cs`, around line
-  87) handling `RECORDING`, `WARNING`, `PROCESSING`, `FAILED`, `HIDE`, `METER`, `POSITION`, `WARMUP`,
-  `EXIT`; the sending side in `src/Scribe.App/Overlay/OverlayProcessClient.cs`. The enum twins are
-  `Scribe.Core.Models.OverlayPosition` (`src/Scribe.Core/Models/Enums.cs`, around line 29) and
-  `Scribe.Overlay.OverlayAnchor` (`src/Scribe.Overlay/OverlayAnchor.cs`), whose own doc comment records
-  the contract.
-- **Also part of this shape:** the client replays the applied `POSITION` right after every pipe
-  reconnect, so a relaunched overlay keeps the user's anchor; high-frequency `METER` commands are
-  deliberately not logged; and the overlay is launched into an OS Job Object with kill-on-close **and**
-  runs a `--parent` PID watchdog, so the pill can never outlive the engine.
+- **Exemplars:** `OverlayPipeProtocol` (`src/Scribe.Core/Overlay/OverlayPipeProtocol.cs`) defines all twelve
+  pipe verbs (`WARMUP`, `RECORDING`, `WARNING`, `PROCESSING`, `TYPED`, `TYPEDWITHOUTCLEANUP`,
+  `NOTHINGTYPED`, `PARTLYTYPED`, `HIDE`, `METER`, `POSITION`, `EXIT`); `OverlayProcessClient` builds every
+  line through `OverlayPipeProtocol`; `OverlayIpcServer.Dispatch` (`src/Scribe.Overlay/Ipc/OverlayIpcServer.cs`)
+  parses them; and `OverlayPipeProtocolTests` pins verb and outcome parity plus the by-name enum twins
+  `Scribe.Core.Models.OverlayPosition` and `Scribe.Overlay.OverlayAnchor`. Pure shared calculations
+  (`PillGeometry`, `PillTextScale`, `PillLevelBars`, `AppendOnlyFile`) are compiled into `Scribe.Overlay`
+  as linked `Compile` items rather than adding a `ProjectReference` to `Scribe.Core`.
+- **Also part of this shape:** `OverlayHelperLifetime` (in Core) owns keep-resident working-set trim,
+  suspend, backoff, and outcome hold timing; the client replays `POSITION` and `_desired.ReplayLine`
+  (never replaying transient outcomes) after reconnect; high-frequency `METER` commands are never logged;
+  `AppWindow.Show(activateWindow: false)` never steals focus; and the overlay runs inside a
+  `KILL_ON_JOB_CLOSE` Job Object **and** a `--parent` PID watchdog.
 - **Not:** adding a value to one enum and not the other, which makes the overlay silently ignore the
   command with only a warning in the log. Not a two-way or request/response protocol; the pipe is one
   way by design. Not throwing on an unknown verb, which would kill the reader loop.
@@ -162,21 +176,22 @@ rubric.
 
 - **When:** adding a property to `src/Scribe.Core/Models/AppSettings.cs`.
 - **Use:** three separate decisions, each of which has bitten before.
-  1. **First-run opt-ins live in `CreateDefault`, not in the property initializer.** `CreateDefault`
-     (around line 296) is deliberately distinct from `new AppSettings()`. `EnabledDictionaryLibraryIds`
-     documents why: deserialization fills the property initializer for any key the stored JSON does not
-     contain, so a default expressed as an initializer silently opts an existing install into a library
-     that did not exist when it was installed.
-  2. **A reference-typed property is deep copied in `Clone`** (around line 301). `Clone` starts from
-     `MemberwiseClone` and then explicitly rebuilds `Profiles` and `EnabledDictionaryLibraryIds`, because
-     a shared list means an edit in the settings editor mutates the snapshot the dictation loop is
-     reading. A plain value type needs nothing and the code says so.
+  1. **First-run opt-ins live in `CreateDefault`, not in the property initializer; unreadable-load
+     fallbacks use `CreateForExistingInstall`.** `CreateDefault` seeds `DefaultDictation` (Page Down),
+     `DefaultDictationOnly` (Page Up), and `DefaultLibraryIds`, while property initializers preserve what
+     existing installs without the key expect (`HotkeyBinding.Legacy`, empty `EnabledDictionaryLibraryIds`).
+     Deliberate universal defaults approved by the maintainer (`AddSpaceAfterDictation = true`,
+     `AppAwareFormattingEnabled = true` with one-shot `AppAwareFormattingRollout`,
+     `AccentSource = AccentSource.Scribe`, `AiCleanupPromptCaching = true`) document why in XML remarks
+     and use tolerant converters so unknown future enum strings never break `SettingsRepository.Load`.
+  2. **A reference-typed property is deep copied in `Clone`**, and carried through `DraftSnapshot`,
+     dirty tracking, `SettingsSavePreflight`, and `StoredChangeAcknowledgement`. `Clone` starts from
+     `MemberwiseClone` and explicitly rebuilds `Profiles` (with `ProcessNames` and formatting/delivery
+     overrides) and `EnabledDictionaryLibraryIds`.
   3. **A secret carries `[JsonConverter(typeof(DpapiProtectedStringConverter))]`**
      (`src/Scribe.Core/Security/DpapiProtectedStringConverter.cs`), which keeps it encrypted at rest under
-     the current user with extra entropy, exposes the plaintext only in memory, and returns null rather
-     than throwing when decryption fails so a settings file copied between machines prompts re-entry
-     instead of bricking load. The Azure API key, the client secret, and the OpenAI-compatible key all
-     use it.
+     the current user with extra entropy, exposes plaintext only in memory, and returns null rather than
+     throwing when decryption fails. All four API-key and client-secret properties on `AppSettings` use it.
 - **Not:** a new `List<T>` or `Dictionary<,>` property left out of `Clone`. Not a default expressed only
   as `= true`. Not a secret stored in the clear, in an environment variable, in a `.env`, or in a script.
   `AGENTS.md` is explicit that persistent `AZURE_CLIENT_*` variables would hijack every other Azure tool
@@ -190,18 +205,17 @@ rubric.
 - **Use:** set the safe value explicitly, and when the code meets a shape it does not recognize, return
   the safe value rather than passing the unknown shape through.
 - **Exemplar:** `TextCleanupService.WithStoredOutputDisabled`
-  (`src/Scribe.Core/Cleanup/TextCleanupService.cs`, around line 1854). The Azure Responses API defaults
-  to `store=true`, which would retain every cleaned dictation server side. Scribe sets
-  `StoredOutputEnabled = false` through `ChatOptions.RawRepresentationFactory` on both the project and
-  account paths, and when the inner factory returns something that is not a `CreateResponseOptions` it
-  builds a fresh one with the flag off rather than forwarding the unknown object. The comment states the
-  rule: *"Fail CLOSED."* Pinned by `tests/Scribe.Core.Tests/TextCleanupServiceTests.cs`, which asserts
-  the flag is false even when a caller-supplied factory tries to set it true.
-- **Related shapes in this family:** `SessionBanner`, whose contents are asserted secret-free by
-  `SessionBannerTests.Banner_never_contains_a_secret`; `DiagnosticsBundle`, which ships the retained logs
-  and a report and never `scribe.db`, because the database holds every dictation and the saved API keys;
-  and the usage-insight path, which sends aggregate totals and dictionary-covered term labels only, never
-  a mined novel term.
+  (`src/Scribe.Core/Cleanup/TextCleanupService.cs`). Chosen per surface (`IChatClient.GetService`):
+  Responses (Microsoft Foundry and custom `/responses`) always sets `StoredOutputEnabled = false`, Chat
+  Completions never sets `store` true, unknown raw representations fail closed to Responses options with
+  storage off, and `PromptCachePolicy.TurnOff` fails closed on 400 rather than retrying without the
+  option. Pinned by `CleanupStoredOutputWireTests`, `StoredOutputWireContractTests`,
+  `CustomApiStyleTests`, and `PromptCacheWireTests`.
+- **Related shapes in this family:** `VocabularyHandOffHandler` and `GitHubCopilotCleanupAgent` enforcing
+  `ILibraryVocabularySource.TryHandOff` on every outbound request; `CleanupVocabularyMode.Mentioned`
+  (`VocabularyMentions.Select`) with zero vocabulary on readiness probes (`CleanupProbeVocabularyTests`);
+  `FeatureUsageTokenHandler` stripping Agent Framework's `(feat=v1.<hex>)` token; `SessionBannerTests`;
+  `DiagnosticsBundle` (never `scribe.db`); and `UsageInsight` (`Covered && Shareable` labels only).
 - **Not:** relaxing the fail-closed branch because a dependency bump made it look unreachable. Not adding
   a new provider path that skips the wrapper. Not logging a transcript, a prompt, a dictionary entry, a
   snippet body, an endpoint, or a key. Report shapes instead: counts, enum names, `configured` or
@@ -215,11 +229,11 @@ rubric.
 - **Use:** a single factory that everything goes through, holding one cached instance keyed on a
   normalized request, plus a public `Invalidate()` that every identity-changing path must call.
 - **Exemplar:** `AzureCredentialFactory` (`src/Scribe.Core/Cleanup/AzureCredentialFactory.cs`):
-  `Create(AzureCredentialRequest)` (around line 43) returns the cached credential while the normalized
-  request is unchanged, and `Invalidate()` (around line 64) drops it. `AzureCredentialInvalidation` is
-  the public front door. The reason is in the comments: Azure.Identity caches tokens per credential
-  instance and Microsoft warns that an app which does not reuse them may meet HTTP 429 throttling, while
-  a stale cache after a settings change means the next request authenticates as the previous identity.
+  `Create(AzureCredentialRequest, bool cacheCliTokens)` returns the cached credential while the normalized
+  request is unchanged, wraps `AzureCliCredential` in `CachingCliTokenCredential` for serving cleanup
+  clients (Settings discovery and Test connection stay uncached), and `Invalidate()` (fronted by
+  `AzureCredentialInvalidation`) drops cached instances and moves the token-cache version so identity
+  changes apply immediately.
 - **Also part of this shape:** `AzureCliProcessCoordinator` serializes Azure CLI token requests, because
   `az` shares one token cache and concurrent processes made it time out on multi-tenant machines; a
   service principal never shells out and correctly skips that path.
@@ -306,11 +320,13 @@ rubric.
   not `win-x64` or `win-arm64`, and exactly one of `org.k2fsa.sherpa.onnx.runtime.win-x64` or
   `...win-arm64` is referenced under a condition on it. Referencing both drops two different-architecture
   `onnxruntime.dll` files into one folder.
-- **Also part of this shape:** every project declares `RuntimeIdentifiers=win-x64;win-arm64` and **none**
-  pins `PlatformTarget`, because a hardcoded `x64` silently produces an x64 assembly inside an ARM64
-  publish. The overlay is a separate process and must be built with `-p:Platform=x64` or
-  `-p:Platform=ARM64` matching the app, since WinUI has no AnyCPU story. `scripts/Payload-Architecture.ps1`
-  asserts payload purity at pack time by reading the PE COFF machine field, and both installers call it.
+- **Also part of this shape:** every Windows project (except `Scribe.Overlay`, which derives its RID from
+  `<Platforms>x64;ARM64</Platforms>`) declares `RuntimeIdentifiers=win-x64;win-arm64` and **none** pins
+  `PlatformTarget`, because a hardcoded `x64` silently produces an x64 assembly inside an ARM64 publish.
+  The overlay is a separate process built with `-p:Platform=x64` or `-p:Platform=ARM64` matching the app.
+  `scripts/Payload-Architecture.ps1` asserts payload purity at pack time by reading the PE COFF machine
+  field, `scripts/Model-Manifest.ps1` pins bundled speech models and their `ModelLicenses` notices, and
+  changes to `Scribe.Core` domain behavior check `macos/Scribe` and `macos/PORTING-PLAN.md` for parity.
 - **Not:** referencing both native packages. Not adding `PlatformTarget`. Not a silent fallback for an
   unsupported RID; Windows on Arm emulates a mispackaged x64 binary rather than crashing, so this failure
   is invisible without the explicit error and the payload check.

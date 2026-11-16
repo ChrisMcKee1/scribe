@@ -16,12 +16,12 @@ them, and to protect the measurement machinery that made the answers knowable.
 
 **Severity cap:** 🔴 Critical. **Findings cap:** 4.
 
-**Data on disk.** `diff.patch` is authoritative for what changed. Read it first. Use Read and Grep
-freely for surrounding context; the branch may not be checked out, so never use Read to confirm that
-a diff line exists on disk. `AGENTS.md` sections "What the recogniser is NOT (measured, 0.3.11)",
-"Architecture support (x64 and ARM64)", and "NPU: used for cleanup, deliberately not for speech" are
-the source record for most of this lens, and the source files carry the same reasoning in `why`
-comments. Read the comment before judging the code under it.
+**Data on disk.** `diff.patch` (or `delta.patch` on a re-review) in `artifacts/scribe-code-review/<run-id>/`
+is authoritative for what changed. Read it first with `view`. Use `view`, `grep`, and `glob` freely for
+surrounding context; the branch may not be checked out, so never use `view` to confirm that a diff line
+exists on disk. `AGENTS.md` sections "What the recogniser is NOT", "Speech models that ship with the app",
+"Transcription engine (one gate, cancellation, chunk seams)", "Architecture support (x64 and ARM64)", and
+"NPU: used for cleanup, deliberately not for speech" are the source record for this lens.
 
 ---
 
@@ -31,21 +31,23 @@ Before you flag or clear anything, confirm you can name each of these. If one is
 rather than concluding. A verdict about a signal path built without reading the path is exactly the
 mistake this lens exists to prevent.
 
-1. **Which stage moved.** Capture (`AudioCaptureService`), downmix and resample
-   (`MonoDownmixSampleProvider`, `WdlResamplingSampleProvider`), VAD trim (`VadService.Trim`), decode
-   (`TranscriptionService.Transcribe`), or the post-decode collapse detectors in
-   `src/Scribe.App/Dictation/DictationController.cs`.
+1. **Which stage moved.** Capture (`AudioCaptureService`, `CaptureBufferPool`, `CaptureScratchPool`),
+   downmix and resample (`MonoDownmixSampleProvider`, `WdlResamplingSampleProvider`), VAD trim
+   (`VadService.Trim`), chunk planning and decode (`TranscriptionChunker`,
+   `TranscriptionService.Transcribe`), or the post-decode collapse detectors in `DictationController`.
 2. **What the stage is fed and what it returns.** The pipeline is fixed: WASAPI native mix format, to
-   mono, to 16 kHz float (`AudioCaptureService.TargetSampleRate`, line 18), to Silero VAD at exactly
-   16 kHz with a 512 sample window (`VadService.cs:12-19`), to one unsegmented span handed to
-   sherpa-onnx. A change that quietly alters a rate, a channel count, or a window size breaks a
-   consumer that asserts it.
-3. **Whether a measurement already answers the question.** `tools/Scribe.AsrCheck` has three
-   characterisation modes (`--long-audio`, `--channel-mix`, `--degraded`,
-   `tools/Scribe.AsrCheck/Program.cs:114-127`). If the diff's rationale is an empirical claim about
-   the recogniser, the tool that measures that claim is right there.
+   mono, to 16 kHz float (`AudioCaptureService.TargetSampleRate`), to Silero VAD at 16 kHz with a
+   512-sample window (`VadService.cs`), to `TranscriptionChunker` (jointly planned quiet seams in chunks
+   of at most 30 s, decoded sequentially under `_gate`, never in a padded batch, with cooperative
+   cancellation between chunks throwing `OperationCanceledException` rather than returning partial text).
+3. **Whether a measurement already answers the question.** `tools/Scribe.AsrCheck` has characterisation
+   and scenario modes (`--long-audio`, `--channel-mix`, `--degraded`, `--threads`, `--scenarios`). If the
+   diff's rationale is an empirical claim about the recogniser, the tool that measures that claim is
+   right there.
 4. **What proves the change works.** The unit suite cannot prove a native or model change works. See
-   §5.
+   §5. Also remember that speech recognition and Foundry Local share one `onnxruntime.dll` in-process
+   (Foundry Local 2.1.0's ONNX Runtime 1.30.0 currently outranks sherpa-onnx 1.13.8's 1.28.2; sherpa-onnx
+   2.0.0 is held because `B-48k-stereo-float-foreign-right` decoded empty).
 5. **What `main` does today**, so you do not attribute pre-existing behavior to this diff.
 
 ---
@@ -211,13 +213,14 @@ that it will not.
 
 Related invariants worth checking on the same diff:
 
-- **Models are pinned by SHA-256 in `scripts/Model-Manifest.ps1`** (lines 2-8), and that file is the
-  CI cache key: `key: models-${{ hashFiles('scripts/Model-Manifest.ps1') }}`
-  (`.github/workflows/ci.yml:54-59`). A model changed in `Download-Models.ps1` or in
-  `TranscriptionModelCatalog` (`TranscriptionModel.cs:53-71`, which carries its own copy of the same
-  four hashes) without the manifest moving means CI keeps serving the old weights from cache. A model
-  changed in the manifest without the catalog, or the reverse, is a partial conversion: flag the
-  survivor.
+- **Bundled models, archives, and licenses are pinned in `scripts/Model-Manifest.ps1`**, which is the CI
+  cache key (`key: models-${{ hashFiles('scripts/Model-Manifest.ps1') }}`). The multilingual default sits
+  at the root of `models\`, and English-only Parakeet Unified 0.6B (`parakeet-unified-en-0.6b-int8`,
+  NVIDIA Open Model License) lives in `models\parakeet-unified-en-0.6b-int8\` with its required license
+  and Notice files committed under `src/Scribe.App/ModelLicenses\` (`Test-ScribeRuntimeModels -RequireLicenses`
+  and `TranscriptionModelCatalogTests` hold them in step). CI runs `AsrCheck` on both bundled models and
+  runs `--scenarios --quick`. A new bundled model under a license other than CC-BY-4.0, MIT, or
+  Apache-2.0 requires explicit maintainer approval.
 - **`src/Scribe.App/models` is gitignored** (`.gitignore:16`) and AGENTS.md lists committing the
   downloaded models under "Never". A diff adding weights to the tree is 🔴 Critical.
 - **The native runtime is architecture-specific and both packages use the same DLL file names.**

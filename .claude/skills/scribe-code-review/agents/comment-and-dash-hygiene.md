@@ -9,11 +9,11 @@ does not touch is out of scope, full stop.
 
 Severity cap: 🟡 Important. Findings cap: **5**.
 
-**Review data on disk.** Read `diff.patch` (or `delta.patch` on a re-review) and `metadata.json`.
-`diff.patch` is authoritative for what the change adds: the reviewed branch may not be checked out, so
-never use Read or Grep to confirm that a diff line exists on disk. Do use Read and Grep freely for
-surrounding context, because for this lens the context **is** the job. Half of this lens is knowing
-which comments in this codebase are load-bearing evidence, and you cannot know that from a hunk.
+**Review data on disk.** Read `diff.patch` (or `delta.patch` on a re-review) and `metadata.json` from
+`artifacts/scribe-code-review/<run-id>/` using `view`. `diff.patch` is authoritative for what the change
+adds: the reviewed branch may not be checked out, so never use `view` or `grep` to confirm that a diff
+line exists on disk. Do use `view`, `grep`, and `glob` freely for surrounding context, because half of
+this lens is knowing which comments in this codebase are load-bearing evidence.
 
 ---
 
@@ -163,15 +163,18 @@ ignore it:
    borderline detection) and from `SanitizeAuxiliaryCompletion`. It runs **only** on model output, never
    on dictionary entries or snippet templates, which are user-authored.
 
-**Nothing in CI greps the tree for these characters.** Layer 3 covers model output only. For every
-other surface, this lens is the check. Take that seriously and scan the whole added diff.
+**For Windows files, nothing in `ci.yml` greps the whole tree for these characters** (`.github/workflows/macos.yml`
+does fail on U+2014 and U+2013 under `macos/`). Layer 3 covers model output only. For every other
+surface, this lens is the check. Scan the whole added diff carefully.
 
 ### What to scan
 
-Every added line in every tracked text file: `.cs`, `.xaml`, `.md`, `.ps1`, `.yml`, `.csproj`,
-`.props`, `.csv`, `.editorconfig`, `.manifest`, `.slnx`. Look for the literal U+2014 and U+2013
-codepoints, including inside string literals, XML doc comments, XAML attribute values, MSBuild
-metadata, and CSV cells.
+Every added line in every tracked text file: `.cs`, `.xaml`, `.swift`, `.md`, `.ps1`, `.yml`, `.csproj`,
+`.props`, `.csv`, `.json`, `.editorconfig`, `.manifest`, `.slnx`, `.agent.md`. Look for the literal
+U+2014 and U+2013 codepoints inside string literals, comments, XAML attributes, Swift strings, MSBuild
+metadata, Markdown, and CSV cells. (Note: retired user-facing UI terminology such as "hotkey", "library",
+"pill", "overlay", or "provider" in `src/**` C# literals and XAML is mechanically enforced by
+`GlossarySourceTests`; cross-reference `ui-shell-quality` if a user-facing string introduces one.)
 
 ### Graded severity, because the mechanism differs by surface
 

@@ -7,19 +7,18 @@ detailed enough to debug an intermittent field bug, and incapable of reaching a 
 in this app: it must never be the cause of one."* (`AGENTS.md:240-253`). This lens is the enforcement of
 that sentence plus the "what the log has to contain" contract added in 0.3.11 (`AGENTS.md:255-279`).
 
-**Dispatch when the diff touches** `src/Scribe.App/Infrastructure/FileLoggerProvider.cs`,
-`LogTraceProcessor.cs`, `SessionDiagnostics.cs`, `TelemetryRegistration.cs`,
-`src/Scribe.Overlay/Logging/**`, any of
-`src/Scribe.Core/Diagnostics/{SessionBanner,LogRetentionPolicy,ScribeLogFiles,ScribeTelemetry,DiagnosticsBundle}.cs`,
-**or** the diff adds any logging or telemetry call inside a `catch` block anywhere in the tree.
+**Dispatch when the diff touches** `src/Scribe.App/Infrastructure/{FileLoggerProvider,LogTraceProcessor,TraceLogListener,TraceTagScrubProcessor,SessionDiagnostics,TelemetryRegistration}.cs`,
+`src/Scribe.Overlay/Logging/**`, `src/Scribe.Core/Diagnostics/**`, `tests/Scribe.Core.Tests/{LogPrivacyGuardTests,LogCallScanner}.cs`,
+**or** the diff adds any logging or telemetry call inside a `catch` block or near a provider, endpoint,
+or vocabulary path anywhere in the tree.
 
 Severity cap: 🔴 Critical. Findings cap: **5**.
 
-**Data on disk.** `diff.patch` is authoritative for what the change does. Read it, plus `metadata.json`
-when present. The reviewed branch may not be checked out, so never use Read or Grep to confirm a diff
-line exists on disk. Do use Read and Grep freely for surrounding context: the two writers, the callers of
-a log line, the sibling implementation in the other process, and the long `why` comments that record the
-incidents these shapes exist to prevent.
+**Data on disk.** `diff.patch` (or `delta.patch` on a re-review) in `artifacts/scribe-code-review/<run-id>/`
+is authoritative for what the change does. Read it and `metadata.json` with `view`. The reviewed branch
+may not be checked out, so never use `view` or `grep` to confirm a diff line exists on disk. Do use
+`view`, `grep`, and `glob` freely for surrounding context and `AGENTS.md`: the writers, the callers of a
+log line, the sibling implementation in the other process, and the long `why` comments.
 
 **The rubric this lens shares with `architecture-fit`:** `references/patterns.md` **P-4, Diagnostics that
 cannot take down the thing they describe**, and its privacy half **P-8**. Cite the pattern number when a
@@ -62,16 +61,18 @@ exist.
 
 The two blessed writers, and the exact shape a new one must match:
 
-- `FileLoggerProvider.Append` (`src/Scribe.App/Infrastructure/FileLoggerProvider.cs:86-163`): a bounded
-  loop of **12 attempts, `Thread.Sleep(15)` apart**, opening with
-  `new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite)` (line 142), catching
-  `IOException` (line 154) and `UnauthorizedAccessException` (line 158), and falling off the end of the
-  loop without rethrowing. Above it, `FileLogger.Log` wraps formatting and the call to `Append` in a
-  `try` with a bare `catch` (lines 219-233), so even a formatter that throws cannot reach the caller.
-- `OverlayLog.Write` (`src/Scribe.Overlay/Logging/OverlayLog.cs:53-91`): the same 12 by 15 ms loop and the
-  same `FileShare.ReadWrite` (line 70), the same two typed catches (lines 78 and 81), wrapped in an
-  **outer** `try` with a bare `catch` (line 87) that also covers `Path` resolution, because
-  `Directory.CreateDirectory` can throw before any retry loop is reached.
+- **App side:** `FileLoggerProvider` formats each entry on the caller's thread and hands it to
+  `BackgroundLogWriter` (`src/Scribe.Core/Diagnostics/BackgroundLogWriter.cs`, bounded at 8,192 entries or
+  2M chars; `Debug`/`Information` never wait for disk; `Warning`+ and session bookends wait boundedly;
+  overflow drops newest and records one gap warning; host disposal drains up to 2 s), which writes batches
+  through `DailyLogFile` (`FileShare.ReadWrite`, bounded retry, swallow, plus live `HistoricalLogRedaction`).
+- **Overlay side:** `OverlayLog.Write` (`src/Scribe.Overlay/Logging/OverlayLog.cs`): `FileShare.ReadWrite`,
+  bounded retry, and an outer bare `catch` covering path resolution as well.
+- **Shared append-only coordination (`PerfFlags.AppendOnlyLog`):** both sides open with `FILE_APPEND_DATA`
+  without `FILE_WRITE_DATA` (`AppendOnlyFile.Open`, linked into `Scribe.Overlay`) only when
+  `AppendOnlyLogMode.DecideForLaunch` agrees across both processes after retiring in-flight writes and
+  helpers (`RetiringHelpers`, `SharedLogLaunch`). The overlay follows only `--append-only-log`, never an
+  environment variable.
 
 Flag 🔴 Critical when the diff introduces any of these:
 
@@ -220,44 +221,34 @@ Flag when the diff:
   pinned at construction diverges from the overlay's properly rotated file at midnight and splits the
   shared timeline the logs exist for. 🔴.
 
-## §5. Tracing stays opt-in, and every tag lands in the log file
+## §5. Tracing stays opt-in, and trace tags are strictly allowlisted
 
 `ScribeTelemetry` (`src/Scribe.Core/Diagnostics/ScribeTelemetry.cs`) is the single `ActivitySource`,
-named `Scribe.Dictation` (line 17), with two spans, `dictation.process` (line 20) and `text.inject`
-(line 23), and tag names in `snake_case` under a `scribe.` namespace (lines 26-50). Spans are only created
-when a listener subscribes, so tracing is nearly free when off. `TelemetryRegistration.AddScribeTelemetry`
-(`src/Scribe.App/Infrastructure/TelemetryRegistration.cs:20-38`) adds the source, always bridges it to the
-file log through `LogTraceProcessor`, and adds an OTLP exporter **only** when
-`OTEL_EXPORTER_OTLP_ENDPOINT` is set, so no backend means no connection-error spam.
+named `Scribe.Dictation`. `TelemetryRegistration.AddScribeTelemetry` bridges spans to the file log via
+`LogTraceProcessor` (or `TraceLogListener` / `TraceLogBridge` when `PerfFlags.LightTraceBridge` is on and
+no `OTEL_*` configuration is present) and adds an OTLP exporter **only** when
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 
-The load-bearing consequence, and the one this lens exists to catch:
-`LogTraceProcessor.OnEnd` writes **every tag value verbatim** into the log line
-(`src/Scribe.App/Infrastructure/LogTraceProcessor.cs:32`:
-`builder.Append(' ').Append(key).Append('=').Append(tag.Value)`). There is no allowlist and no
-redaction. **A new tag carrying content is a new content leak to disk**, automatically, with no further
-code change. Every existing tag is a shape: `TagDecodeChars` and `TagFinalChars` are `.Length` values,
-`TagCaptureSeconds` and `TagRealTimeFactor` are rounded numbers, `TagVadKept` and `TagAiChanged` are
-booleans, `TagAiOutcome` and `TagOutcome` are enum-shaped constants (`DictationOutcome`, line 59), and
-`TagTargetApp` is an app name. Confirm at the `SetTag` callsites in
-`src/Scribe.App/Dictation/DictationController.cs:656-979` and
-`src/Scribe.Core/TextInjection/TextInjector.cs:58`.
+`LogTraceProcessor`, `TraceLogBridge`, and `TraceTagScrubProcessor` (in front of any OTLP exporter) all
+enforce **`TraceTagPolicy`**: only `ScribeTelemetry` tag constants with the expected value shape (number,
+boolean, ASCII code up to 48 chars, or app name) render; wrong-shaped values render as `(omitted)` and
+unknown keys are counted as `omitted_tags=N`, never printed. `TelemetrySourceContractTests` scans the
+source and fails on any `SetTag`/`AddTag` key that is not a `ScribeTelemetry` constant with a policy
+entry.
 
 Flag when the diff:
 
-- **Adds a tag whose value is text rather than a shape.** 🔴, and hand it to `privacy-egress` as well;
-  that lens owns the egress contract, this one owns the fact that it also hits the local file.
-- **Adds a tag outside the `scribe.` prefix or outside `snake_case`.** `LogTraceProcessor` strips exactly
-  `scribe.` (line 12) when rendering, so an off-prefix tag renders with its full key and reads as a
-  foreign field. 🟡.
-- **Adds an OTLP exporter, a second processor, or an always-on exporter** that is not gated on the
-  environment variable. 🔴 if anything leaves the machine unconditionally; route to `privacy-egress`.
-- **Adds work to `LogTraceProcessor.OnEnd` before the logger call.** Today `OnEnd` (lines 24-47) is
-  non-throwing only because the underlying `FileLogger.Log` swallows everything; `OnEnd` itself has no
-  guard, and it runs inside the `using var activity` disposal in the dictation loop. New formatting,
-  parsing, or IO added ahead of the `_log.Log*` call is unprotected. 🟡, and say exactly that: the safety
-  here is borrowed from the sink, not owned by the processor.
-- **Starts an activity on a path that runs when no dictation is happening**, which turns "nearly free when
-  off" into a per-tick cost. Raise as a Question unless the frequency is obvious from the diff.
+- **Adds a tag without a `ScribeTelemetry` constant and `TraceTagPolicy` entry, or widens `TraceTagPolicy`
+  to accept arbitrary text.** 🔴, and cross-reference `privacy-egress`.
+- **Bypasses `TraceTagScrubProcessor` or `TraceLogBridge.Write`**, or adds an always-on exporter not gated
+  on `OTEL_EXPORTER_OTLP_ENDPOINT`. 🔴.
+- **Logs raw exceptions instead of `FailureShape`.** Exception messages quote `(host:port)`, Entra
+  tenants/accounts, and shell command URIs. Across all of `src/Scribe.App` and provider/library/vocabulary
+  Core folders, `LogPrivacyGuardTests` (`LogCallScanner`) forbids passing an exception object, `.Message`,
+  `.StackTrace`, `.Data`, or `.ToString()` to any log call; log `FailureShape.Describe(ex)` or
+  `FailureShape.DescribeWithStack(ex)` instead (keep local string names distinct from any exception
+  variable name in the file). Keep un-scanned Core folders to the same rule by hand. 🔴 when exception
+  text near an endpoint, credential, or user text can reach the log; 🟡 elsewhere.
 
 ## §6. Log privacy is a contract, not a habit
 

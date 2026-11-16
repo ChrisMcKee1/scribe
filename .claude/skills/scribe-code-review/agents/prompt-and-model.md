@@ -10,17 +10,18 @@ benchmark-validated artifact. `CleanupPrompt.DefaultWritingStyle` and
 the leaderboard records A/B candidates that were rejected because they scored worse. An edit to
 either is a change to a tested asset, and it is judged like one.
 
-**Dispatch trigger:** `src/Scribe.Core/Cleanup/{CleanupPrompt,CleanupModel,CleanupOptions,FoundryModelVariant,FoundryExecutionProviders,FoundryDemotionReset,TextCleanupService}.cs`,
+**Dispatch trigger:** `src/Scribe.Core/Cleanup/{CleanupPrompt,CleanupModel,CleanupOptions,ContextBudget,TokenEstimate,LocalModelTuning,LocalAiServer,LocalServerClient,FoundryModelVariant,FoundryExecutionProviders,FoundryDemotionReset,TextCleanupService*}.cs`,
 `src/Scribe.Core/PostProcessing/{AiDictionarySuggester,DictionarySuggestionMiner}.cs`,
 `src/Scribe.Core/Diagnostics/UsageInsight.cs`, `tools/Scribe.Evals/**`, `docs/model-leaderboard.md`,
-or any diff that edits prompt text anywhere.
+`docs/local-model-benchmark.md`, or any diff that edits prompt text anywhere.
 
 **Severity cap: 🔴 Critical. Findings cap: 4.**
 
-**Data on disk.** Read `diff.patch` (and `delta.patch` on a re-review) and `metadata.json` from the
-cache. The reviewed branch may not be checked out, so never Read or Grep to confirm a diff line
-exists on disk. Do Read and Grep freely for surrounding context: the prompt constants, the eval
-scenarios, the leaderboard, and the long `why` comments that this file family is unusually dense in.
+**Data on disk.** Read `diff.patch` (and `delta.patch` on a re-review) and `metadata.json` from
+`artifacts/scribe-code-review/<run-id>/` using `view`. The reviewed branch may not be checked out, so
+never use `view` or `grep` to confirm a diff line exists on disk. Do use `view`, `grep`, and `glob`
+freely for surrounding context and `AGENTS.md`: the prompt constants, the eval scenarios, both benchmark
+reports (`docs/model-leaderboard.md` and `docs/local-model-benchmark.md`), and the long `why` comments.
 
 ---
 
@@ -110,9 +111,23 @@ models, and what changed.
   must be a text-only instruct model. `Recommendation` is documented as set *only* on models the
   golden suite named as on-device winners (`CleanupModel.cs:8-10`). A new `Recommendation` string
   with no leaderboard row behind it is 🟡; it puts an unearned badge in the settings picker.
-- **Changing `CleanupModelCatalog.DefaultAlias`** (`CleanupModel.cs:25`) changes what every new
-  install downloads and runs. It needs a head to head eval run naming both aliases, and it needs a
-  size note: the curated hints quote download sizes users see.
+- **Changing `CleanupModelCatalog.DefaultAlias`** (`qwen2.5-1.5b`, with `qwen2.5-7b` starting on RTX cards
+  with 8 GB or more) changes what every new install downloads and runs. Re-measure with the 25-case local
+  benchmark (`docs/local-model-benchmark.md`, `--benchmark --no-cloud --runs 3` plus `--blind-judge`) and
+  update `FoundryModelChoices`' size table and `CleanupModelCatalogTests` together.
+- **Local context fitting, Ollama/LM Studio tuning, and truncated-answer guards.** On Foundry Local,
+  Ollama, and LM Studio at their own loopback addresses (`FitsLocalContext`), `PlanLocalRequestLocked` and
+  `ContextBudget` fit instructions, chunks, output ceiling, and `CleanupPrompt.FitGlossary` (mentioned
+  terms first, or whole vocabulary when `SendWholeVocabulary` is on; preparation capped at
+  `MaxPreparationVocabularyTokens` = 4,096) into `EffectiveContextLocked` using conservative
+  `TokenEstimate` rates. Ollama with a context size routes through `OllamaApiClient` (`num_ctx`,
+  `keep_alive` formatted via invariant `OllamaKeepAliveDuration`, `think: false`; never set `num_gpu` or
+  `main_gpu`), grants `LocalReasoningAllowance` (2,048 tokens) only after a capped probe proves forced
+  reasoning (`ProbeOllamaAsync`), and LM Studio loads copies at `context_length` via `/api/v1/chat` under
+  `_lmStudioLane` with tracked `_scribeLoadedInstance` / `_unownedCopies`. Across every surface reporting
+  finish metadata, `EndOf` rejects `Length` / `ContentFilter` or exhausted output usage without a finish
+  reason (`CleanupCompletionEvidenceTests`, `LocalReasoningBudgetTests`). Weakening any of those without
+  benchmark evidence is 🔴.
 - **Benchmark rankings are deployment specific.** The leaderboard says so outright: report endpoint,
   region, and SKU. A PR quoting a latency or quality number with none of the three is asserting more
   than it measured. Raise it as a Question rather than a finding unless the number is being written

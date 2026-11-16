@@ -18,14 +18,14 @@ style preference: the bug re-opens at any future refactor, and in this repositor
 usually an agent moving logic into `Scribe.Core` six months later with no memory of why the shape
 was that way. **Findings cap: 3.**
 
-**Data on disk.** Read `diff.patch` and `metadata.json` from the cache. On a re-review round, your
-scope is `delta.patch`; the full diff is context. Identify the bug from the title, the body, and the
-linked issue before you read a single test.
+**Data on disk.** Read `diff.patch` and `metadata.json` from `artifacts/scribe-code-review/<run-id>/`
+using `view`. On a re-review round, your scope is `delta.patch`; the full diff is context. Identify the
+bug from the title, the body, and the linked issue before you read a single test.
 
-`diff.patch` is authoritative for what the change adds. Do not use Read or Grep to confirm a diff
-line exists on disk, because the reviewed branch may not be checked out. Do use Read and Grep freely
-for the surrounding code: the production file's `why` comments, the sibling tests in
-`tests/Scribe.Core.Tests/`, and the exemplars named below.
+`diff.patch` is authoritative for what the change adds. Do not use `view` or `grep` to confirm a diff
+line exists on disk, because the reviewed branch may not be checked out. Do use `view`, `grep`, and
+`glob` freely for the surrounding code: the production file's `why` comments, `AGENTS.md`, the sibling
+tests in `tests/Scribe.Core.Tests/`, and the exemplars named below.
 
 ---
 
@@ -155,12 +155,12 @@ resends **only** `inputs[offset..]`, bounded by `MaxChunkRetries`.
 - **A pin must return a short count and assert only the remainder is resent**, and that the retry
   loop is bounded. A test that sends a full count and asserts one call proves nothing about the
   short-count path.
-- **Honest caveat, check before you demand it.** `SendWithRetry` is `private` and calls the static
-  `InjectionNativeMethods.SendInput` P/Invoke directly, so there is no injectable seam in the current
-  code. `TextInjectorTests` and `TextInjectorUnicodeChunkTests` cover the pure chunking helpers
-  instead (`ChunkLength`, `BuildUnicodeChunk`, `CountKeyEvents`). If the change adds the seam, hold
-  it to the rule above. If it does not, the finding is that the fix is unpinnable as written, and the
-  ask is the seam, not a test that cannot exist.
+- **Pin through `IInjectionPlatform` and `IClipboardNative`.** `TextInjector` and `ClipboardBorrower`
+  expose `IInjectionPlatform` and `IClipboardNative` seams (`LiteralFormattingDeliveryTests`,
+  `DictationInsertionTests`, `WholeClipboardBorrowTests`), so a short count, clipboard receipt failure,
+  remote typing pace, or focus loss is directly pinnable without touching the user's real desktop. For
+  cleanup admission / `TryHandOff` bugs, use `VocabularyCleanupHarness` (never `CleanupHarness`, which
+  replaces `options.Transport` and bypasses `VocabularyHandOffHandler`).
 
 **A `Clone` aliasing bug.** `AppSettings.Clone` starts from `MemberwiseClone` and then explicitly
 rebuilds every reference-typed member, because a shared list means an edit in the settings editor

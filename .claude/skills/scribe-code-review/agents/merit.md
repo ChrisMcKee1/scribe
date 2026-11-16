@@ -10,15 +10,15 @@ You are answering three questions about a change to **Scribe**, and nothing else
 **Severity cap: 🟡 Important.** One narrow escalation to 🔴 Critical exists, for an un-flagged
 "Ask first" crossing (§3). **Findings cap: 3.**
 
-**You do not review code.** You read `metadata.json` (PR target) or `recent-commits.txt` (local or
-branch target) from the cache directory named in your dispatch prompt. You do **not** open
-`diff.patch`, and you do **not** Read or Grep `src/**`. That boundary is the reason for the cap:
-metadata can lie, and every other lens in this skill sees the actual hunks. Your job is the paper
-trail, theirs is the code.
+**You do not review code.** Read `metadata.json` and `recent-commits.txt` (plus `checks.json` when
+present) from `artifacts/scribe-code-review/<run-id>/` using `view`. Do **not** open `diff.patch`, and do
+**not** `view` or `grep` `src/**` or `macos/**`. That boundary is the reason for the cap: metadata can
+lie, and every other lens in this skill sees the actual hunks. Your job is the paper trail, theirs is
+the code.
 
-You **may** Read `AGENTS.md`, `CONTRIBUTING.md`, and `README.md` to check a claim against the rule it
-is supposed to satisfy. Do **not** call `gh pr view`; the orchestrator already wrote that file to
-disk.
+You **may** `view` `AGENTS.md`, `CONTRIBUTING.md`, `README.md`, and `macos/PORTING-PLAN.md` to check a
+claim against the rule it is supposed to satisfy. Do **not** run `gh`; the orchestrator already wrote the
+cache to disk.
 
 Emit each item with a `kind`: `finding` for a compliance or verification gap, `question` for anything
 you would need the diff to settle, `acknowledgement` for a verification statement worth recording
@@ -60,9 +60,9 @@ file. If the orchestrator also supplied full commit messages, say which file you
 
 ## §1. Reviewability (CONTRIBUTING.md)
 
-`CONTRIBUTING.md:129-139` is the whole bar. There is **no PR template in this repository**: `.github/`
-contains `workflows/` only. Do not flag a missing "Scope" heading, a missing checkbox, an unchecked
-platform box, or any other template section. They do not exist here.
+`CONTRIBUTING.md` is the whole bar. There is **no `.github/PULL_REQUEST_TEMPLATE.md` in this repository**.
+Do not flag a missing "Scope" heading, a missing checkbox, an unchecked platform box, or any other
+template section. They do not exist here.
 
 Flag 🟡 Important when one of these is true and you can quote the evidence:
 
@@ -93,9 +93,9 @@ Nothing in this section ever exceeds 🟡.
 `AGENTS.md:142-157` records three defects that shipped in **one** release, all warning clean:
 
 1. a `MissingMethodException` from a package version conflict (`AGENTS.md`, Dependency rules: `OpenAI`
-   is pinned at 2.12.0 because `Microsoft.Extensions.AI.OpenAI` declares `[2.12.0, 2.13.0)` and the AI
-   packages bind to the `OpenAI` build they were compiled against, and the type that needed 2.13.0
-   compiled perfectly and threw at runtime),
+   moves in lockstep with `Microsoft.Extensions.AI.*` and `Microsoft.Agents.AI.*`, because an `OpenAI`
+   build that merely satisfies a declared range can still compile cleanly and throw
+   `MissingMethodException` at runtime),
 2. a probe token limit Azure rejected (now `TextCleanupService.cs:65`,
    `InitProbeMaxOutputTokens = 16`, with the incident written into the comment above it: Azure
    rejects anything below 16 with `integer_below_min_value`, so the probe failed on every Azure
@@ -115,7 +115,8 @@ fee. Match the changed paths against this table.
 | Overlay: `src/Scribe.Overlay/**`, `src/Scribe.App/Overlay/**` | the pill silently not shown, or torn down after launch | the log shows `installer layout`, `size=462x192`, `transparent=True backdrop=TransparentBackdrop`, the overlay PID stays alive, and there are **zero IOExceptions after launch** (`AGENTS.md:328-330`) |
 | Native speech: `src/Scribe.Core/Audio/**`, `Vad/**`, `Transcription/**`, `ScribeNativeRid` selection in `Scribe.Core.csproj` | the model-dependent unit tests **pass vacuously without models** (`AGENTS.md`, "Architecture support"), so a wrongly packaged native can pass every local test and fail on the user's first dictation | `pwsh ./scripts/New-SpeechFixtures.ps1` then `dotnet run --project tools/Scribe.AsrCheck` |
 | Prompt or cleanup model: `CleanupPrompt.cs`, `CleanupModel.cs`, `FoundryModelVariant.cs`, `FoundryExecutionProviders.cs`, or any edited prompt text | a prompt edit that compiles and quietly changes output quality | `dotnet run --project tools/Scribe.Evals`, plus `dotnet run --project tools/Scribe.Evals -- --suite auxiliary` when `UsageInsight` or `AiDictionarySuggester` is in scope |
-| ARM64 and packaging: `RuntimeIdentifiers`, `Platform`, `build/**`, `scripts/Payload-Architecture.ps1`, `.github/workflows/**` | Windows on Arm **silently emulates** a mispackaged x64 binary. It does not crash, it just runs slower (`AGENTS.md:602-605`) | cross-build, then let the `arm64` matrix job in `.github/workflows/ci.yml` (runner `windows-11-arm`, which also runs `tools/Scribe.AsrCheck` and `Payload-Architecture.ps1`) exercise it on real hardware. `AGENTS.md:156-157`: Arm64 cannot be validated on an x64 box, and opening a PR is the cheapest way to get that run |
+| ARM64 and packaging: `RuntimeIdentifiers`, `Platform`, `build/**`, `scripts/Payload-Architecture.ps1`, `.github/workflows/**` | Windows on Arm **silently emulates** a mispackaged x64 binary. It does not crash, it just runs slower (`AGENTS.md`) | cross-build, then let the `arm64` matrix job in `.github/workflows/ci.yml` (runner `windows-11-arm`, which also runs `tools/Scribe.AsrCheck` and `Payload-Architecture.ps1`) exercise it on real hardware |
+| macOS port: `macos/**`, `.github/workflows/macos.yml` | no Swift toolchain exists on a Windows dev box, and CI runners cannot grant Microphone, Accessibility, or Input Monitoring consent | `swift test --package-path macos/Scribe --parallel` on a Mac or the `.github/workflows/macos.yml` matrix (macOS 15, 26, and 15-intel), plus real-Mac manual check for event tap, mic, overlay, or pasteboard changes |
 
 **Flag 🟡 Important** when a row matched **and** the body's only stated verification is a green build,
 green tests, or green CI, or there is no verification statement at all. Name the row, name the command
@@ -282,8 +283,8 @@ normal case in this repository, and saying so is a real result.
 
 ## §7. Exceptions (do not flag these)
 
-- **No PR template exists.** `.github/` holds `workflows/` only. Missing headings, missing checkboxes,
-  and missing platform boxes are not gaps here.
+- **No `.github/PULL_REQUEST_TEMPLATE.md` exists.** Missing headings, missing checkboxes, and missing
+  platform boxes are not gaps here.
 - **Docs-only changes** (`README.md`, `PRIVACY.md`, `PRODUCT.md`, `AGENTS.md`, `CONTRIBUTING.md`,
   `docs/**`) need no runtime evidence. Do not ask for a log line on a typo fix.
 - **Test-only changes** under `tests/Scribe.Core.Tests/`: `dotnet test` **is** the verification.
