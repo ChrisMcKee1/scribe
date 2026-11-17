@@ -136,8 +136,8 @@ cloud-hosted, or supplied by a third party.
 - Architecture: x64 and arm64 (Arm64 covers Snapdragon / Copilot+ PCs)
 - Microphone: required
 - Keyboard: required for the default push-to-talk workflow
-- Internet connection: not required for dictation
-- Internet connection: required only for downloads, updates, and optional AI cleanup through an online AI service
+- Internet connection: not required for dictation with a local speech model
+- Internet connection: required for downloads, updates, optional MAI-Transcribe-2 cloud speech, and optional AI cleanup through an online AI service
 
 The package declares Windows Desktop build `10.0.22000.0` (Windows 11) as its minimum, matching
 `SupportedOSPlatformVersion` in `Scribe.App.csproj` and the Windows 11 promise in the listing. The
@@ -229,8 +229,7 @@ Scribe AI
 ### Short description
 
 Private push-to-talk dictation for Windows 11. Hold a key, speak, and let go: punctuated text is typed
-into the app you're using. Speech recognition runs on your PC and works offline, and your audio never
-leaves it.
+into the app you're using. Default speech recognition runs on your PC and works offline.
 
 ### Description
 
@@ -238,11 +237,11 @@ Scribe AI turns your voice into text in the apps you use every day. Hold a key, 
 punctuated text is typed into the app you're using, whether that's email, chat, a document, a browser,
 a code editor or a command window.
 
-Private by design. Speech recognition runs on your PC, with a speech model that comes with Scribe.
-Your audio is recognized and then discarded: it is never uploaded, and it is kept only if you turn on
+Private by design. Default speech recognition runs on your PC, with a speech model that comes with Scribe.
+With a local speech model, your audio is recognized and then discarded: it is not uploaded, and it is kept only if you turn on
 audio history, on your PC. There's no Scribe account, no subscription and no advertising.
 
-Works offline. Dictation needs no internet connection, and about 25 European languages are
+Works offline with a local speech model. Default dictation needs no internet connection, and about 25 European languages are
 recognized automatically, with nothing to choose. Scribe runs natively on Intel, AMD and Arm PCs,
 Copilot+ PCs included.
 
@@ -257,7 +256,12 @@ when you correct yourself. Run it on this PC with Foundry Local, fully offline, 
 Foundry, your GitHub Copilot subscription or another AI service you set up. When AI cleanup runs
 somewhere other than your PC, each request sends the text Scribe recognized, the cleanup
 instructions with your writing style, and the words from your dictionary and the word packs you let
-AI cleanup use. Audio is never sent, and you can turn AI cleanup off from the tray at any time.
+AI cleanup use. AI cleanup never sends audio, and you can turn AI cleanup off from the tray at any time.
+
+Separate optional cloud speech. The Store install hides MAI-Transcribe-2 by default. If you enable
+MaiTranscribeSpeech and select that model, each dictation sends audio and up to 500 dictionary and
+AI-permitted word pack phrases to your Microsoft Foundry resource, even with AI cleanup off.
+Select a local speech model to keep audio on your PC.
 
 Always know what happened. The recording indicator shows when Scribe is listening, with
 level bars that follow your voice, then says Typed, or what went wrong and what to do next. Try
@@ -278,7 +282,7 @@ Scribe is free and open source under the MIT License.
 Enter these as separate features without adding bullet characters (up to 20, at most 200 characters
 each):
 
-1. Speech recognition on your PC: your audio never leaves it
+1. Default speech recognition runs on your PC without uploading audio
 2. Works offline, with no account or subscription
 3. Hold a key, speak, let go: text is typed into the app you're using
 4. About 25 European languages, recognized automatically
@@ -371,8 +375,10 @@ Paste and adjust the following text. Keep the date current:
 > connection for its primary dictation workflow. After launch, select the Scribe icon in the
 > notification area and choose Settings. Hold Page Down, speak, and release to test dictation
 > (Page Up does the same without AI cleanup; on a keyboard without those keys, hold Fn with the
-> Down arrow). The keys can be changed in Settings, Dictation. Speech recognition runs locally and
-> audio is never transmitted. Optional AI cleanup is off by default and is not required for
+> Down arrow). The keys can be changed in Settings, Dictation. Default speech recognition runs locally
+> without transmitting audio. The Store build hides optional MAI-Transcribe-2 cloud speech unless
+> MaiTranscribeSpeech is enabled; explicitly selecting that model sends audio and vocabulary phrases
+> to the user's Microsoft Foundry resource. Optional AI cleanup is off by default and is not required for
 > certification.
 >
 > The package declares microphone access for user-initiated dictation. It declares runFullTrust

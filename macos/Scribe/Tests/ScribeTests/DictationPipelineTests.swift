@@ -127,6 +127,159 @@ final class DictationPipelineTests: XCTestCase {
         XCTAssertFalse(prompt.contains("Kubernetes"), "an unmentioned cleanup vocabulary entry reached AI cleanup")
     }
 
+    /// A word pack kept from AI cleanup still applies to the dictation, but what it writes is never sent: the
+    /// request carries its spoken form as said, and the replacement is made on the reply. A pack AI cleanup may use
+    /// is written before the request as always.
+    func testAWordPackKeptFromAICleanupIsNeverWrittenIntoTheRequestButStillAppliesToTheDictation() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        harness.load(
+            libraries: [
+                DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow"),
+                DictionaryEntry(pattern: "o llama", replacement: "Ollama"),
+            ],
+            cleanupLibraries: [DictionaryEntry(pattern: "o llama", replacement: "Ollama")])
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        provider.reply = { request in RecordingCleanupProvider.transcript(in: request) + "." }
+        harness.transcriber.defaultText = "deploy cube flow on o llama"
+
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        let request = try XCTUnwrap(provider.requests.first)
+        XCTAssertEqual(request.transcript, CleanupPrompt.wrapTranscript("deploy cube flow on Ollama"))
+        XCTAssertFalse(request.transcript.contains("Kubeflow"), "a local-only spelling reached the provider")
+        XCTAssertFalse(request.writingStylePrompt.contains("Kubeflow"), "a local-only spelling reached the prompt")
+        XCTAssertEqual(harness.fakeInjector.texts, ["deploy Kubeflow on Ollama. "])
+    }
+
+    // MARK: - A reply the service cut short
+
+    /// The service says a reply stopped at its output limit or was filtered: it is only the start of the cleaned text,
+    /// the reply guard cannot tell (the start of a sentence reads as a sentence), and typing it would drop the rest of
+    /// what was said. The whole dictation falls back to what cleanup off gives; a whole reply with the same words is
+    /// typed as always.
+    func testAReplyTheServiceCutShortIsNeverTypedAndTheWholeDictationFallsBack() async throws {
+        let cases: [(CleanupAnswerEnding, String, DictationCleanupOutcome)] = [
+            (.finished, "Deploy it with Kubeflow ", .cleaned),
+            (.cutAtOutputLimit, "deploy it with Kubeflow tomorrow ", .fellBack),
+            (.filtered, "deploy it with Kubeflow tomorrow ", .fellBack),
+        ]
+        for (ending, typed, outcome) in cases {
+            let harness = makeHarness(rulesLoaded: false)
+            loadRules(into: harness)
+            harness.cleanup.isEnabled = true
+            let provider = try XCTUnwrap(harness.cleanup.gated)
+            provider.ending = ending
+            provider.reply = { _ in "Deploy it with Kubeflow" }
+            harness.transcriber.defaultText = "deploy it with cube flow tomorrow"
+
+            await harness.dictate()
+            await harness.waitUntilProcessed()
+
+            XCTAssertEqual(provider.requests.count, 1, "\(ending)")
+            XCTAssertEqual(harness.fakeInjector.texts, [typed], "\(ending)")
+            XCTAssertEqual(harness.reports.latest?.cleanupOutcome, outcome, "\(ending)")
+        }
+    }
+
+    // MARK: - The word pack permission at the request
+
+    /// Installs rules whose vocabulary was read under `scope`, judged by `gate`.
+    private func loadRules(into harness: DictationHarness, scope: AiVocabularyScope, gate: AiVocabularyGate) {
+        harness.rules.install(
+            DictationRuleSnapshot(
+                PersistenceRuleSet(dictionaryEntries: [], snippets: [], appProfiles: []),
+                libraryEntries: [], cleanupVocabularyEntries: [], aiScope: scope, aiGate: gate))
+        harness.gate.open(.ready)
+    }
+
+    /// Each request of a dictation is held to the permission its vocabulary was read under, which the controller takes
+    /// in the same turn as the replacements it sends.
+    func testEveryCleanupRequestIsHeldToThePermissionTheDictationsVocabularyWasReadUnder() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        let gate = AiVocabularyGate()
+        let scope = AiVocabularyScope(generation: 2, permittedContent: ["team-terms": "h1"])
+        gate.publish(scope)
+        loadRules(into: harness, scope: scope, gate: gate)
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        var admitted: [AiVocabularyScope?] = []
+        provider.reply = { request in
+            admitted.append(CleanupVocabularyAdmission.current?.scope)
+            return RecordingCleanupProvider.transcript(in: request)
+        }
+        harness.transcriber.defaultText = "hello there"
+
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        XCTAssertEqual(admitted, [scope])
+        XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .unchanged)
+    }
+
+    /// The permission is withdrawn after the dictation's rules were installed and before its request leaves: nothing is
+    /// sent, and the dictation is typed as cleanup off types it.
+    func testNoCleanupRequestIsSentOnceThePermissionItWasComposedUnderIsWithdrawn() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        let gate = AiVocabularyGate()
+        let scope = AiVocabularyScope(generation: 2, permittedContent: ["team-terms": "h1"])
+        gate.publish(scope)
+        loadRules(into: harness, scope: scope, gate: gate)
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        // What a Settings save does before it commits.
+        gate.narrow { _, _ in false }
+        harness.transcriber.defaultText = "hello there"
+
+        await harness.dictate()
+        await harness.waitUntilProcessed()
+
+        XCTAssertTrue(provider.requests.isEmpty, "a request composed under a withdrawn permission was sent")
+        XCTAssertEqual(harness.fakeInjector.texts, ["hello there "])
+        XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .fellBack)
+    }
+
+    /// The permission is withdrawn, and the rules are reloaded without the word pack, while a dictation's cleanup waits
+    /// for its provider, after the vocabulary pass has written the pack's spelling into the text to send. The request
+    /// is held to the permission that pass was built from, never to the rules installed by the time the provider is
+    /// ready (an empty scope holds nothing back), so nothing is sent and the dictation is typed as cleanup off types it
+    /// with the rules now installed.
+    func testARuleReloadWhileCleanupWaitsForItsProviderNeverSwapsThePermissionOfItsText() async throws {
+        let harness = makeHarness(rulesLoaded: false)
+        let gate = AiVocabularyGate()
+        let scope = AiVocabularyScope(generation: 2, permittedContent: ["team-terms": "h1"])
+        gate.publish(scope)
+        let rules = PersistenceRuleSet(dictionaryEntries: [], snippets: [], appProfiles: [])
+        let entry = DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow")
+        harness.rules.install(
+            DictationRuleSnapshot(
+                rules, libraryEntries: [entry], cleanupVocabularyEntries: [entry], aiScope: scope, aiGate: gate))
+        harness.gate.open(.ready)
+        XCTAssertEqual(
+            harness.rules.correctVocabulary("deploy cube flow today").text, "deploy Kubeflow today",
+            "the permitted pack's spelling is not written into what cleanup is sent")
+        harness.cleanup.isEnabled = true
+        let provider = try XCTUnwrap(harness.cleanup.gated)
+        let held = DictationGate<Void>()
+        harness.cleanup.providerGate = held
+        harness.transcriber.defaultText = "deploy cube flow today"
+
+        await harness.dictate()
+        await waitUntil("cleanup waits for its provider, past the vocabulary pass") { held.waitingCount == 1 }
+        // What a Settings save does before it commits, then the reload it asks for: the pack is no longer in the rules.
+        gate.narrow { _, _ in false }
+        harness.rules.install(
+            DictationRuleSnapshot(
+                rules, libraryEntries: [], cleanupVocabularyEntries: [], aiScope: .none, aiGate: gate))
+        held.open(())
+        await harness.waitUntilProcessed()
+
+        XCTAssertTrue(provider.requests.isEmpty, "a request composed under a withdrawn permission was sent")
+        XCTAssertEqual(harness.fakeInjector.texts, ["deploy cube flow today "])
+        XCTAssertEqual(harness.reports.latest?.cleanupOutcome, .fellBack)
+    }
+
     func testALocalAppContextCanSendTheWholeVocabularyAndAddsAnOutputCeiling() async throws {
         let harness = makeHarness(rulesLoaded: false)
         let dictionary = (0..<120).map { DictionaryEntry(pattern: "spoken term \($0)", replacement: "Term\($0)") }

@@ -26,25 +26,77 @@ public sealed record MaiTranscribeOptions(
     string? ClientId = null,
     string? ClientSecret = null,
     MaiTranscribeStyle Style = MaiTranscribeStyle.Clean,
-    IReadOnlyList<string>? PhraseList = null)
+    IReadOnlyList<string>? PhraseList = null,
+    MaiPhraseAdmission? PhraseAdmission = null)
 {
     public static MaiTranscribeOptions Disabled { get; } = new(false, null, null, null);
 
+    /// <summary>
+    /// Whether <paramref name="settings"/> choose MAI-Transcribe-2 and this installation may use it (a Store package keeps
+    /// it off unless its flag is set). This alone decides whether a dictation's audio can leave this PC, so it is asked
+    /// before anything else cloud speech needs is read.
+    /// </summary>
+    public static bool IsSelected(AppSettings settings, bool isPackaged, PerfFlags? perfFlags = null)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        return string.Equals(
+                settings.TranscriptionModelId?.Trim(),
+                TranscriptionModelCatalog.MaiTranscribe2Id,
+                StringComparison.OrdinalIgnoreCase) &&
+            InstallerFeatureGate.CanUseMaiTranscribe(isPackaged, perfFlags);
+    }
+
+    /// <summary>
+    /// The options one dictation's cloud speech runs with, decided from the admission its recording was admitted with: its
+    /// settings choose whether the audio may leave this PC, and its vocabulary generation, with the library scope that
+    /// permitted it, supplies the words that may go with it. Nothing is read from the stored settings or the dictionary,
+    /// and the library source (the admission point each send is judged by) is looked up only once cloud speech is chosen
+    /// and words are to be sent, so a dictation that stays on this PC reads nothing at all. Library words are carried only
+    /// when a source can judge them at the send; with none, they are left out.
+    /// </summary>
+    internal static MaiTranscribeOptions FromAdmission(
+        TranscriptionAdmission admission,
+        bool isPackaged,
+        PerfFlags? perfFlags,
+        Func<ILibraryVocabularySource?> librarySource)
+    {
+        ArgumentNullException.ThrowIfNull(admission);
+        ArgumentNullException.ThrowIfNull(librarySource);
+
+        var settings = admission.Settings;
+        if (!IsSelected(settings, isPackaged, perfFlags))
+        {
+            return Disabled;
+        }
+
+        if (!settings.ApplyPostProcessing)
+        {
+            return FromSettings(settings, isPackaged, perfFlags);
+        }
+
+        var source = librarySource();
+        var libraries = source is null ? null : admission.Vocabulary.Libraries;
+        return FromSettings(settings, isPackaged, perfFlags, admission.Vocabulary.Dictionary, libraries, source);
+    }
+
+    /// <summary>
+    /// The options for <paramref name="settings"/>, with the personal words and, when a <paramref name="librarySource"/>
+    /// can judge them, the AI-permitted word pack words of <paramref name="libraries"/>. A word pack's words are never
+    /// carried without that source: with <paramref name="libraries"/> and no source, the library words are left out and the
+    /// personal words alone are kept, because nothing could stop them at a send if their permission were withdrawn.
+    /// </summary>
     public static MaiTranscribeOptions FromSettings(
         AppSettings settings,
         bool isPackaged,
         PerfFlags? perfFlags = null,
         IEnumerable<DictionaryEntry>? personalDictionary = null,
+        LibraryVocabulary? libraries = null,
         ILibraryVocabularySource? librarySource = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
 
-        var enabled = string.Equals(
-                settings.TranscriptionModelId?.Trim(),
-                TranscriptionModelCatalog.MaiTranscribe2Id,
-                StringComparison.OrdinalIgnoreCase) &&
-            InstallerFeatureGate.CanUseMaiTranscribe(isPackaged, perfFlags);
-        if (!enabled)
+        if (!IsSelected(settings, isPackaged, perfFlags))
         {
             return Disabled;
         }
@@ -56,8 +108,15 @@ public sealed record MaiTranscribeOptions(
                 settings.AiCleanupAzureSubscriptionTenantId,
                 settings.AiCleanupAzureTenantId);
 
+        // The library words came from this scope, as the recording was admitted with it, so every send is judged against
+        // it. Library words and their admission are one decision: where there is no source to judge them, there are none.
+        var judgedLibraries = settings.ApplyPostProcessing && librarySource is not null ? libraries : null;
+        MaiPhraseAdmission? phraseAdmission = judgedLibraries is not null && librarySource is not null
+            ? new MaiPhraseAdmission(judgedLibraries.AiScope, librarySource)
+            : null;
+
         var phrases = settings.ApplyPostProcessing
-            ? MaiTranscribePhraseList.Build(personalDictionary, librarySource)
+            ? MaiTranscribePhraseList.Build(personalDictionary, judgedLibraries?.AiEntries)
             : [];
 
         return new MaiTranscribeOptions(
@@ -71,9 +130,19 @@ public sealed record MaiTranscribeOptions(
             ClientId: settings.AiCleanupAzureClientId,
             ClientSecret: settings.AiCleanupAzureClientSecret,
             Style: settings.MaiTranscribeStyle,
-            PhraseList: phrases);
+            PhraseList: phrases,
+            PhraseAdmission: phraseAdmission);
     }
 }
+
+/// <summary>
+/// The library scope a phrase list was drawn from, and the admission point that judges it. The words are copied when the
+/// dictation is admitted, but a word pack's AI permission can be withdrawn at any moment after that, while credentials
+/// are acquired or between the first send and its retry. So the client hands every send over only through
+/// <see cref="ILibraryVocabularySource.TryHandOff"/> with this scope, as the last step before the request leaves, and a
+/// send that is refused is not made: the dictation is decoded on this PC instead.
+/// </summary>
+public sealed record MaiPhraseAdmission(AiVocabularyScope Scope, ILibraryVocabularySource Source);
 
 public sealed record MaiTranscribeAttemptResult(
     bool Succeeded,
@@ -168,8 +237,10 @@ public static class MaiTranscribeEndpointResolver
 
 /// <summary>
 /// Builds the <c>phraseList.phrases</c> keyword-biasing list for <c>MAI-Transcribe-2</c> from the user's
-/// enabled dictionary entries and AI-permitted word packs, enforcing the same single-line 100-character
-/// vocabulary rule and library hand-off admission gate as AI cleanup.
+/// enabled dictionary entries and the entries of the AI-permitted word packs, enforcing the same single-line
+/// 100-character vocabulary rule as AI cleanup. The library entries are those of the vocabulary the dictation was
+/// admitted with (<see cref="LibraryVocabulary.AiEntries"/>). The list itself carries no permission: the
+/// <see cref="MaiPhraseAdmission"/> next to it in the options is judged again at every send.
 /// </summary>
 public static class MaiTranscribePhraseList
 {
@@ -177,7 +248,7 @@ public static class MaiTranscribePhraseList
 
     public static IReadOnlyList<string> Build(
         IEnumerable<DictionaryEntry>? personalEntries,
-        ILibraryVocabularySource? librarySource = null)
+        IEnumerable<DictionaryEntry>? libraryEntries = null)
     {
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var phrases = new List<string>();
@@ -203,31 +274,24 @@ public static class MaiTranscribePhraseList
             }
         }
 
-        if (librarySource is not null)
+        if (libraryEntries is not null)
         {
-            var current = librarySource.Current;
-            if (current.AiEntries.Count > 0)
+            foreach (var entry in libraryEntries)
             {
-                librarySource.TryHandOff(current.AiScope, () =>
+                if (!CleanupPrompt.IsVocabularyReplacement(entry.Replacement))
                 {
-                    foreach (var entry in current.AiEntries)
-                    {
-                        if (!CleanupPrompt.IsVocabularyReplacement(entry.Replacement))
-                        {
-                            continue;
-                        }
+                    continue;
+                }
 
-                        var candidate = entry.Replacement.Trim();
-                        if (candidate.Length > 0 && seen.Add(candidate))
-                        {
-                            phrases.Add(candidate);
-                            if (phrases.Count >= MaxPhrases)
-                            {
-                                break;
-                            }
-                        }
+                var candidate = entry.Replacement.Trim();
+                if (candidate.Length > 0 && seen.Add(candidate))
+                {
+                    phrases.Add(candidate);
+                    if (phrases.Count >= MaxPhrases)
+                    {
+                        break;
                     }
-                });
+                }
             }
         }
 
@@ -283,15 +347,32 @@ public static class MaiWavEncoder
 /// vocabulary biasing and clean/verbatim style. Any configuration or network failure returns a
 /// shape-only fallback result so <see cref="TranscriptionService"/> can decode on this PC with Parakeet.
 /// </summary>
+/// <remarks>
+/// Four rules keep the audio and the user's words where they were allowed to go, and keep a dictation from being lost to
+/// the cloud. Every send is handed over only through the library admission point with the scope its phrases were admitted
+/// with (<see cref="MaiPhraseAdmission"/>), as the last step before the request leaves, the retry included. The transport
+/// follows no redirect, so the audio, the phrases and the key header can only reach the address that was configured. One
+/// deadline bounds the whole attempt, credentials included, and the caller's cancellation reaches every step. And an answer
+/// Scribe does not recognize is a failure to decode on this PC, never an empty dictation.
+/// </remarks>
 public sealed class MaiTranscribeClient : IMaiTranscribeClient, IDisposable
 {
     public const string CognitiveServicesScope = "https://cognitiveservices.azure.com/.default";
-    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(25);
+
+    // The whole attempt's budget: acquiring credentials, every send (the retry without enhanced mode included) and reading
+    // the answer. It was once the HTTP client's own timeout, which began only after the credential and restarted for the
+    // retry, so a sign-in queued behind another Azure CLI request held the dictation for minutes before it started.
+    private static readonly TimeSpan DefaultDeadline = TimeSpan.FromSeconds(25);
 
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
-    private readonly Func<AzureCredentialRequest, ValueTask<string>> _tokenProvider;
+
+    // The one place a credential is built (the seam below AcquireTokenAsync): the shared Azure credential factory unless a
+    // test supplies its own, so the scope asked for and the cancellation handed down run as shipped over any credential.
+    private readonly Func<AzureCredentialRequest, TokenCredential> _credentialFactory;
     private readonly ILogger<MaiTranscribeClient> _logger;
+    private readonly TimeSpan _deadline;
+    private readonly TimeProvider _timeProvider;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _fastTranscriptionFallbackHosts =
         new(StringComparer.OrdinalIgnoreCase);
 
@@ -299,7 +380,7 @@ public sealed class MaiTranscribeClient : IMaiTranscribeClient, IDisposable
         ILogger<MaiTranscribeClient> logger,
         PerfFlags? perfFlags = null,
         HttpMessageHandler? handler = null)
-        : this(logger, perfFlags, handler, tokenProvider: null)
+        : this(logger, perfFlags, handler, credentialFactory: null)
     {
     }
 
@@ -307,22 +388,43 @@ public sealed class MaiTranscribeClient : IMaiTranscribeClient, IDisposable
         ILogger<MaiTranscribeClient> logger,
         PerfFlags? perfFlags,
         HttpMessageHandler? handler,
-        Func<AzureCredentialRequest, ValueTask<string>>? tokenProvider)
+        Func<AzureCredentialRequest, TokenCredential>? credentialFactory,
+        TimeSpan? deadline = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(logger);
         _logger = logger;
+        _deadline = deadline ?? DefaultDeadline;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _ownsHttpClient = handler is null;
+
+        // No timeout of the client's own: the attempt's one deadline (TryTranscribeAsync) bounds every step, so a second,
+        // per-send limit can never disagree with it.
         _httpClient = handler is null
-            ? new HttpClient { Timeout = DefaultTimeout }
-            : new HttpClient(handler, disposeHandler: false) { Timeout = DefaultTimeout };
-        _tokenProvider = tokenProvider ?? (async request =>
-        {
-            var credential = AzureCredentialFactory.Create(request);
-            var token = await credential.GetTokenAsync(
-                new TokenRequestContext([CognitiveServicesScope]),
-                CancellationToken.None).ConfigureAwait(false);
-            return token.Token;
-        });
+            ? new HttpClient(CreateNetworkHandler(), disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan }
+            : new HttpClient(handler, disposeHandler: false) { Timeout = Timeout.InfiniteTimeSpan };
+        _credentialFactory = credentialFactory ?? (request => AzureCredentialFactory.Create(request));
+    }
+
+    /// <summary>
+    /// The transport this client sends through unless one is supplied. It follows no redirect: a configured address that
+    /// answers with a redirect, to any other address, would otherwise have the whole request (the multipart audio, the
+    /// phrases, and a key sent as a custom header, which .NET does not strip the way it strips an Authorization header)
+    /// repeated at wherever the answer pointed. The answer comes back as it is and reads as a failure, so the dictation is
+    /// decoded on this PC, as cleanup's transport does.
+    /// </summary>
+    internal static HttpMessageHandler CreateNetworkHandler() => new HttpClientHandler { AllowAutoRedirect = false };
+
+    // The sign-in step: the credential asked for the Cognitive Services scope, under the attempt's token, so the one
+    // deadline and the caller's cancellation end a wait inside the credential (an Azure CLI call queued behind another).
+    private async ValueTask<string> AcquireTokenAsync(
+        AzureCredentialRequest request, CancellationToken cancellationToken)
+    {
+        var credential = _credentialFactory(request);
+        var token = await credential.GetTokenAsync(
+            new TokenRequestContext([CognitiveServicesScope]),
+            cancellationToken).ConfigureAwait(false);
+        return token.Token;
     }
 
     public async Task<MaiTranscribeAttemptResult> TryTranscribeAsync(
@@ -351,43 +453,70 @@ public sealed class MaiTranscribeClient : IMaiTranscribeClient, IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         var started = Stopwatch.GetTimestamp();
 
+        // One deadline for the whole attempt, beside the caller's cancellation: the credential, both sends and the answer
+        // all run under this token, so no step can outlast it and the retained audio is always free to decode on this PC.
+        using var deadline = new CancellationTokenSource(_deadline, _timeProvider);
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+        var token = bounded.Token;
+
         try
         {
             var wavBytes = MaiWavEncoder.EncodePcm16Wav(audio.Samples, audio.SampleRate);
             var useEnhancedMode = !_fastTranscriptionFallbackHosts.ContainsKey(requestUri.Host);
-            var (statusCode, body) = await SendMultipartAsync(
+            var sent = await SendMultipartAsync(
                 requestUri,
                 options,
                 wavBytes,
                 BuildDefinitionJson(options, includeEnhancedMode: useEnhancedMode),
-                cancellationToken).ConfigureAwait(false);
+                token).ConfigureAwait(false);
 
-            if (statusCode == 400 &&
+            if (sent.HandedOver &&
+                sent.StatusCode == 400 &&
                 useEnhancedMode &&
-                body.Contains("Enhanced mode", StringComparison.OrdinalIgnoreCase))
+                sent.Body.Contains("Enhanced mode", StringComparison.OrdinalIgnoreCase))
             {
                 _fastTranscriptionFallbackHosts[requestUri.Host] = true;
                 _logger.LogInformation(
                     "MAI-Transcribe-2 enhancedMode is not yet enabled in this resource's region; retrying with Azure Fast Transcription and phraseList biasing.");
-                (statusCode, body) = await SendMultipartAsync(
+                sent = await SendMultipartAsync(
                     requestUri,
                     options,
                     wavBytes,
                     BuildDefinitionJson(options, includeEnhancedMode: false),
-                    cancellationToken).ConfigureAwait(false);
+                    token).ConfigureAwait(false);
             }
 
             var elapsed = Stopwatch.GetElapsedTime(started);
-            if (statusCode is < 200 or >= 300)
+            if (!sent.HandedOver)
+            {
+                // Nothing was sent: the AI permission the phrases were admitted with no longer holds.
+                _logger.LogInformation(
+                    "MAI-Transcribe-2 request was not sent after {ElapsedMs} ms: a word pack's AI permission changed after this dictation was admitted.",
+                    (long)elapsed.TotalMilliseconds);
+                return MaiTranscribeAttemptResult.Fallback("library-scope", elapsed);
+            }
+
+            if (sent.StatusCode is < 200 or >= 300)
             {
                 _logger.LogWarning(
                     "MAI-Transcribe-2 request returned HTTP {Status} after {ElapsedMs} ms.",
-                    statusCode,
+                    sent.StatusCode,
                     (long)elapsed.TotalMilliseconds);
-                return MaiTranscribeAttemptResult.Fallback($"http-{statusCode}", elapsed);
+                return MaiTranscribeAttemptResult.Fallback($"http-{sent.StatusCode}", elapsed);
             }
 
-            var transcript = ParseTranscriptResponse(body);
+            // A success status is not yet an answer: a body that is not a transcript response (a gateway's HTML page, an
+            // object with none of the members Scribe reads) is a failure, so the retained audio is decoded on this PC
+            // instead of the dictation being reported as silence. A recognized response that heard nothing is not.
+            if (!TryParseTranscriptResponse(sent.Body, out var transcript))
+            {
+                _logger.LogWarning(
+                    "MAI-Transcribe-2 answered HTTP {Status} with a response Scribe does not recognize after {ElapsedMs} ms.",
+                    sent.StatusCode,
+                    (long)elapsed.TotalMilliseconds);
+                return MaiTranscribeAttemptResult.Fallback("malformed-response", elapsed);
+            }
+
             _logger.LogDebug(
                 "MAI-Transcribe-2 recognized {AudioMs} ms of audio in {ElapsedMs} ms ({Chars} characters, {Phrases} bias phrase(s)).",
                 (int)audio.Duration.TotalMilliseconds,
@@ -403,7 +532,19 @@ public sealed class MaiTranscribeClient : IMaiTranscribeClient, IDisposable
         }
         catch (Exception ex)
         {
+            // The caller's cancellation outranks whatever a credential or the transport made of it (a sign-in can wrap
+            // its own cancellation in another exception).
+            cancellationToken.ThrowIfCancellationRequested();
+
             var elapsed = Stopwatch.GetElapsedTime(started);
+            if (deadline.IsCancellationRequested)
+            {
+                _logger.LogWarning(
+                    "MAI-Transcribe-2 did not finish within {DeadlineMs} ms, credentials included.",
+                    (long)_deadline.TotalMilliseconds);
+                return MaiTranscribeAttemptResult.Fallback("timeout", elapsed);
+            }
+
             var failureShape = FailureShape.Describe(ex);
             _logger.LogWarning(
                 "MAI-Transcribe-2 request failed after {ElapsedMs} ms ({Failure}).",
@@ -413,7 +554,10 @@ public sealed class MaiTranscribeClient : IMaiTranscribeClient, IDisposable
         }
     }
 
-    private async Task<(int StatusCode, string Body)> SendMultipartAsync(
+    // One send's outcome. HandedOver is false when the admission point refused it, so nothing left this PC.
+    private readonly record struct Sent(bool HandedOver, int StatusCode, string Body);
+
+    private async Task<Sent> SendMultipartAsync(
         Uri requestUri,
         MaiTranscribeOptions options,
         byte[] wavBytes,
@@ -435,7 +579,7 @@ public sealed class MaiTranscribeClient : IMaiTranscribeClient, IDisposable
                 options.SubscriptionId,
                 options.ClientId,
                 options.ClientSecret);
-            var bearer = await _tokenProvider(credRequest).ConfigureAwait(false);
+            var bearer = await AcquireTokenAsync(credRequest, cancellationToken).ConfigureAwait(false);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
         }
 
@@ -448,9 +592,45 @@ public sealed class MaiTranscribeClient : IMaiTranscribeClient, IDisposable
         multipart.Add(definitionContent, "definition");
         request.Content = multipart;
 
-        using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        // The last step before the request leaves, and where the admitted library scope is judged: a permission withdrawn
+        // while the credential was being acquired, or between the first send and its retry, is seen here, and the phrases
+        // already copied into the request go nowhere.
+        Task<HttpResponseMessage>? sending = null;
+        if (!HandOff(options, () => sending = StartSend(request, cancellationToken)))
+        {
+            return new Sent(HandedOver: false, StatusCode: 0, Body: string.Empty);
+        }
+
+        using var response = await sending!.ConfigureAwait(false);
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        return ((int)response.StatusCode, body);
+        return new Sent(HandedOver: true, StatusCode: (int)response.StatusCode, Body: body);
+    }
+
+    // With library words in the request, runs the send only while the published scope still covers the one the words were
+    // admitted with, under the source's permission gate (contract 2.10: the send is started and not waited for, because the
+    // gate is held meanwhile). Without any, there is no library permission to judge.
+    private static bool HandOff(MaiTranscribeOptions options, Action send)
+    {
+        if (options.PhraseAdmission is not { } admission)
+        {
+            send();
+            return true;
+        }
+
+        return admission.Source.TryHandOff(admission.Scope, send);
+    }
+
+    // Never throws inside the permission gate: a send that fails to start fails its own task instead.
+    private Task<HttpResponseMessage> StartSend(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return _httpClient.SendAsync(request, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            return Task.FromException<HttpResponseMessage>(ex);
+        }
     }
 
     public static string BuildDefinitionJson(MaiTranscribeOptions options, bool includeEnhancedMode = true)
@@ -499,11 +679,21 @@ public sealed class MaiTranscribeClient : IMaiTranscribeClient, IDisposable
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
-    public static string ParseTranscriptResponse(string? json)
+    private static readonly string[] PhraseArrayMembers = ["combinedPhrases", "phrases"];
+    private static readonly string[] TextMembers = ["text", "DisplayText"];
+
+    /// <summary>
+    /// Reads the transcript out of the body of a successful answer. False when the body is not a transcript response Scribe
+    /// recognizes: it is not JSON, not an object, or an object with none of the transcript members Scribe reads in the shape
+    /// it expects. That is a failure, for the caller to decode on this PC, and never an empty dictation. True with an empty
+    /// <paramref name="transcript"/> is a recognized answer that heard nothing.
+    /// </summary>
+    public static bool TryParseTranscriptResponse(string? json, out string transcript)
     {
+        transcript = string.Empty;
         if (string.IsNullOrWhiteSpace(json))
         {
-            return string.Empty;
+            return false;
         }
 
         try
@@ -512,37 +702,54 @@ public sealed class MaiTranscribeClient : IMaiTranscribeClient, IDisposable
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
             {
-                return string.Empty;
+                return false;
             }
 
-            if (TryJoinPhraseArray(root, "combinedPhrases", out var combined))
+            // A member counts as recognized when it has the shape the service documents, whether or not it holds words: the
+            // first one that holds any is the transcript, and when none does, a recognized member means it heard nothing.
+            var recognized = false;
+            foreach (var member in PhraseArrayMembers)
             {
-                return combined;
+                if (!TryJoinPhraseArray(root, member, out var joined))
+                {
+                    continue;
+                }
+
+                recognized = true;
+                if (joined.Length > 0)
+                {
+                    transcript = joined;
+                    return true;
+                }
             }
 
-            if (TryJoinPhraseArray(root, "phrases", out var segmented))
+            foreach (var member in TextMembers)
             {
-                return segmented;
+                if (!root.TryGetProperty(member, out var node) || node.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+
+                recognized = true;
+                var text = node.GetString()?.Trim() ?? string.Empty;
+                if (text.Length > 0)
+                {
+                    transcript = text;
+                    return true;
+                }
             }
 
-            if (root.TryGetProperty("text", out var textNode) && textNode.ValueKind == JsonValueKind.String)
-            {
-                return textNode.GetString()?.Trim() ?? string.Empty;
-            }
-
-            if (root.TryGetProperty("DisplayText", out var displayNode) && displayNode.ValueKind == JsonValueKind.String)
-            {
-                return displayNode.GetString()?.Trim() ?? string.Empty;
-            }
-
-            return string.Empty;
+            return recognized;
         }
         catch (JsonException)
         {
-            return string.Empty;
+            return false;
         }
     }
 
+    // The words of a phrase array in the shape the service documents: an array whose every element is an object with a
+    // string text. False when the member is absent or shaped otherwise. True with an empty result when the array holds no
+    // words (empty text, or no elements at all), which is a recognized answer that heard nothing.
     private static bool TryJoinPhraseArray(JsonElement root, string propertyName, out string result)
     {
         result = string.Empty;
@@ -554,18 +761,17 @@ public sealed class MaiTranscribeClient : IMaiTranscribeClient, IDisposable
         var parts = new List<string>();
         foreach (var item in array.EnumerateArray())
         {
-            if (item.ValueKind == JsonValueKind.Object &&
-                item.TryGetProperty("text", out var textProp) &&
-                textProp.ValueKind == JsonValueKind.String &&
-                textProp.GetString()?.Trim() is { Length: > 0 } part)
+            if (item.ValueKind != JsonValueKind.Object ||
+                !item.TryGetProperty("text", out var textProp) ||
+                textProp.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            if (textProp.GetString()?.Trim() is { Length: > 0 } part)
             {
                 parts.Add(part);
             }
-        }
-
-        if (parts.Count == 0)
-        {
-            return false;
         }
 
         result = string.Join(' ', parts);

@@ -190,6 +190,25 @@ final class LoginItemSwitchTests: XCTestCase {
         XCTAssertTrue(loginItem.message.contains("error 5"), loginItem.message)
     }
 
+    /// A change is logged through `ScribeLog`, so the diagnostics export holds it, as case names, a flag and an error
+    /// code, and nothing macOS said.
+    @MainActor
+    func testAChangeIsLoggedThroughScribeLogAsShapes() async throws {
+        let log = recordScribeLog()
+        let service = LoginItemServiceFake(.enabled)
+        await service.refuse(with: .failed(code: 5))
+        let loginItem = makeSwitch(service)
+        await loginItem.refresh()
+
+        _ = await loginItem.setEnabled(false)
+
+        let line = try XCTUnwrap(log.lines.first { $0.contains("Login item change") })
+        for field in ["requested=false", "before=enabled", "after=enabled", "refusal=failed", "outcome=declined"] {
+            XCTAssertTrue(line.contains(field), "\(field) is missing from: \(line)")
+        }
+        XCTAssertTrue(line.contains("errorCode=5"), line)
+    }
+
     @MainActor
     func testAnAcceptedRequestThatChangesNothingIsNotReportedAsApplied() async {
         let service = LoginItemServiceFake(.notRegistered)

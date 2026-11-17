@@ -36,6 +36,7 @@ public sealed class ClipboardBorrowerTests
             new[]
             {
                 "open",
+                "owner-responds",
                 "read-text",
                 "empty",
                 "set-text",
@@ -383,7 +384,7 @@ public sealed class ClipboardBorrowerTests
         Assert.False(clipboard.Has(ClipboardBorrower.ReceiptFormatName));
 
         var markers = ClipboardBorrower.PrivacyMarkerFormats.Select(name => "set-data:" + name).ToArray();
-        var snapshot = previousWasEmpty ? [] : new[] { "read-text" };
+        var snapshot = previousWasEmpty ? [] : new[] { "owner-responds", "read-text" };
         var write = new[] { "empty", "set-text" }.Concat(markers).Append("set-data:" + ClipboardBorrower.ReceiptFormatName);
         var rollback = previousWasEmpty ? ["empty"] : new[] { "empty", "set-text" }.Concat(markers);
         Assert.Equal(
@@ -443,6 +444,46 @@ public sealed class ClipboardBorrowerTests
         Assert.Equal(ClipboardBorrowStatus.SnapshotUnreadable, borrow.Status);
         Assert.DoesNotContain("empty", clipboard.Trace);
         Assert.Equal(Previous, clipboard.Text);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void An_owner_that_does_not_answer_is_never_asked_for_the_users_text(bool keepWholeClipboard)
+    {
+        // Reading text an owner supplies on request makes it render it, with no documented bound on the wait, while Scribe
+        // holds everyone's clipboard. So the owner is asked first, as a whole-clipboard borrow always has, and the clipboard
+        // is left exactly as it was when it does not answer. Plain text takes this path with or without the whole-clipboard
+        // ask. The probe is bounded and made once the clipboard is held: it shows the owner answered a moment ago, not that
+        // an owner that stops answering afterwards can no longer hold the read.
+        var (clipboard, borrower, _) = Create();
+        clipboard.SeedText(Previous);
+        clipboard.OwnerResponding = false;
+        uint sequence = clipboard.Sequence;
+
+        var borrow = borrower.TryBorrow(Dictation, keepWholeClipboard);
+
+        Assert.Equal(ClipboardBorrowStatus.SnapshotUnreadable, borrow.Status);
+        Assert.Null(borrow.Lease);
+        Assert.Equal(ClipboardRestoreOutcome.NotApplicable, borrow.Rollback);
+        Assert.Equal(new[] { "open", "owner-responds", "close" }, clipboard.Trace);
+        Assert.Equal(sequence, clipboard.Sequence);
+        Assert.Equal(Previous, clipboard.Text);
+        Assert.False(clipboard.IsHeldByScribe);
+    }
+
+    [Fact]
+    public void An_empty_clipboard_has_nothing_to_render_so_its_owner_is_not_asked()
+    {
+        var (clipboard, borrower, _) = Create();
+        clipboard.SeedEmpty();
+        clipboard.OwnerResponding = false;
+
+        var borrow = borrower.TryBorrow(Dictation);
+
+        Assert.Equal(ClipboardBorrowStatus.Borrowed, borrow.Status);
+        Assert.True(borrow.Lease!.WasEmpty);
+        Assert.DoesNotContain("owner-responds", clipboard.Trace);
     }
 
     [Fact]

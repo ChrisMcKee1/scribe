@@ -15,6 +15,33 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public sealed class CleanupDisclosureTests
 {
+    [Theory]
+    [InlineData("README.md")]
+    [InlineData("PRIVACY.md")]
+    [InlineData("docs/microsoft-store-submission.md")]
+    [InlineData("docs/foundry-setup.md")]
+    [InlineData("src/Scribe.App/Settings/SettingsWindow.xaml")]
+    [InlineData("src/Scribe.App/Onboarding/WelcomeWindow.xaml")]
+    public void Privacy_copy_distinguishes_optional_cloud_speech_from_cleanup(string relativePath)
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        Assert.Contains("MAI-Transcribe-2", source, StringComparison.Ordinal);
+        Assert.Contains("AI cleanup never sends audio", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("your audio never leaves it", source, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Audio is never sent\nto an AI provider", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Store_migration_instructions_require_a_complete_backup_and_verification_before_uninstall()
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "docs", "mai-transcribe-setup.md"));
+        Assert.Contains("does **not** automatically discover and migrate", source, StringComparison.Ordinal);
+        Assert.Contains("Back up the entire data folder", source, StringComparison.Ordinal);
+        Assert.Contains("do not overwrite or merge", source, StringComparison.Ordinal);
+        Assert.Contains("Only after verification, uninstall", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("completes the automatic migration", source, StringComparison.Ordinal);
+    }
+
     private static string N(int value) => value.ToString("N0", CultureInfo.InvariantCulture);
 
     [Fact]
@@ -178,15 +205,17 @@ public sealed class CleanupDisclosureTests
         Assert.Contains("test request", text, StringComparison.Ordinal);
         Assert.Contains("none of your vocabulary", text, StringComparison.Ordinal);
         Assert.Contains("snippet templates", text, StringComparison.Ordinal);
-        Assert.Contains("audio never leaves this device", text, StringComparison.Ordinal);
+        Assert.Contains("Cleanup never sends your snippet templates or audio.", text, StringComparison.Ordinal);
+        Assert.Contains("MAI-Transcribe-2 speech model sends audio", text, StringComparison.Ordinal);
+        Assert.Contains("even with AI cleanup off", text, StringComparison.Ordinal);
         Assert.Contains("GitHub Copilot sends all of this to GitHub", text, StringComparison.Ordinal);
     }
 
     [Theory]
-    [InlineData(CleanupProvider.FoundryLocal, "Your text, writing style and vocabulary stay on this PC. Audio never leaves it.")]
-    [InlineData(CleanupProvider.AzureFoundry, "Each cleanup sends the text Scribe heard, your writing style, and the dictionary and word pack words it mentions to your Microsoft Foundry deployment. Audio never leaves this PC.")]
-    [InlineData(CleanupProvider.OpenAiCompatible, "Each cleanup sends the text Scribe heard, your writing style, and the dictionary and word pack words it mentions to the address you enter. Audio never leaves this PC.")]
-    [InlineData(CleanupProvider.GitHubCopilot, "Each cleanup sends the text Scribe heard, your writing style, and the dictionary and word pack words it mentions to GitHub. Audio never leaves this PC.")]
+    [InlineData(CleanupProvider.FoundryLocal, "Your cleanup text, writing style and vocabulary stay on this PC. AI cleanup never sends audio.")]
+    [InlineData(CleanupProvider.AzureFoundry, "Each cleanup sends the text Scribe heard, your writing style, and the dictionary and word pack words it mentions to your Microsoft Foundry deployment. AI cleanup never sends audio.")]
+    [InlineData(CleanupProvider.OpenAiCompatible, "Each cleanup sends the text Scribe heard, your writing style, and the dictionary and word pack words it mentions to the address you enter. AI cleanup never sends audio.")]
+    [InlineData(CleanupProvider.GitHubCopilot, "Each cleanup sends the text Scribe heard, your writing style, and the dictionary and word pack words it mentions to GitHub. AI cleanup never sends audio.")]
     public void Provider_summary_names_the_destination_and_never_audio(CleanupProvider provider, string expected) =>
         Assert.Equal(expected, CleanupDisclosure.SummaryFor(provider));
 
@@ -277,17 +306,21 @@ public sealed class CleanupDisclosureTests
         Assert.Contains("_cleanup.CompleteAsync(AiDictionarySuggester.SystemPrompt, sample, recipient)", code, StringComparison.Ordinal);
         Assert.DoesNotContain("_settings.AiCleanupProvider != CleanupProvider.FoundryLocal", code, StringComparison.Ordinal);
 
-        // The saved-provider snapshot changes where the document is loaded and right after it is stored,
-        // never before: a Save that fails leaves _settings holding the picked provider.
+        // The saved-provider snapshot changes where the document is loaded and right after it is stored, never before: a Save
+        // that fails leaves _settings holding the picked provider, and what the Save stores is the document it froze, never
+        // _settings, which may already hold a tray change this Save did not store.
         const string Snapshot = "_savedAiProvider = _settings.AiCleanupProvider;";
+        const string Stored = "_savedAiProvider = candidate.Document.AiCleanupProvider;";
         var assignments = Regex.Matches(code, Regex.Escape(Snapshot)).Select(m => m.Index).ToList();
-        Assert.Equal(2, assignments.Count);
+        Assert.Single(assignments);
+        Assert.Single(Regex.Matches(code, Regex.Escape(Stored)));
         var load = code.IndexOf("_settings = settingsRepository.Load();", StringComparison.Ordinal);
         var request = code.IndexOf("private WordPackSaveProtocolRequest BuildWordPackSaveRequest(", StringComparison.Ordinal);
         var store = code.IndexOf("_settingsRepository.SaveBundle(", request, StringComparison.Ordinal);
-        var apply = code.IndexOf("useVocabularyReload ? _reloadVocabulary : () => _applySettings(_settings)", request, StringComparison.Ordinal);
+        var committed = code.IndexOf(Stored, request, StringComparison.Ordinal);
+        var apply = code.IndexOf("() => StoredSettingsReapply.Reapply(", request, StringComparison.Ordinal);
         Assert.True(load >= 0 && load < assignments[0] && assignments[0] < store, "The snapshot is not taken where the settings load.");
-        Assert.True(store < assignments[1] && store < apply, "The snapshot does not follow the store.");
+        Assert.True(store < committed && store < apply, "The snapshot does not follow the store.");
     }
 
     [Fact]
@@ -296,28 +329,40 @@ public sealed class CleanupDisclosureTests
         var root = RepositoryRoot();
         var code = ReadSettingsWindowCode(root);
 
-        // One call puts settings into effect from the window, the successful Save's: after the store, before the
-        // handlers of a Save that failed. A failed Save leaves every edit in _settings, a picked provider among them,
-        // so any other caller would apply what nothing stored.
-        var call = Assert.Single(Regex.Matches(code, @"_applySettings\s*(\(|\?\.|\.Invoke\b)"));
-        Assert.StartsWith("_applySettings(_settings)", code[call.Index..], StringComparison.Ordinal);
+        // Nothing puts the window's editing document into effect, the successful Save's included. A failed Save leaves
+        // every edit in _settings, a picked provider among them, and a tray change is adopted into it at once, before its
+        // own write has stored it. The Save applies only after it awaits the library completion and any reference
+        // repairs, so reading _settings then would apply a choice that was never stored, and a tray write that then
+        // fails would roll its switch back from the controller, which would already hold it. The Save applies the
+        // settings as stored when it applies them, after its own store.
+        Assert.DoesNotMatch(@"_applySettings\s*(\(|\?\.|\.Invoke\b)", code);
+        Assert.DoesNotContain("_applySettings(_settings)", code, StringComparison.Ordinal);
         var save = code.IndexOf("private async Task<bool> TrySaveAsync()", StringComparison.Ordinal);
         var request = code.IndexOf("private WordPackSaveProtocolRequest BuildWordPackSaveRequest(", StringComparison.Ordinal);
         var store = code.IndexOf("_settingsRepository.SaveBundle(", request, StringComparison.Ordinal);
         var protocolCall = code.IndexOf("_wordPackSaveProtocol.SaveAsync(", save, StringComparison.Ordinal);
+        var apply = code.IndexOf(
+            "StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, _reloadVocabulary)", request, StringComparison.Ordinal);
         Assert.True(
-            save >= 0 && protocolCall > save && store < call.Index,
-            "The window applies its own document outside the successful Save.");
+            save >= 0 && protocolCall > save && request >= 0 && store > request && apply > store,
+            "The Save does not apply the settings as stored, after its own store.");
 
-        // Nor is the delegate handed on another way: besides its field, its assignment and that call, it only goes to
-        // StoredSettingsReapply, which applies the settings as stored. Both calls keep the answer of the vocabulary
-        // generation they ask for, which the window awaits before it says the change is in effect.
+        // Nor is the delegate handed on another way: besides its field, its assignment and the Save's apply, it only goes
+        // to StoredSettingsReapply, which applies the settings as stored. Every use keeps the answer of the vocabulary
+        // generation it asks for, which the window awaits before it says the change is in effect.
         var uses = code.Split('\n').Select(line => line.Trim()).Where(line => Regex.IsMatch(line, @"\b_applySettings\b")).ToList();
         Assert.All(uses, line => Assert.True(
             line is "private readonly Func<AppSettings, Task<Scribe.Core.Vocabulary.VocabularyRefresh>> _applySettings;" or "_applySettings = applySettings;" ||
-            line is "useVocabularyReload ? _reloadVocabulary : () => _applySettings(_settings)," ||
+            line is "() => StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, _reloadVocabulary)," ||
             line.StartsWith("var reapplied = StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, ", StringComparison.Ordinal),
             $"The window uses _applySettings in a way this test does not know: {line}"));
+
+        // The Save and an earlier Save that is only now settled put the settings into effect the same way. No caller asks
+        // the request for a vocabulary-only reload instead: a Save that committed Forever and was settled later would keep
+        // the old retention running, since a reload replaces no settings.
+        Assert.DoesNotContain("useVocabularyReload", code, StringComparison.Ordinal);
+        Assert.Equal(2, Regex.Matches(code, Regex.Escape("TrySettlePendingAsync(BuildWordPackSaveRequest(null, null, null, null, null))")).Count);
+        Assert.Single(Regex.Matches(code, Regex.Escape("() => StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, _reloadVocabulary),")));
 
         // The Usage page's Add applies the stored settings, and the shell reloads only the vocabulary when there are none.
         var add = code.IndexOf("private async void UsageNovelTermAddButton_Click(", StringComparison.Ordinal);

@@ -1302,12 +1302,17 @@ internal sealed class DictationController : IDisposable
             var cleanupWritingStyle = CleanupWritingStyleFor(settings, targetApp);
             if (profile is not null)
             {
-                _log.LogInformation("Applying profile '{Profile}' for {App}.", profile.Name, targetApp);
+                _log.LogInformation("Applying an app profile for {App}.", targetApp);
             }
 
             currentStage = TryDictationReportClassifier.StageSpeechRecognition;
             var recognitionStarted = Stopwatch.GetTimestamp();
-            var result = _transcription.Transcribe(audio, cancellationToken);
+            // Decided from what this recording was admitted with, never from a fresh read of the stored settings or the
+            // dictionary: whether the audio may go to cloud speech, and which of the user's words may go with it, were fixed
+            // at admission, so a Save or a word pack's AI permission changing while this dictation is processed redirects
+            // neither.
+            var result = _transcription.Transcribe(
+                audio, new TranscriptionAdmission(settings, session.Vocabulary), cancellationToken);
             LogRecognitionTiming(session.Id, recognizerResident, Stopwatch.GetElapsedTime(recognitionStarted), result);
             report.DecodeDuration = result.DecodeDuration;
             report.RealTimeFactor = result.RealTimeFactor;
@@ -1538,9 +1543,7 @@ internal sealed class DictationController : IDisposable
                 activity?.SetStatus(ActivityStatusCode.Error, injection.Error);
                 _log.LogWarning(
                     "Text injection failed for {App}: {Error}", targetApp ?? "the focused app", injection.Error);
-                pillProblem = injection.Error == InjectionResult.FocusChangedError
-                    ? new DictationProblemReport(DictationProblem.FocusChanged)
-                    : new DictationProblemReport(DictationProblem.TypingIncomplete);
+                pillProblem = DictationProblemReport.ForFailedInsertion(injection);
                 RaiseError(pillProblem);
 
                 // The transcript was stored before typing began, so close the loop: without a hint the

@@ -137,7 +137,8 @@ final class FoundryLocalCleanupProvider: CleanupProvider {
             bounded, at: url, model: modelAlias, bearerToken: nil, temperature: CleanupSampling.onDeviceTemperature,
             defaultTimeout: timeout, provider: .foundryLocal)
         return CleanupResponse(
-            cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: modelAlias)
+            cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: modelAlias,
+            ending: completion.ending)
     }
 
     private func boundedRequest(_ request: CleanupRequest) async throws -> CleanupRequest {

@@ -7,14 +7,22 @@
 
 ## What Scribe is
 
-Private, **fully offline** push‑to‑talk voice dictation for **Windows 11**. Hold a key,
+Private, **offline by default** push‑to‑talk voice dictation for **Windows 11**. Hold a key,
 speak, release: punctuated text is typed into whatever app has focus. Audio is captured,
-transcribed in memory on the CPU, and discarded. Nothing is uploaded. The only optional
-online feature is AI cleanup against a user‑configured Azure/Foundry/OpenAI‑compatible
+transcribed in memory on the CPU, and discarded when a local speech model is selected.
+The optional MAI-Transcribe-2 cloud speech model sends audio and up to 500 dictionary and
+AI-permitted word pack phrases to Microsoft Foundry when explicitly selected, independently
+of AI cleanup. Another optional online feature is AI cleanup against a user‑configured Azure/Foundry/OpenAI‑compatible
 endpoint or GitHub Copilot (strictly opt‑in, never audio). Each cleanup request carries the recognized
 text, the cleanup instructions and the vocabulary glossary (the terms from your dictionary and the word packs
 you let AI cleanup use that the dictation appears to mention, within its budget); see
 [What cleanup sends](#what-cleanup-sends-keep-the-disclosure-true).
+
+Cloud speech uses `TranscriptionAdmission`, captured from the recording's settings and vocabulary.
+The ordinary transcription overloads stay local. Each cloud send, including the enhanced-mode retry,
+rechecks the admitted word pack scope with `TryHandOff`; a refusal uses local Parakeet instead.
+Credentials, sends and body reads share one 25-second deadline, redirects are disabled, and an
+unsupported success-response shape falls back locally rather than discarding the dictation.
 
 **Feature surface (so you don't reinvent what's shipped):** overlay pill with a 9‑anchor
 position picker + on‑screen preview; user **dictionary** (CSV import/export, history‑mined
@@ -91,7 +99,7 @@ Key macOS architecture facts before you edit it:
   (`TextPostProcessor.correctVocabulary`): the vocabulary rules' replacements (one line of at most 100
   characters, no em or en dash, already in the reply's normal form, which keeps a space before ".NET") are made
   in the text the provider is sent and its reply is checked against, and the snippets' and every template-like
-  replacement are held back and made on the reply where it kept the words that set them off and had not written
+  replacement, plus every rule from a word pack kept from AI cleanup, are held back and made on the reply where it kept the words that set them off and had not written
   the whole replacement around them already (`finishAfterCleanup`). No rule is ever matched against the model's
   text, so a model that returns what it was sent gets exactly the cleanup-off text from the rules
   (`TextPostProcessorPropertyTests`; the response guard still rewrites dashes in the reply). No glossary is sent
@@ -1302,7 +1310,9 @@ change the sums and needs a decision (and probably a flag) of its own.
   Never call the decorator from inside `HistoryRepository.Add`: that runs on the writer thread and
   would wait on itself.
 - **`App.OnExit` runs every step through `StagedTeardown`**, each guarded on its own, so one failure no
-  longer skips the rest. `BeginShutdown` is the first step: from there the controller starts nothing new
+  longer skips the rest. The first step disposes the settings application owner (`SettingsApplicationDebt`, see
+  Settings document): it only cancels its wait and never waits for an attempt, so it costs nothing. `BeginShutdown` is
+  the first step of the controller's: from there the controller starts nothing new
   and raises no more state. `StorageMaintenance.Stop(3 s)` comes right after it, before anything is
   disposed. Host disposal comes after the controller, the tray and the settings-write drain.
 - **Exit has no overall deadline; its worst case is the sum of bounded waits:** 3 s for storage
@@ -1916,6 +1926,19 @@ change the sums and needs a decision (and probably a flag) of its own.
 
 ## Clipboard paste (read before touching ClipboardBorrower)
 
+- **Every nonempty clipboard borrow probes its owner before reading.** Plain text and whole-clipboard
+  snapshots use the same bounded WM_NULL check (250 ms). An owner that does not answer leaves the
+  clipboard untouched and the dictation is typed instead. This can refuse text already in memory,
+  and it cannot prevent an owner from hanging after the check.
+- **Unconfirmed insertion is not refusal.** A standard edit control can apply EM_REPLACESEL before
+  its parent notification times out. `StandardEditInsertion.Unconfirmed` therefore leaves the
+  dictation copyable and reports failure, never resending the full text by typing or paste. Only a
+  definite refusal permits fallback. A SendInput resend after a retry sleep checks focus again
+  immediately before sending content; the key-ups that end Scribe's own Shift or Ctrl chord still
+  go out even after focus moves.
+  `DictationProblemReport.ForFailedInsertion` maps unconfirmed delivery to a notice asking the user
+  to check the app before copying, with no copy-on-click action. `PillOutcome.Of` shows no outcome
+  for it, since neither "Nothing typed" nor a successful insertion is established.
 - **Only state read while Scribe holds the clipboard authorizes a paste or a restore.** OpenClipboard
   keeps other applications out only while it is open, so a sequence number read after CloseClipboard may
   already belong to another application's copy. `ClipboardBorrower` trusts the number it read while
@@ -2108,24 +2131,81 @@ change the sums and needs a decision (and probably a flag) of its own.
   (`ExternalSwitchSync.NextRevision`) and goes through the checked
   `Update(mutate, revision, out superseded)`. A save passes its window's newest intent as
   `SaveBundle(..., aiCleanupIntent)`, which supersedes every tray change up to it, and a save with none
-  keeps the stored value and hands it back to the window. Dictation and the tray always apply the
+  keeps the stored value and hands it back to the window. So does a save whose intent is older than the
+  newest a committed write carried for that setting (the repository records, after each commit, a save's
+  intent and a tray change's own revision, per setting): its window captured the intent before a newer
+  change committed, as when a Save waits for a confirmation while the tray changes the switch, so the value
+  it carries is the older choice. Dictation and the tray always apply the
   settings as stored, never the value the tray asked for.
 - **A Settings Save can wait behind another settings write.** It runs on the dispatcher and takes the
   same lock, so the window can wait out a write that holds it, including one in SQLite's busy wait:
   about two busy timeouts (2 x 10 s) in the worst case, when another process holds the database.
-- **Only the Save that stored the window's document applies it.** `SettingsWindow._settings` is the
+- **Only the Save that stored the window's document applies it, and it applies the settings as stored.**
+  `SettingsWindow._settings` is the
   editing document: Save writes every field onto it before `SaveBundle`, and a Save that fails leaves them
-  all there, a picked AI cleanup provider among them, while dictation keeps running on what is stored. So
-  `_applySettings(_settings)` runs in one place, right after `SaveBundle` returns. Anything else in the
-  window that needs settings applied goes through `StoredSettingsReapply`, which applies the settings as
+  all there, a picked AI cleanup provider among them, while dictation keeps running on what is stored. A
+  tray change is adopted into it at once, before its own write has stored it, and that write can still fail.
+  So nothing applies `_settings`, the successful Save included: the word pack protocol applies only after it
+  awaits the library completion and any reference repairs, and applying the document then would put an
+  unstored tray choice live and leave the tray's rollback reading it back from the controller. The Save
+  applies through `StoredSettingsReapply`, which applies the settings as
   stored, or, while `LastLoadFailed`, applies none and has the controller rebuild only the vocabulary
   (`DictationController.ReloadVocabulary`, a new generation from the committed library vocabulary and the stored
-  dictionary), because the defaults standing in are no more the user's choice. The Usage page's Add used to apply
+  dictionary), because the defaults standing in are no more the user's choice. And the protocol applies them
+  whenever the Save's document committed, whatever became of the word pack work after it (a reference repair
+  that could not be prepared or written, an outcome not known yet, a failure after the store), so a stored
+  history retention never leaves the old one deleting history. A Save the library completed as applied stored the
+  document in the same transaction, so it counts as committed even when the commit call failed after its COMMIT (a hook
+  that threw), and its stored settings are applied from that receipt. The settlement of an earlier Save whose outcome
+  was unknown applies through the same reapply as a Save does (the window's two settlement callers pass no
+  vocabulary-only override), and what applying runs into is not the Save's failure: reading or applying the stored
+  settings can fail right after a commit (the SELECT of the stored document, the application, its answer), and then
+  the Save is reported by what is known of it (the library's outcome, or "Changes saved, but dictation is still using
+  the previous settings", which says settings and not only vocabulary) and the application is owed.
+  **The debt has one owner for the process, `SettingsApplicationDebt`**, which the host makes (`App._settingsDebt`) and
+  hands to every Settings window, so a window that closes cannot take it along (a retention of forever stored over the old
+  seven days kept deleting history until the next Save). It is in memory only: no marker in the settings document, the
+  database or a file, and it is gone with the process. It is paid in three ways. Every settlement and every Save pays an
+  old debt on its way out, whatever the operation ends in (a settlement that kept nothing, a Save the library did not
+  commit, a refusal, a validation error, an exception), unless that operation already applied; a window opening resumes
+  it (`Resume`); and the host's own application retries it with no window and no further Save
+  (`App.ApplyStoredSettingsInBackground`: `StoredSettingsReapply.ApplyStoredOnly` on the dispatcher, which reads the
+  stored settings and applies them and, unlike `Reapply`, never falls back to reloading only the vocabulary when the
+  document is unusable, because that would look like success without putting the saved settings into effect).
+  Foreground acknowledgements retain the full `StoredSettingsReapplyResult` too: a vocabulary-only recovery keeps
+  scalar settings owed even when its vocabulary refresh succeeds. They await that refresh before reporting the scalar
+  application failure, without replacing an actionable word pack failure with a vocabulary-only warning; the host gets
+  one shape-only Apply failure. Opening another window does not restart an active
+  wait or reset its attempt budget. The retry is
+  single flight, bounded to one wait of `SettingsApplicationDebt.DefaultRetryDelays` (2 s, 10 s, 30 s, 2 min, 10 min)
+  before each attempt, a `Task.Delay` on the owner's `TimeProvider` that settling the debt, raising it again or shutdown
+  cuts short: no polling timer, nothing waits for it, and `OnExit` disposes it first, so quitting is never held by it.
+  Once its attempts are used up the debt stays owed, and the next raise, window or Save starts again. An application
+  that began before the newest raise cannot settle it (`Begin`, `Settle`): it may have read the document before the Save
+  that raised the debt committed it. A failure after a commit reaches the host only through
+  `SettingsApplicationDebt.Report`, whose sink logs `FailureShape.Describe` and cannot throw into the Save or the retry
+  (`App.ReportSettingsApplicationFailure`). The debt never blocks a new Save. The Save also stores a frozen copy of the
+  editing document (`SaveCandidate.Freeze`, taken when the request is built, before the library preparation awaits):
+  a tray change adopted into `_settings` meanwhile is the tray's own write to store, or its own failure to roll back,
+  so the Save stores the copy under the intents it froze, takes the baseline of its change tracker from it, and
+  `SaveCandidate.Settle` hands the editing document only what the store kept for a setting the window holds no newer
+  intent for. A Save that went through its preflight freezes what the preflight captured
+  (`SaveCandidate.FreezePreflight`: the AI cleanup switch and the microphone with the intents the preflight carries,
+  everything else from the editing document), and the window's copy of the preflight over `_settings` skips the settings
+  the tray can change (`CopySettings`, `SaveCandidate.IsExternal`): the preflight waits for confirmations, a Start with
+  Windows change and an earlier settlement before the Save freezes, and a newer tray choice adopted in that wait used to
+  be put back by the copy, leaving the editing document stale even when the Save stopped without storing anything. The
+  Usage page's Add used to apply
   `_settings` to reload the post-processor, which after a failed Save moved AI cleanup, and every later dictation, to
   the provider nobody saved.
   `StoredSettingsReapplyTests` drives that failed Save and the Add through a real repository and cleanup
   service; `CleanupDisclosureTests.Only_the_save_that_stored_the_window_s_document_applies_it` pins the
-  window.
+  window; `SaveCandidateTests` and `WordPackSaveProtocolTests` (`Family6`, `Family7`, `T08`, `T10`, `T12`) the candidate and
+  the debt, `SettingsApplicationDebtTests` the owner on a clock the test owns, `SettingsApplicationDebtRealStoreTests` the
+  closed-window retry over the real settings store, `SettingsApplicationDebtSourceTests` the host's wiring,
+  `SettingsSavePreflightWindowTests` the real window saving while a tray choice arrives, and
+  `WordPackSaveRealStoreTests` the protocol over the real library service. The macOS port has no such owner, so its
+  `PORTING-PLAN.md` rows may be stale.
 - **The library vocabulary is the committed one, never the stored document.** Every dictation's vocabulary generation
   is built from one `ILibraryVocabularySource.Current` snapshot (the library service's committed vocabulary) and one
   read of the personal dictionary, so no consumer re-reads the stored document per request, and a dictionary-only
@@ -2278,7 +2358,33 @@ change the sums and needs a decision (and probably a flag) of its own.
   manifest `journal\g<G>-<id>.manifest.json`; `SaveBundle` with the payload commits generation G
   (`libraries.generation`) with the local state (`libraries.state`) and the file ids (`libraries.file_ids`) in the
   settings transaction; `CompleteSave` installs every file from whatever state it finds, never overwriting what another
-  app wrote (that is kept as a new word pack, off, or set aside), and recovery resumes an interrupted one. The witness
+  app wrote (that is kept as a new word pack, off, or set aside), and recovery resumes an interrupted one. A Save
+  whose outcome was unknown (`CommitUnknown`) is settled by the receipt the library service keeps for that Save
+  (`CompleteSave` again, `IWordPackSaveProtocolStore.SettleAsync`: recovery records what it did with the very
+  Save's own manifest when it settles it), never by the generation stored when the shell asks, which an adoption after
+  recovery moves on (a committed Save would read as superseded and its new word pack be rebased as a second one; a
+  discarded Save could read as committed), and which says nothing of whether the Save's files were installed. A manifest
+  recovery finished is applied for good (`Applied`, which an adoption that moves the generation on never changes); one it
+  discarded, above the stored generation, never committed; one it set aside (a redo image it needs missing or failing its
+  hash, another manifest holding its generation, a manifest that cannot be parsed), held for its set-aside, or a Save it
+  saw no fate for, installed nothing of the Save and reads as superseded even when the stored generation is its own, so
+  the shell keeps the draft's edits and rebases them. A manifest left unresolved because a file waits for release (a
+  legitimate state, which keeps the library fenced) is `AppliedAwaitingRelease`, for a Save that was unknown and for one
+  completed at once alike, and that receipt names the exact manifest and stays revisable: every later recovery attempt
+  revises it by what it did with that manifest (finished: applied; set aside or gone: superseded), so a Save once reported
+  as installed on its way is never reported installed after its manifest was set aside (R16b, T17). The status is only
+  `AppliedAwaitingRelease` while the catalog read that produced it applies that manifest, and a completion that cannot
+  finish a committed Save classifies it from the catalog read it publishes (no second install attempt), so the status and the
+  catalog read next agree: a redo image already missing or failing its hash is superseded at once, never marked saved
+  against files that hold none of the edit. The receipt and the catalog are still two calls, so a manifest set aside
+  between them is seen by the next ask, not by the one already made. The Save protocol therefore asks again once the
+  catalog is read, whenever the receipt it holds is only `AppliedAwaitingRelease` (a Save's own completion, a settlement
+  and a reference repair alike): the draft is marked saved, or rebased and kept, on that answer and on a catalog read made
+  after it if the answer moved (`WordPackSaveProtocol.ConfirmAfterCatalogAsync`), a genuine fence answers
+  `AppliedAwaitingRelease` again and stays, and a final receipt is never asked again. The fate
+  (`LibraryManifestFate`, `LibraryRecoveryOutcome.Fates`) and the receipts (weak, kept with the Save the shell holds) are in
+  memory only, so no schema or file contract carries them; the Swift port keeps its own journal, so its
+  `macos/PORTING-PLAN.md` row may be stale. The witness
   `journal\state.witness` is written before the first commit and never deleted. Journal names are parsed whole, never
   globbed (`LibraryJournalNames`). Only `LibraryJournal` and `LibraryInstaller` touch these files.
 - **The local state is the truth; the document's list is a projection.** Enabled word packs and AI permission live in
@@ -2662,7 +2768,9 @@ intermittently painted an opaque black box. WinUI 3 renders through DWM composit
   step from `DictationProblemText.PillLine`: "Copy it from the tray menu" after an insertion that failed, otherwise the
   problem's own line, each measured to fit the pill);
   notices hold 1.3 s. The truth rules: a check only after the whole insertion succeeded, the space after the
-  dictation included; a partial insertion or a dictation left for the recovery copy is the error state; a
+  dictation included; a partial insertion or a dictation left for the recovery copy is the error state,
+  except an unconfirmed standard-edit delivery, which shows only a tray notice without a Copy action and
+  no indicator outcome: text may already have arrived, so do not encourage a duplicate paste; a
   dictation discarded quietly (the speech detector found no speech in audio that was not digital silence, or
   nothing was left after the dictionary) shows nothing, while digital silence and a recogniser that returned
   nothing on real audio are notices ("Nothing typed" and their message). The controller hands the outcome on
@@ -3135,7 +3243,7 @@ store, GitHub signing secrets, or a publisher trust bundle.
   different version, so a machine that already has the right vpk can pack offline. Never go back to an
   unpinned `dotnet tool install -g vpk`, which on a clean runner takes whatever is newest.
 - Each release's notes live in `docs/release-notes-<version>.md` (this release:
-  `docs/release-notes-0.5.19.md`). Neither workflow reads the file; copy it into the GitHub release body.
+  `docs/release-notes-0.5.20.md`). Neither workflow reads the file; copy it into the GitHub release body.
 - The release workflow downloads the latest prior stable full nupkg before packing so a clean
   hosted runner can produce the delta package. `pack.ps1` requires the delta whenever a prior
   full package is present.
@@ -3774,6 +3882,9 @@ recording indicator saying so, rather than being typed without cleanup.
   when the probe's 400 names the effort (gpt-6.1-sol: "'none' is not supported ... Supported values are: 'low', ..."),
   then no effort field. Measured for 0.5.2: no quality change and about a third less time on gpt-6-sol, and the same on
   gpt-6.1-sol at low (evidence `docs/benchmarks/cleanup-tuning-2026-09-29.json`). `AzureReasoningEffortTests` pins it on the wire.
+  Each readiness or connection check keeps its effort and plain-request negotiation in its own
+  `WireNegotiation`. Only the owning successful initialization publishes it. Testing unsaved settings,
+  or a failed or superseded initialization, cannot change the serving configuration's wire policy.
 
 ## Context size and the whole vocabulary on this PC (read before touching ContextBudget, the glossary fit or LocalModelTuning)
 
@@ -4085,7 +4196,8 @@ vocabulary sent when it fits, and the dictated text first when it does not. Meas
 - Reintroduce a WPF transparent/layered‑window pill, or revert the overlay to in‑process;
   that bug is solved by the out‑of‑process WinUI 3 design.
 - Let a logging failure reach a destructive catch (process kill, teardown).
-- Send audio anywhere off the device.
+- Send audio off the device except through the explicitly selected MAI-Transcribe-2 cloud speech model,
+  with its vocabulary permission checks and disclosed Microsoft Foundry destination.
 
 ## Environment notes (this dev box)
 

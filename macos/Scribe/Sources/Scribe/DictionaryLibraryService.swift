@@ -70,6 +70,9 @@ final class DictionaryLibraryService: @unchecked Sendable {
     private let fileManager: FileManager
     private let persistenceStore: PersistenceStore?
     private let saveHooks: WordPackSaveHooks
+    /// Where the word pack permission AI cleanup is held to is published: each load of the vocabulary, and each save
+    /// before it commits (`AiVocabularyGate`).
+    private let vocabularyGate: AiVocabularyGate
     /// Orders, within this process, every save, every finish of an interrupted one and every other write of the word
     /// pack state. Besides keeping two saves apart, it keeps a load from reading the state and the legacy projection
     /// between a save's commit and its writing the projection, which would read the save's own change as an older
@@ -81,12 +84,14 @@ final class DictionaryLibraryService: @unchecked Sendable {
         librariesDirectory overrideDirectory: URL? = nil,
         settings: DictionaryLibrarySettings = DictionaryLibrarySettingsStore.standard,
         persistenceStore: PersistenceStore? = nil,
-        saveHooks: WordPackSaveHooks = WordPackSaveHooks()
+        saveHooks: WordPackSaveHooks = WordPackSaveHooks(),
+        vocabularyGate: AiVocabularyGate = .shared
     ) {
         self.fileManager = fileManager
         self.settings = settings
         self.persistenceStore = persistenceStore
         self.saveHooks = saveHooks
+        self.vocabularyGate = vocabularyGate
         if let overrideDirectory {
             self.librariesDirectory = overrideDirectory
         } else {
@@ -202,6 +207,13 @@ final class DictionaryLibraryService: @unchecked Sendable {
             let rawDeleted = try persistenceStore.readStringSetting(key: Self.recentlyDeletedKey)
             let prepared = try prepareSave(changeSet, rawState: rawState, rawDeleted: rawDeleted)
             let rawJournal = try prepared.journal.encoded()
+            // Before anything is stored, so a request waiting for its credential finds the permission gone from the
+            // moment the change stands rather than at the next load. The hold is this save's own (`AiVocabularyGate`):
+            // `commit` keeps it, and any other way out of the save, a throw included, drops it without giving back
+            // anything a read found revoked meanwhile.
+            let permission = prepared.permission
+            let narrowing = vocabularyGate.narrow { library, content in permission.keeps(library, content) }
+            defer { vocabularyGate.abandon(narrowing) }
             try saveHooks.beforeCommit?()
             let committed = try persistenceStore.commitStringSettings(
                 expecting: [
@@ -215,6 +227,7 @@ final class DictionaryLibraryService: @unchecked Sendable {
                     StoredStringSetting(key: WordPackSaveJournal.key, value: rawJournal),
                 ])
             guard committed else { throw WordPackSaveError.changedWhileSaving }
+            vocabularyGate.commit(narrowing)
             try saveHooks.afterCommit?()
             do {
                 try completeLocked(prepared.journal, raw: rawJournal, store: persistenceStore)
@@ -267,7 +280,13 @@ final class DictionaryLibraryService: @unchecked Sendable {
         return removed
     }
 
+    /// Reads the word packs and tells `AiVocabularyGate` what it found. The ticket that orders the read among the saves
+    /// and the other reads is taken first, before the catalog's files are read and before its await for the Recently
+    /// deleted metadata, so a read that finishes after a newer read, or after a save that committed, can only narrow
+    /// the permission, whatever it found and whenever it looked. `WordPackPermissionOwnershipTests` hold this method
+    /// before its first file check and at its last storage call to pin that.
     func loadVocabulary() async throws -> LibraryVocabulary {
+        let read = vocabularyGate.beginRead()
         let catalog = try await loadCatalog()
         let composition = compose(catalog: catalog)
         let permitted = catalog.libraries.reduce(into: [String: String?]()) { result, library in
@@ -279,11 +298,13 @@ final class DictionaryLibraryService: @unchecked Sendable {
             }
             result[library.id.lowercased()] = .some(library.contentHash?.value)
         }
+        let scope = AiVocabularyScope(generation: catalog.generation, permittedContent: permitted)
+        vocabularyGate.publish(scope, from: read)
         return LibraryVocabulary(
             generation: catalog.generation,
             entries: composition.entries,
             aiEntries: composition.aiEntries,
-            aiScope: AiVocabularyScope(generation: catalog.generation, permittedContent: permitted))
+            aiScope: scope)
     }
 
     private func loadCatalogLibraries() -> [CatalogLibrary] {
@@ -301,15 +322,28 @@ final class DictionaryLibraryService: @unchecked Sendable {
             let previousURL = editsRoot.appendingPathComponent("\(shipped.id).previous.json", isDirectory: false)
             let previousExists = fileManager.fileExists(atPath: previousURL.path)
 
-            guard let data = try? Data(contentsOf: editsURL) else {
-                return CatalogLibrary(
-                    library: shipped,
-                    state: .available,
-                    contentHash: nil,
-                    origin: .existing,
-                    edits: nil,
-                    previousEditsAvailable: previousExists,
-                    readErrorCount: 0)
+            let data: Data
+            do {
+                data = try Data(contentsOf: editsURL)
+            } catch {
+                // Only a file that is not there means the user made no edits. Any other failure (permissions, a failing
+                // disk, a folder where the file belongs) leaves an edits document that exists and cannot be read, and
+                // the shipped rows must not stand in for it: a term the user turned off would come back.
+                guard !Self.isMissingFile(error) else {
+                    return CatalogLibrary(
+                        library: shipped,
+                        state: .available,
+                        contentHash: nil,
+                        origin: .existing,
+                        edits: nil,
+                        previousEditsAvailable: previousExists,
+                        readErrorCount: 0)
+                }
+                ScribeLog.warning(
+                    .persistence, "A built-in word pack's edits could not be read, so the pack is paused",
+                    .failure(error))
+                return Self.pausedBuiltIn(
+                    shipped, state: .unreadable, contentHash: nil, previousEditsAvailable: previousExists)
             }
 
             let result = BuiltInLibraryOverlay.read(libraryID: shipped.id, data: data)
@@ -325,23 +359,9 @@ final class DictionaryLibraryService: @unchecked Sendable {
                     previousEditsAvailable: previousExists,
                     readErrorCount: 0)
             case .newer, .unreadable:
-                let paused = DictionaryLibrary(
-                    id: shipped.id,
-                    name: shipped.name,
-                    category: shipped.category,
-                    description: shipped.description,
-                    builtIn: true,
-                    entries: [],
-                    fileName: shipped.fileName,
-                    basedOn: shipped.basedOn)
-                return CatalogLibrary(
-                    library: paused,
-                    state: result.state,
-                    contentHash: LibraryContentHash(data: data),
-                    origin: .existing,
-                    edits: nil,
-                    previousEditsAvailable: previousExists,
-                    readErrorCount: 0)
+                return Self.pausedBuiltIn(
+                    shipped, state: result.state, contentHash: LibraryContentHash(data: data),
+                    previousEditsAvailable: previousExists)
             default:
                 return CatalogLibrary(
                     library: shipped,
@@ -352,6 +372,48 @@ final class DictionaryLibraryService: @unchecked Sendable {
                     previousEditsAvailable: previousExists,
                     readErrorCount: 0)
             }
+        }
+    }
+
+    /// A built-in word pack whose edits cannot be used, so it contributes no rows at all rather than its shipped ones:
+    /// the edits are where a term the user turned off is recorded.
+    private static func pausedBuiltIn(
+        _ shipped: DictionaryLibrary,
+        state: LibraryFileState,
+        contentHash: LibraryContentHash?,
+        previousEditsAvailable: Bool
+    ) -> CatalogLibrary {
+        let paused = DictionaryLibrary(
+            id: shipped.id,
+            name: shipped.name,
+            category: shipped.category,
+            description: shipped.description,
+            builtIn: true,
+            entries: [],
+            fileName: shipped.fileName,
+            basedOn: shipped.basedOn)
+        return CatalogLibrary(
+            library: paused,
+            state: state,
+            contentHash: contentHash,
+            origin: .existing,
+            edits: nil,
+            previousEditsAvailable: previousEditsAvailable,
+            readErrorCount: 0)
+    }
+
+    /// Whether reading a file failed because the file is not there (ENOENT), which is the one failure that means "no
+    /// edits". A file that cannot be read for any other reason (EACCES, EIO, a folder in its place) still exists.
+    static func isMissingFile(_ error: any Error) -> Bool {
+        let failure = error as NSError
+        switch failure.domain {
+        case NSPOSIXErrorDomain:
+            return failure.code == Int(ENOENT)
+        case NSCocoaErrorDomain:
+            return failure.code == CocoaError.fileReadNoSuchFile.rawValue
+                || failure.code == CocoaError.fileNoSuchFile.rawValue
+        default:
+            return false
         }
     }
 
@@ -712,6 +774,31 @@ final class DictionaryLibraryService: @unchecked Sendable {
         let journal: WordPackSaveJournal
         let state: String
         let recentlyDeleted: String
+        /// What the save leaves of the permission AI cleanup holds once it stands.
+        let permission: PermissionAfterSave
+    }
+
+    /// What a save leaves of the AI permission, decided from what it commits, and `Sendable` because the gate holds it
+    /// while the save is under way (`AiVocabularyGate.narrow`).
+    private struct PermissionAfterSave: Sendable {
+        /// The word packs (lowercased ids) that are on and permitted in the state the save commits.
+        let permitted: Set<String>
+        /// The word packs the save removes, restores or deletes: whatever was permitted for them is gone.
+        let withdrawn: Set<String>
+        /// The content the save leaves in each pack it writes, as the hash of the bytes it proposes (`nil` for a
+        /// built-in left with no edits). It is judged against the content the permission was published for, never
+        /// against what the file held when the save was prepared: an external writer may already have left exactly
+        /// the proposed bytes there, and the save still accepts them as new content.
+        let content: [String: String?]
+
+        /// Whether AI cleanup may go on using the word pack `library` (a lowercased id), published as permitted for
+        /// `publishedContent`, the moment this save stands. A pack the save writes stays only when it ends up holding
+        /// the content the permission was published for; one it does not touch stays while it is on and permitted.
+        func keeps(_ library: String, _ publishedContent: String?) -> Bool {
+            guard permitted.contains(library), !withdrawn.contains(library) else { return false }
+            guard let proposed = content[library] else { return true }
+            return proposed == publishedContent
+        }
     }
 
     private func withSaveLock<T>(_ body: () throws -> T) rethrows -> T {
@@ -926,10 +1013,19 @@ final class DictionaryLibraryService: @unchecked Sendable {
             operations: operations)
         let stateData = try JSONEncoder().encode(state)
         let recentlyDeletedData = try JSONEncoder().encode(recentlyDeleted)
+        var proposedContent: [String: String?] = [:]
+        for written in writtenContent {
+            proposedContent[written.id.lowercased()] = .some(written.hash?.value)
+        }
+        let permission = PermissionAfterSave(
+            permitted: Set(state.enabledIdSet.filter { state.aiPermissions[$0] == true }),
+            withdrawn: Set((removedIDs + restoredIDs).map { $0.lowercased() }),
+            content: proposedContent)
         return PreparedSave(
             journal: journal,
             state: String(decoding: stateData, as: UTF8.self),
-            recentlyDeleted: String(decoding: recentlyDeletedData, as: UTF8.self))
+            recentlyDeleted: String(decoding: recentlyDeletedData, as: UTF8.self),
+            permission: permission)
     }
 
     private func wordPackFile(_ path: String) -> URL {

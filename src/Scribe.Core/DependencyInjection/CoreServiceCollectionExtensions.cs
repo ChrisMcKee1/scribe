@@ -49,21 +49,22 @@ public static class CoreServiceCollectionExtensions
             sp.GetRequiredService<Scribe.Core.Diagnostics.PerfFlags>()));
         services.AddSingleton<ITranscriptionService>(sp =>
         {
-            var settingsRepo = sp.GetRequiredService<ISettingsRepository>();
-            var dictionaryRepo = sp.GetRequiredService<IDictionaryRepository>();
-            var librarySource = sp.GetRequiredService<ILibraryVocabularySource>();
             var perfFlags = sp.GetRequiredService<Scribe.Core.Diagnostics.PerfFlags>();
             return new TranscriptionService(
                 sp.GetRequiredService<ModelLocator>(),
                 sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<TranscriptionOptions>>(),
                 sp.GetRequiredService<ILogger<TranscriptionService>>(),
                 sp.GetRequiredService<IMaiTranscribeClient>(),
-                () => MaiTranscribeOptions.FromSettings(
-                    settingsRepo.Load(),
+
+                // Cloud speech is decided from what the dictation's recording was admitted with (its settings and its
+                // vocabulary generation): nothing is read from the stored settings or the dictionary, and the library
+                // source that judges each send is looked up only once cloud speech is chosen, so a dictation that stays on
+                // this PC never waits on a read that could fail.
+                admission => MaiTranscribeOptions.FromAdmission(
+                    admission,
                     WindowsPackageIdentity.IsPackaged(),
                     perfFlags,
-                    dictionaryRepo.GetAll(),
-                    librarySource),
+                    () => sp.GetRequiredService<ILibraryVocabularySource>()),
                 perfFlags);
         });
 

@@ -66,6 +66,26 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
     private LivePreparation? _unsettled;
     private LibraryRecoveryOutcome? _recovery;
 
+    // Under _libraryLock. What recovery last did with the exact manifest of the Save whose outcome is unknown (the journal's
+    // own record of it: finished, left unresolved, discarded or set aside), kept until that Save settles. The generation
+    // stored cannot say it: a manifest at the committed generation is set aside unapplied when a redo image it needs is
+    // missing or fails its hash, or when another manifest holds the same generation, and then nothing of the Save is
+    // installed although its generation committed. In memory only; nothing about it is written to disk.
+    private LibraryManifestFate? _unsettledFate;
+
+    // Under _libraryLock. Where each Save this service completed stands, by what became of that very Save's own manifest,
+    // kept with the Save, because the generation stored says nothing of it once a commit made since, an adoption above all,
+    // has moved it on (a Save installed at generation G, then an adoption at G + 1; a Save discarded at G, then an adoption
+    // that reaches the G + 1 it would have committed), and nothing of whether its files were installed: a manifest at the
+    // committed generation is set aside unapplied when a redo image it needs is missing or fails its hash, or when another
+    // manifest holds the same generation. Completing the Save again reports it from here. Final once the manifest is
+    // finished (Applied), discarded (NotCommitted) or will never be installed (Superseded); while it is committed and still
+    // pending because a file waits for release it is AppliedAwaitingRelease, names that manifest, and every recovery attempt
+    // revises it by what it did with it (ReviseReceipts). Weak, so a receipt lives only as long as the Save that the shell
+    // holds, and so does its entry in the list of those still awaiting release.
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<PreparedLibrarySave, SaveReceipt> _receipts = new();
+    private readonly List<WeakReference<SaveReceipt>> _receiptsAwaitingRelease = [];
+
     // Under _libraryLock. The pending manifest last applied whole, with every redo image it needs read and checked
     // against S (round 3, A13): redo images are immutable until retirement (rule R2), so a read of them that fails later
     // reuses these bytes instead of letting the older files stand for the committed generation.
@@ -418,9 +438,20 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         IReadOnlyList<LibraryIdentity> Identities,
         IReadOnlyDictionary<string, string> Remaps,
         LibraryFileIdsHealth FileIdsHealth,
-        LibraryRecoveryOutcome? Recovery);
+        LibraryRecoveryOutcome? Recovery,
+        string? AppliedManifestId = null);
 
     private sealed record LivePreparation(PreparedLibrarySave Save, LibraryManifest Manifest, long StartedTimestamp);
+
+    private sealed class SaveReceipt(long baseGeneration)
+    {
+        public long BaseGeneration { get; } = baseGeneration;
+
+        public LibrarySaveStatus Status { get; set; }
+
+        /// <summary>The exact manifest a still revisable receipt waits on: set only while the status is AppliedAwaitingRelease.</summary>
+        public string? PendingManifestId { get; set; }
+    }
 
     private sealed record PendingImages(LibraryManifest Manifest, IReadOnlyDictionary<int, byte[]> Redo);
 
@@ -544,12 +575,24 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
             }
         }
 
+        // What this attempt did with the exact manifest of a Save whose outcome is unknown is remembered, attempt after
+        // attempt, so the attempt that settles the Save (it may find the manifest already gone) still knows what became of it.
+        if (_unsettled is { } unknownSave && outcome.Fates.TryGetValue(unknownSave.Manifest.Id, out var fate))
+        {
+            _unsettledFate = fate;
+        }
+
+        // A receipt still waiting on a manifest is revised by what this attempt did with that very manifest (R16b).
+        ReviseReceipts(outcome, settings.Generation);
+
         // A Save whose outcome was unknown is settled once recovery, with the generation read, has finished it, discarded
         // it or left it unresolved; a manifest recovery could not reach yet, or could not read whole, keeps it unsettled.
         if (_unsettled is { } unsettled && !outcome.PendingUnlisted && outcome.StoredUnreadable is null &&
             (outcome.Unresolved?.Id == unsettled.Manifest.Id || !ManifestPending(unsettled.Manifest)))
         {
             _unsettled = null;
+            SettleUnknown(unsettled, outcome, settings.Generation);
+            _unsettledFate = null;
         }
 
         // What was read of a manifest that is no longer pending is spare: this attempt listed every pending manifest and
@@ -589,9 +632,13 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         var pending = _live is { } live && !settings.GenerationLost && live.Save.Generation == settings.Generation
             ? live.Manifest
             : recovery?.Unresolved is { } unresolved && unresolved.Generation == settings.Generation ? unresolved : null;
+        string? appliedManifestId = null;
         if (pending is not null)
         {
-            ApplyPending(folder, pending);
+            if (ApplyPending(folder, pending))
+            {
+                appliedManifestId = pending.Id;
+            }
         }
         else if (recovery is { StoredContentUnavailable: true } && !settings.GenerationLost && recovery.Generation == settings.Generation)
         {
@@ -670,7 +717,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
 
         var remaps = ids.Where(pair => !string.Equals(pair.Value, CustomLibraryStore.Stem(pair.Key), StringComparison.OrdinalIgnoreCase))
             .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
-        return new CatalogRead(catalog, settings, context, folder, identities, remaps, fileIds.Health, recovery);
+        return new CatalogRead(catalog, settings, context, folder, identities, remaps, fileIds.Health, recovery, appliedManifestId);
     }
 
     // Contract 6.6.5: written, created and restored targets read their redo images (awaiting release until their
@@ -679,8 +726,9 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
     // whole manifest untrustworthy, and then nothing of it is applied: the files as they stand are what readers see. One
     // that only cannot be read right now (round 3, A13) is taken from this process's last complete read of the manifest,
     // or from its target when that already holds exactly S; otherwise its library is held back, never read from a file
-    // that may still hold what the committed generation replaced.
-    private void ApplyPending(LibraryFolderSnapshot folder, LibraryManifest manifest)
+    // that may still hold what the committed generation replaced. True when the manifest was applied; false when a redo image
+    // failed its check, so that nothing of it is (the receipt of its Save must not say it was).
+    private bool ApplyPending(LibraryFolderSnapshot folder, LibraryManifest manifest)
     {
         var redo = new Dictionary<int, byte[]>();
         var unreadable = new Dictionary<int, LibraryIoFailure>();
@@ -694,7 +742,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
                     break;
                 case RedoImagesState.Untrustworthy:
                     TryLog(LogLevel.Warning, "A pending library manifest is not applied: a redo image failed its check ({Failure}).", LibraryIoFailure.Corrupt);
-                    return;
+                    return false;
                 default:
                     if (cached is not null && cached.TryGetValue(operation.Number, out var kept))
                     {
@@ -779,6 +827,8 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
                 "A pending library manifest's redo image(s) could not be read right now ({Failure}); {Libraries} librar(ies) held back until they can.",
                 unreadable.Values.First(), heldBack);
         }
+
+        return true;
 
         // The committed bytes of a written, created or restored target.
         LibraryFileRead Committed(LibraryManifestOperation operation, LibraryFileRead? onDisk, bool done, ref int held)
@@ -1075,16 +1125,17 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         catalog.Generation, catalog.Libraries, state, catalog.RecentlyDeleted, catalog.RetiredBuiltInEdits,
         catalog.FilesAwaitingRelease, catalog.KeptVersions, catalog.PendingFailure);
 
-    private void TryPublish()
+    private CatalogRead? TryPublish()
     {
         try
         {
-            LoadCore(adopt: true, recover: false);
+            return LoadCore(adopt: true, recover: false);
         }
         catch (Exception ex)
         {
             // What changed on disk stands; the vocabulary is published at the next load.
             TryLog(LogLevel.Warning, "The library vocabulary was not published ({Failure}).", FailureShape.Describe(ex));
+            return null;
         }
     }
 
@@ -1280,19 +1331,133 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
 
     // --- complete -------------------------------------------------------------------------------------------------------
 
+    private static bool SameId(string? id, string other) => id is not null && string.Equals(id, other, StringComparison.OrdinalIgnoreCase);
+
+    // What became of a Save's manifest, once it is final (round 2, A8; review findings F-11 and R16b): never the generation
+    // alone. A manifest recovery finished is installed: Applied, whatever the generation does after. One it discarded, above
+    // the stored generation, never committed: NotCommitted when the stored generation is the Save's base (this process fenced
+    // every commit while the Save was unsettled), else Superseded. Every other fate, set aside above all (a redo image the
+    // manifest needs was missing or failed its hash, or another manifest held its generation), and a manifest this process
+    // saw no fate for, installed nothing of the Save, so it is not Applied even when the stored generation is its own: the
+    // shell keeps the draft's edits and rebases them onto what is stored (Superseded). Nothing about this is written to disk.
+    private static LibrarySaveStatus FinalStatus(LibraryManifestFate? fate, long stored, long baseGeneration) => fate switch
+    {
+        LibraryManifestFate.Completed => LibrarySaveStatus.Applied,
+        LibraryManifestFate.Discarded when stored == baseGeneration => LibrarySaveStatus.NotCommitted,
+        _ => LibrarySaveStatus.Superseded,
+    };
+
+    private SaveReceipt Record(PreparedLibrarySave save, LibrarySaveStatus status, string? pendingManifestId = null)
+    {
+        var receipt = _receipts.GetValue(save, key => new SaveReceipt(key.BaseGeneration));
+        receipt.Status = status;
+        receipt.PendingManifestId = pendingManifestId;
+        _receiptsAwaitingRelease.RemoveAll(entry => !entry.TryGetTarget(out var known) || ReferenceEquals(known, receipt));
+        if (pendingManifestId is not null)
+        {
+            _receiptsAwaitingRelease.Add(new WeakReference<SaveReceipt>(receipt));
+        }
+
+        return receipt;
+    }
+
+    // Recovery has just settled a Save whose outcome had been unknown, and what it did with that Save's own manifest is the
+    // evidence. One it left unresolved because a file waits for release is committed and on its way: AppliedAwaitingRelease,
+    // a receipt that stays revisable (it is never Applied until recovery has finished the manifest, and is not frozen as
+    // Applied, which a later set-aside would then contradict: R16b, T17). The rest is final.
+    private void SettleUnknown(LivePreparation settled, LibraryRecoveryOutcome outcome, long stored)
+    {
+        var save = settled.Save;
+        if (_unsettledFate == LibraryManifestFate.Unresolved && stored == save.Generation && SameId(outcome.Unresolved?.Id, settled.Manifest.Id))
+        {
+            Record(save, LibrarySaveStatus.AppliedAwaitingRelease, settled.Manifest.Id);
+            return;
+        }
+
+        Record(save, FinalStatus(_unsettledFate, stored, save.BaseGeneration));
+    }
+
+    // Every recovery attempt revises the receipts still waiting on a manifest by what it did with that very manifest, so a
+    // Save reported as installed on its way is never reported installed once its manifest has been set aside: finished is
+    // Applied for good; discarded, set aside, held for its set-aside or gone is final too; one it left unresolved stays
+    // revisable. An attempt that could not see the journal, or could not read the manifest, concludes nothing.
+    private void ReviseReceipts(LibraryRecoveryOutcome outcome, long stored)
+    {
+        for (var index = _receiptsAwaitingRelease.Count - 1; index >= 0; index--)
+        {
+            if (!_receiptsAwaitingRelease[index].TryGetTarget(out var receipt) || receipt.PendingManifestId is not { } id)
+            {
+                _receiptsAwaitingRelease.RemoveAt(index);
+                continue;
+            }
+
+            if (outcome.Fates.TryGetValue(id, out var fate))
+            {
+                if (fate == LibraryManifestFate.Unresolved)
+                {
+                    continue;
+                }
+
+                receipt.Status = FinalStatus(fate, stored, receipt.BaseGeneration);
+            }
+            else if (outcome.PendingUnlisted || SameId(outcome.Unresolved?.Id, id) || SameId(outcome.StoredUnreadable?.ManifestId, id))
+            {
+                continue;
+            }
+            else
+            {
+                receipt.Status = LibrarySaveStatus.Superseded;
+            }
+
+            receipt.PendingManifestId = null;
+            _receiptsAwaitingRelease.RemoveAt(index);
+        }
+    }
+
+    // Where a Save stands when it is completed again, by what recovery did with that very Save's manifest, never the generation
+    // stored now: only the receipt can tell a Save recovery installed from one an adoption has since moved the stored
+    // generation past, a Save recovery discarded from one an adoption has since brought to the generation it would have
+    // committed, and a Save whose manifest was set aside unapplied from one that was installed. A status that says the
+    // Save stands but is not final is only given while the catalog this very read produced applies the Save's manifest, so the
+    // shell never marks a draft saved against a catalog that holds none of it.
+    private LibrarySaveStatus StatusOfCompletedAgain(PreparedLibrarySave prepared, CatalogRead read)
+    {
+        var catalog = read.Catalog;
+        if (_receipts.TryGetValue(prepared, out var receipt))
+        {
+            return receipt.PendingManifestId is { } pending && !SameId(read.AppliedManifestId, pending)
+                ? LibrarySaveStatus.CommitUnknown
+                : receipt.Status;
+        }
+
+        // Still unsettled: its generation shows it committed, so its exact manifest, held in memory, is applied whole while
+        // it is pending (a legitimate AppliedAwaitingRelease, which keeps the fence, never a blanket CommitUnknown).
+        if (_unsettled is { } unsettled && ReferenceEquals(unsettled.Save, prepared) && catalog.Generation == prepared.Generation)
+        {
+            return SameId(read.AppliedManifestId, unsettled.Manifest.Id) ? LibrarySaveStatus.AppliedAwaitingRelease : LibrarySaveStatus.CommitUnknown;
+        }
+
+        var status = catalog.Generation == prepared.Generation ? LibrarySaveStatus.Applied
+            : catalog.Generation == prepared.BaseGeneration ? LibrarySaveStatus.NotCommitted
+            : LibrarySaveStatus.Superseded;
+        return status == LibrarySaveStatus.Applied && catalog.FilesAwaitingRelease > 0 ? LibrarySaveStatus.AppliedAwaitingRelease : status;
+    }
+
     private LibrarySaveOutcome CompleteCore(PreparedLibrarySave prepared, bool wrapper)
     {
         var live = _live;
         if (live is null || !ReferenceEquals(live.Save, prepared))
         {
-            // Not this process's live preparation (completed already): report by the stored state, installing nothing.
+            // Not this process's live preparation (completed already): report by what recovery settled for that very Save,
+            // else by the stored state, installing nothing.
             try
             {
-                var catalog = LoadCore(adopt: false, recover: true).Catalog;
-                var status = catalog.Generation == prepared.Generation
-                    ? catalog.FilesAwaitingRelease > 0 ? LibrarySaveStatus.AppliedAwaitingRelease : LibrarySaveStatus.Applied
-                    : catalog.Generation == prepared.BaseGeneration ? LibrarySaveStatus.NotCommitted : LibrarySaveStatus.Superseded;
-                return new LibrarySaveOutcome(status, catalog.Generation, catalog.FilesAwaitingRelease, [], catalog.PendingFailure);
+                var read = LoadCore(adopt: false, recover: true);
+                var catalog = read.Catalog;
+                var status = StatusOfCompletedAgain(prepared, read);
+                return status == LibrarySaveStatus.CommitUnknown
+                    ? new LibrarySaveOutcome(LibrarySaveStatus.CommitUnknown, prepared.BaseGeneration, 0, [], LibraryIoFailure.None)
+                    : new LibrarySaveOutcome(status, catalog.Generation, catalog.FilesAwaitingRelease, [], catalog.PendingFailure);
             }
             catch (Exception)
             {
@@ -1313,6 +1478,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
             // scope stays, and new Saves and the wrappers are fenced until then.
             _live = null;
             _unsettled = live;
+            _unsettledFate = null;
             TryLog(
                 LogLevel.Warning,
                 "Library save outcome unknown for generation {Generation}: the stored generation could not be read ({Failure}); {Operations} prepared operation(s) kept pending.",
@@ -1330,33 +1496,48 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
             if (completion.Retired)
             {
                 ReleasePendingImages(live.Manifest);
+                Record(prepared, LibrarySaveStatus.Applied);
                 var counts = prepared.Counts;
                 TryLog(
                     wrapper ? LogLevel.Debug : LogLevel.Information,
                     "Saved library changes: generation {Generation}, {Created} created, {Updated} updated, {Deleted} deleted, {Restored} restored, {Terms} terms, {ElapsedMs} ms.",
                     prepared.Generation, counts.Created, counts.Updated, counts.Deleted, counts.Restored, counts.Terms,
                     (long)_parts.Time.GetElapsedTime(live.StartedTimestamp).TotalMilliseconds);
-            }
-            else
-            {
-                // Committed and unfinished: the stored generation's manifest keeps the libraries unresolved until an
-                // attempt finishes it, and readers see it applied.
-                _recovery = new LibraryRecoveryOutcome
-                {
-                    Unresolved = live.Manifest,
-                    FilesAwaitingRelease = Math.Max(1, completion.Pending),
-                    Failure = completion.Failure,
-                };
-                TryLog(
-                    LogLevel.Warning,
-                    "Library save unfinished at generation {Generation}: {Pending} file(s) not in place ({Failure}).",
-                    prepared.Generation, completion.Pending, completion.Failure);
+                TryPublish();
+                return new LibrarySaveOutcome(LibrarySaveStatus.Applied, stored, completion.Pending, kept, LibraryIoFailure.None);
             }
 
-            TryPublish();
-            return new LibrarySaveOutcome(
-                completion.Retired ? LibrarySaveStatus.Applied : LibrarySaveStatus.AppliedAwaitingRelease,
-                stored, completion.Pending, kept, completion.Retired ? LibraryIoFailure.None : completion.Failure);
+            // Committed and unfinished: the stored generation's manifest keeps the libraries unresolved until an attempt
+            // finishes it, and readers see it applied. Its receipt names the exact manifest and stays revisable.
+            _recovery = new LibraryRecoveryOutcome
+            {
+                Unresolved = live.Manifest,
+                FilesAwaitingRelease = Math.Max(1, completion.Pending),
+                Failure = completion.Failure,
+            };
+            var receipt = Record(prepared, LibrarySaveStatus.AppliedAwaitingRelease, live.Manifest.Id);
+            TryLog(
+                LogLevel.Warning,
+                "Library save unfinished at generation {Generation}: {Pending} file(s) not in place ({Failure}).",
+                prepared.Generation, completion.Pending, completion.Failure);
+
+            // The status reported is only AppliedAwaitingRelease while the catalog this very read produces applies the Save's
+            // manifest, the rule completing the Save again follows too, so the status and the catalog the shell reads next come
+            // from one verdict: a redo image already missing or failing its hash means nothing of the Save is installed or will
+            // be, and recovery sets the manifest aside, so the Save is not reported as installed on its way (R16b, T17). A read
+            // that could not be made concludes nothing, and the receipt stays revisable. No second install attempt is made.
+            var read = TryPublish();
+            if (read is not null && !SameId(read.AppliedManifestId, live.Manifest.Id))
+            {
+                receipt = Record(prepared, LibrarySaveStatus.Superseded);
+            }
+
+            return receipt.Status switch
+            {
+                LibrarySaveStatus.AppliedAwaitingRelease =>
+                    new LibrarySaveOutcome(LibrarySaveStatus.AppliedAwaitingRelease, stored, completion.Pending, kept, completion.Failure),
+                var final => new LibrarySaveOutcome(final, stored, 0, kept),
+            };
         }
 
         // Not committed: the preparation, which never installed anything, is discarded, and the committed scope is back.
@@ -1365,6 +1546,7 @@ public sealed class DictionaryLibraryService : IDictionaryLibraryService, ILibra
         ReleasePendingImages(live.Manifest);
         NoteKept(kept);
         var notCommitted = stored == prepared.BaseGeneration;
+        Record(prepared, notCommitted ? LibrarySaveStatus.NotCommitted : LibrarySaveStatus.Superseded);
         TryLog(
             LogLevel.Information,
             "Library save not committed ({Status}); {Operations} prepared operation(s) discarded.",

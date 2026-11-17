@@ -1,10 +1,76 @@
 import AppKit
+import Security
 import XCTest
 
 @testable import Scribe
 
 @MainActor
 final class SettingsUnsavedChangesTests: XCTestCase {
+    /// The footer's Save writes credentials to the store it was given, never to the live Keychain.
+    func testTheFooterSavesCredentialsToTheStoreItWasGiven() async throws {
+        let fixture = try SettingsGapStorageFixture()
+        defer { fixture.remove() }
+        let cleanup = makeCleanupStore()
+        cleanup.store.azureClientId = "client-1"
+        let drafts = SettingsDrafts()
+        drafts.configureSave(
+            store: fixture.store, libraries: fixture.libraries, cleanupSettings: cleanup.store, onChanged: {})
+        drafts.openAIApiKey = "sk-typed"
+        drafts.azureClientSecret = "typed-secret"
+        drafts.azureApiKey = "azure-key"
+
+        let saved = await drafts.save()
+
+        XCTAssertTrue(saved, drafts.footerMessage ?? "")
+        XCTAssertEqual(cleanup.apiKeys.secrets, [CleanupSettingsStore.openAIApiKeyAccount: "sk-typed"])
+        XCTAssertEqual(cleanup.clientSecrets.secrets, ["client-1": "typed-secret"])
+        XCTAssertEqual(cleanup.azureApiKeys.secrets, [CleanupSettingsStore.azureApiKeyAccount: "azure-key"])
+        XCTAssertTrue(drafts.openAIApiKey.isEmpty && drafts.azureClientSecret.isEmpty && drafts.azureApiKey.isEmpty)
+    }
+
+    /// A client secret typed with no client ID cannot be stored. The Save says so before it writes anything, and keeps
+    /// every typed credential, instead of reporting a save, emptying the field and storing nothing.
+    func testAClientSecretTypedWithNoClientIdFailsTheSaveAndKeepsWhatWasTyped() async throws {
+        let fixture = try SettingsGapStorageFixture()
+        defer { fixture.remove() }
+        let cleanup = makeCleanupStore()
+        XCTAssertEqual(cleanup.store.azureClientId, "")
+        let drafts = SettingsDrafts()
+        drafts.configureSave(
+            store: fixture.store, libraries: fixture.libraries, cleanupSettings: cleanup.store, onChanged: {})
+        drafts.openAIApiKey = "sk-typed"
+        drafts.azureClientSecret = "typed-secret"
+
+        let saved = await drafts.save()
+
+        XCTAssertFalse(saved)
+        XCTAssertTrue(drafts.saveFailed)
+        XCTAssertEqual(drafts.footerMessage, CleanupSettingsModel.clientIdRequiredMessage)
+        XCTAssertEqual(drafts.azureClientSecret, "typed-secret", "the typed secret was discarded")
+        XCTAssertEqual(drafts.openAIApiKey, "sk-typed")
+        XCTAssertEqual(cleanup.clientSecrets.writes, 0)
+        XCTAssertEqual(cleanup.apiKeys.writes, 0, "another credential was saved ahead of the one that failed")
+    }
+
+    func testAFailedCredentialWriteFailsTheSaveAndKeepsWhatWasTyped() async throws {
+        let fixture = try SettingsGapStorageFixture()
+        defer { fixture.remove() }
+        let cleanup = makeCleanupStore()
+        cleanup.store.azureClientId = "client-1"
+        let drafts = SettingsDrafts()
+        drafts.configureSave(
+            store: fixture.store, libraries: fixture.libraries, cleanupSettings: cleanup.store, onChanged: {})
+        drafts.azureClientSecret = "typed-secret"
+        cleanup.clientSecrets.failNextWrite(with: errSecInteractionNotAllowed)
+
+        let saved = await drafts.save()
+
+        XCTAssertFalse(saved)
+        XCTAssertTrue(drafts.saveFailed)
+        XCTAssertEqual(drafts.azureClientSecret, "typed-secret")
+        XCTAssertTrue(cleanup.clientSecrets.secrets.isEmpty)
+    }
+
     func testLocalModelIdleTimeIsStagedAndSavedOnlyBySave() async throws {
         let fixture = try SettingsGapStorageFixture()
         defer { fixture.remove() }

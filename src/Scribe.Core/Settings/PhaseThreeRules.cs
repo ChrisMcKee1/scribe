@@ -100,7 +100,8 @@ public static class TranscriptionModelChoices
         string? tenantId,
         string? clientId,
         string? clientSecret,
-        bool azureCliSignedIn = true)
+        bool azureCliSignedIn = true,
+        bool apiKeySelected = false)
     {
         var model = TranscriptionModelCatalog.Resolve(selectedModelId);
         if (!model.IsCloud)
@@ -138,6 +139,11 @@ public static class TranscriptionModelChoices
             authReady = true;
             authStatus =
                 "Microsoft Foundry setup: Ready (using your saved API key and resource address; model name MAI-Transcribe-2 is sent automatically).";
+        }
+        else if (apiKeySelected)
+        {
+            authReady = false;
+            authStatus = "Setup needed on AI cleanup: Enter your Microsoft Foundry API key, or choose another sign-in method.";
         }
         else if (authMode == AzureAuthMode.ServicePrincipal)
         {

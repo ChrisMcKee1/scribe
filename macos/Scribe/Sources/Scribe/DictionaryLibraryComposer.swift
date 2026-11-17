@@ -21,13 +21,18 @@ enum DictionaryLibraryComposer {
         deduplicate(baseEntries + libraryEntries)
     }
 
+    /// What makes two entries one rule: the spoken form, trimmed and case-insensitive.
+    static func key(of pattern: String) -> String {
+        pattern.trimmingCharacters(in: .whitespaces).lowercased()
+    }
+
     private static func deduplicate(_ entries: [DictionaryEntry]) -> [DictionaryEntry] {
         var seen = Set<String>()
         var result: [DictionaryEntry] = []
         for entry in entries {
-            let key = entry.pattern.trimmingCharacters(in: .whitespaces).lowercased()
-            guard !key.isEmpty else { continue }
-            if seen.insert(key).inserted {
+            let spoken = key(of: entry.pattern)
+            guard !spoken.isEmpty else { continue }
+            if seen.insert(spoken).inserted {
                 result.append(entry)
             }
         }

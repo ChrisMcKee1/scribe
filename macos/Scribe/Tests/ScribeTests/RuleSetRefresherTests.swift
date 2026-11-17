@@ -129,7 +129,8 @@ final class RuleSetRefresherTests: XCTestCase {
         let snapshot = await DictationRuleSnapshot.compile(
             next,
             libraryEntries: library,
-            cleanupVocabularyEntries: library)
+            cleanupVocabularyEntries: library,
+            aiScope: .none)
         XCTAssertEqual(rules.postProcess("cube flow on azure").text, "CUBE FLOW on azure")
         XCTAssertTrue(rules.appProfiles.isEmpty)
 
@@ -140,5 +141,26 @@ final class RuleSetRefresherTests: XCTestCase {
         XCTAssertEqual(snapshot.dictionaryEntryCount, 1)
         XCTAssertEqual(snapshot.libraryEntryCount, 1)
         XCTAssertEqual(snapshot.snippetCount, 1)
+    }
+
+    /// The app compiles each load of the word packs together with the permission it was read under
+    /// (`DictationRuleSnapshot.compile(_:vocabulary:)`, which the rule refresher calls), and installing the snapshot
+    /// hands that permission to the dictations that follow, which hold every cleanup request to it. A scope dropped on
+    /// the way would leave every request unheld, whatever a save withdraws.
+    @MainActor
+    func testACompiledSnapshotCarriesThePermissionItsVocabularyWasReadUnderToTheInstalledRules() async {
+        let rules = DictationRules(gate: StartupGate())
+        let entry = DictionaryEntry(pattern: "kube", replacement: "Kube")
+        let scope = AiVocabularyScope(generation: 4, permittedContent: ["team": "h1"])
+        let vocabulary = LibraryVocabulary(generation: 4, entries: [entry], aiEntries: [entry], aiScope: scope)
+
+        let snapshot = await DictationRuleSnapshot.compile(Self.rules("cube flow"), vocabulary: vocabulary)
+        XCTAssertEqual(rules.cleanupVocabulary.admission.scope, .none, "the scope was in force before the install")
+
+        rules.install(snapshot)
+
+        XCTAssertEqual(snapshot.cleanupVocabulary.admission.scope, scope)
+        XCTAssertEqual(rules.cleanupVocabulary.admission.scope, scope, "the install dropped the permission")
+        XCTAssertEqual(snapshot.libraryEntryCount, 1)
     }
 }

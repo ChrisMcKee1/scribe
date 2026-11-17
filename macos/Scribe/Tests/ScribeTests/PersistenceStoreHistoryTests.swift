@@ -46,6 +46,19 @@ final class PersistenceStoreHistoryTests: XCTestCase {
         XCTAssertEqual(try raw.scalarInt("PRAGMA auto_vacuum;"), 2)
     }
 
+    /// The store's lifecycle events go through `ScribeLog`, so the diagnostics export that observes it holds them,
+    /// as shapes: a flag, a number of days and a mode's name.
+    func testTheStoreLogsItsLifecycleThroughScribeLog() throws {
+        let log = recordScribeLog()
+        let store = try makeStore()
+
+        try store.setHistoryRetention(.days(30))
+
+        XCTAssertTrue(log.lines.contains { $0.contains("Database ready") && $0.contains("newHistoryTable=true") })
+        XCTAssertTrue(log.lines.contains { $0.contains("Opened the database in WAL mode") })
+        XCTAssertTrue(log.lines.contains { $0.contains("History retention set") && $0.contains("days=30") })
+    }
+
     func testAnExistingHistoryWithoutAChoiceIsNotGivenTheDefault() throws {
         try StorageTestSQLite.createLegacyDatabase(
             at: directory.databaseURL, historyStartedAt: [now.addingTimeInterval(-400 * 86_400)])

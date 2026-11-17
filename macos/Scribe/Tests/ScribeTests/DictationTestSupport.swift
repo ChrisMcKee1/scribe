@@ -500,11 +500,13 @@ final class GatedCleanupProvider: CleanupProvider {
     var reply: (CleanupRequest) async throws -> String = { request in
         RecordingCleanupProvider.transcript(in: request)
     }
+    /// How the service says each answer ended; whole unless a test says otherwise.
+    var ending: CleanupAnswerEnding = .finished
 
     func clean(_ request: CleanupRequest) async throws -> CleanupResponse {
         requests.append(request)
         let text = try await reply(request)
-        return CleanupResponse(cleanedText: text, latency: 0, providerID: id, modelID: "gated")
+        return CleanupResponse(cleanedText: text, latency: 0, providerID: id, modelID: "gated", ending: ending)
     }
 }
 
@@ -513,6 +515,8 @@ final class FakeCleanup: DictationCleaning {
     var isEnabled = false
     var readinessResult: LocalModelPreparationResult = .notApplicable
     var readinessGate: DictationGate<LocalModelPreparationResult>?
+    /// Holds `provider()`, which a dictation's cleanup asks for after its vocabulary pass and readiness, until opened.
+    var providerGate: DictationGate<Void>?
     var providerError: (any Error)?
     var cleanupProvider: any CleanupProvider
     var settings = CleanupSettingsSnapshot(
@@ -551,6 +555,9 @@ final class FakeCleanup: DictationCleaning {
     }
 
     func provider() async throws -> any CleanupProvider {
+        if let providerGate {
+            try await providerGate.wait()
+        }
         if let providerError {
             throw providerError
         }

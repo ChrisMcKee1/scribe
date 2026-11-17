@@ -38,7 +38,7 @@ struct QuickAddView: View {
         existing: [DictionaryEntry],
         onSave: @escaping (SavedResult) -> Void,
         onClose: @escaping () -> Void,
-        persistAction: (@MainActor (DictionaryWordEditor.Result) async throws -> [DictionaryEntry])? = nil
+        persistAction: (@MainActor (QuickDictionaryAdd.SavePlan) async throws -> [DictionaryEntry])? = nil
     ) {
         self.onSave = onSave
         self.onClose = onClose
@@ -55,25 +55,13 @@ struct QuickAddView: View {
         QuickDictionaryAdd.tokenize(transcript)
     }
 
-    private var plan: QuickDictionaryAdd.Plan {
-        QuickDictionaryAdd.build(
-            pattern: forms.first ?? "",
+    /// What Save would do: the sentence shown below, and the rows the save writes, are both this plan's.
+    private var savePlan: QuickDictionaryAdd.SavePlan {
+        QuickDictionaryAdd.buildSave(
+            forms: forms,
             replacement: written,
             wholeWord: wholeWord,
             existing: existing)
-    }
-
-    private var editorResult: DictionaryWordEditor.Result {
-        let editedIndex = existing.firstIndex {
-            $0.pattern.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(
-                (forms.first ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            ) == .orderedSame
-        }
-        return DictionaryWordEditor.build(
-            existing: existing,
-            editedIndex: editedIndex,
-            replacement: written,
-            forms: forms)
     }
 
     var body: some View {
@@ -152,20 +140,20 @@ struct QuickAddView: View {
             TextField("Should be", text: $written)
             Toggle("Whole word only", isOn: $wholeWord)
 
-            Text(editorResult.error ?? plan.message)
+            Text(savePlan.message)
                 .font(.caption)
-                .foregroundStyle(editorResult.succeeded ? (plan.kind == .invalid ? .red : .secondary) : .red)
+                .foregroundStyle(savePlan.isInvalid ? .red : .secondary)
 
             HStack {
                 Spacer()
                 Button("Cancel", action: onClose)
                     .accessibilityLabel("Cancel")
                 Button("Save") { save(closeAfterSave: false) }
-                    .disabled(!editorResult.canSave || plan.kind == .invalid || isSaving)
+                    .disabled(!savePlan.canSave || isSaving)
                     .accessibilityLabel("Save")
                 Button("Save and close") { save(closeAfterSave: true) }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!editorResult.canSave || plan.kind == .invalid || isSaving)
+                    .disabled(!savePlan.canSave || isSaving)
                     .accessibilityLabel("Save and close")
             }
 
@@ -182,7 +170,9 @@ struct QuickAddView: View {
     }
 
     private func save(closeAfterSave: Bool) {
-        guard editorResult.canSave, !isSaving else { return }
+        // The plan the status line shows now is the plan written: it is taken once, here, and handed on whole.
+        let plan = savePlan
+        guard plan.canSave, !isSaving else { return }
 
         let sourceTranscript = transcript.isEmpty ? nil : transcript
         isSaving = true
@@ -191,9 +181,9 @@ struct QuickAddView: View {
         Task {
             defer { isSaving = false }
             do {
-                let savedEntries = try await persist(editorResult)
+                let savedEntries = try await persist(plan)
                 guard
-                    let saved = savedEntries.first ?? editorResult.editedEntry ?? editorResult.addedEntries.first
+                    let saved = savedEntries.first ?? plan.updates.first ?? plan.inserts.first
                 else {
                     throw QuickAddPersistError.noPersistAction
                 }
@@ -222,16 +212,15 @@ struct QuickAddView: View {
         }
     }
 
-    /// Injected so the view never opens the database itself: production passes a closure that inserts a new
-    /// rule or updates the existing one through the store's asynchronous forms. `save()` only calls it for a
-    /// plan that carries an entry.
-    var persistAction: (@MainActor (DictionaryWordEditor.Result) async throws -> [DictionaryEntry])?
+    /// Injected so the view never opens the database itself: production passes a closure that writes the plan through
+    /// `QuickDictionaryAdd.persist`. `save()` only calls it for a plan that can be saved.
+    var persistAction: (@MainActor (QuickDictionaryAdd.SavePlan) async throws -> [DictionaryEntry])?
 
-    private func persist(_ result: DictionaryWordEditor.Result) async throws -> [DictionaryEntry] {
+    private func persist(_ plan: QuickDictionaryAdd.SavePlan) async throws -> [DictionaryEntry] {
         guard let persistAction else {
             throw QuickAddPersistError.noPersistAction
         }
-        return try await persistAction(result)
+        return try await persistAction(plan)
     }
 
     private func binding(for index: Int) -> Binding<String> {

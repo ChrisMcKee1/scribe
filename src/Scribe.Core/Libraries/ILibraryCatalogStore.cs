@@ -82,7 +82,19 @@ public interface ILibraryCatalogStore
     /// outcome is <see cref="LibrarySaveStatus.CommitUnknown"/>: the manifest stays pending, never discarded on that
     /// evidence, and a later read of the generation settles it (review finding A8 on the storage stream). Ends the
     /// preparation's live state in every case. Call it exactly once per prepared Save, after <c>SaveBundle</c> returned
-    /// or threw.
+    /// or threw. A Save whose outcome was <see cref="LibrarySaveStatus.CommitUnknown"/> is completed again to settle it,
+    /// and once recovery has settled it, completing it again reports what recovery did with that very Save's manifest,
+    /// never the generation stored by then, which a later commit (an adoption) may have moved on and which says nothing of
+    /// whether the manifest was installed: finished is <see cref="LibrarySaveStatus.Applied"/> for good, discarded is
+    /// <see cref="LibrarySaveStatus.NotCommitted"/>, and set aside unapplied (a redo image it needs missing or failing its
+    /// hash, another manifest holding its generation), even at the committed generation, or gone, is
+    /// <see cref="LibrarySaveStatus.Superseded"/>: nothing of it was installed, so the shell keeps the draft's edits and
+    /// rebases them onto what is stored. A manifest left unresolved because a file waits for release is
+    /// <see cref="LibrarySaveStatus.AppliedAwaitingRelease"/>, for a Save that was unknown and for one completed at once
+    /// alike, and that receipt stays revisable: every later recovery attempt revises it by what it did with that manifest
+    /// (finished: Applied; set aside or gone: Superseded), so completing the Save again never reports it installed on its
+    /// way after recovery has set its manifest aside. A completion that cannot finish a committed Save hands its manifest
+    /// to recovery before it answers, so the answer and the catalog read next come from one verdict.
     /// </summary>
     LibrarySaveOutcome CompleteSave(PreparedLibrarySave prepared);
 

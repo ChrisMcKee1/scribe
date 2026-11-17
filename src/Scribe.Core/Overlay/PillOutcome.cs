@@ -35,8 +35,9 @@ public enum PillOutcomeKind
 /// <remarks>
 /// The truth rules of the palette decision: "Typed" and "Typed without AI cleanup" appear only when the whole insertion
 /// succeeded, the space after the dictation included, and a partial insertion, or a dictation left for the recovery copy,
-/// is the error state and never a check. <see cref="Detail"/> is shown on the pill; it can name a microphone, so the
-/// overlay logs only its length.
+/// is the error state and never a check. An insertion the app did not confirm in time is neither a check nor "Nothing
+/// typed", since the text may already be there: the pill says nothing and the problem's notice carries the warning.
+/// <see cref="Detail"/> is shown on the pill; it can name a microphone, so the overlay logs only its length.
 /// </remarks>
 public sealed record PillOutcome
 {
@@ -73,7 +74,9 @@ public sealed record PillOutcome
 
     /// <summary>
     /// What the pill shows for a dictation that finished, or <c>null</c> when it has nothing to say: the dictation was
-    /// discarded quietly (no speech was heard, or the dictionary left nothing to type), so the pill just hides.
+    /// discarded quietly (no speech was heard, or the dictionary left nothing to type), or the app was sent the text and did
+    /// not confirm it in time (<see cref="InjectionResult.DeliveryUnconfirmedError"/>), so neither "Typed" nor "Nothing
+    /// typed" would be true and the pill just hides; the problem's notice says to check the app before copying.
     /// </summary>
     /// <param name="insertion">How typing into the target went, or <c>null</c> when the dictation ended before insertion.</param>
     /// <param name="cleanupRequested">Whether the capture asked for AI cleanup, from its own settings (the dictation-only hotkey turns it off).</param>
@@ -96,6 +99,11 @@ public sealed record PillOutcome
             {
                 // Nothing was given to type, so nothing can be claimed about it.
                 { Total: 0 } => null,
+
+                // The app may already hold all of the text, or get it later, so "Nothing typed" would not be known to be
+                // true, and copying the dictation into it could duplicate it. Whatever problem was reported with it, the
+                // pill claims nothing.
+                { Error: InjectionResult.DeliveryUnconfirmedError } => null,
 
                 // The injector reports success only when all of what it was given arrived, and it was given the space too.
                 { Succeeded: true } => cleanupRequested && MissingCleanupReason(cleanup) is { } reason

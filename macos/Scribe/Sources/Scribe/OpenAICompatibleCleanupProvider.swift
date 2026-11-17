@@ -124,7 +124,8 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
                 local: local,
                 lease: lease)
             return CleanupResponse(
-                cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model)
+                cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model,
+                ending: completion.ending)
         } catch let error as CleanupProviderError {
             guard local, !plain, case .rejected(let status, _, _) = error, status == 400 || status == 422 else {
                 throw error
@@ -138,7 +139,8 @@ final class OpenAICompatibleCleanupProvider: CleanupProvider {
                     local: local,
                     lease: lease)
                 return CleanupResponse(
-                    cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model)
+                    cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model,
+                    ending: completion.ending)
             } catch {
                 plainRequests.withLock { $0 = false }
                 throw error
@@ -351,6 +353,8 @@ struct ChatCompletionsTransport: Sendable {
     struct Completion: Sendable {
         let text: String
         let latency: TimeInterval
+        /// How the service said the answer ended; whole when it said nothing.
+        var ending: CleanupAnswerEnding = .finished
     }
 
     let session: URLSession
@@ -519,7 +523,7 @@ struct ChatCompletionsTransport: Sendable {
             .name("provider", CleanupProviderKind.openAICompatible),
             .duration("elapsed", elapsed),
             .count("characters", text.count))
-        return Completion(text: text, latency: Self.seconds(elapsed))
+        return Completion(text: text, latency: Self.seconds(elapsed), ending: decoded.ending)
     }
 
     func completeResponses(
@@ -581,7 +585,7 @@ struct ChatCompletionsTransport: Sendable {
             .name("provider", CleanupProviderKind.openAICompatible),
             .duration("elapsed", elapsed),
             .count("characters", text.count))
-        return Completion(text: text, latency: Self.seconds(elapsed))
+        return Completion(text: text, latency: Self.seconds(elapsed), ending: decoded.ending)
     }
 
     func complete(
@@ -659,7 +663,8 @@ struct ChatCompletionsTransport: Sendable {
         ScribeLog.debug(
             .cleanup, "Cleanup request finished", .name("provider", provider), .duration("elapsed", elapsed),
             .count("characters", text.count))
-        return Completion(text: text, latency: Self.seconds(elapsed))
+        let ending = CleanupAnswerEnding(finishReason: choice?.finishReason)
+        return Completion(text: text, latency: Self.seconds(elapsed), ending: ending)
     }
 
     /// A failed `URLSession` call as a cleanup failure. A cancelled task stays a `CancellationError`, so a caller can
@@ -807,6 +812,11 @@ struct OllamaChatResponse: Decodable {
         case message
         case doneReason = "done_reason"
     }
+
+    /// Ollama says `length` when the answer reached the token limit.
+    var ending: CleanupAnswerEnding {
+        doneReason == "length" ? .cutAtOutputLimit : .finished
+    }
 }
 
 struct ResponsesResponse: Decodable {
@@ -821,8 +831,15 @@ struct ResponsesResponse: Decodable {
         let content: [Content]?
     }
 
+    struct IncompleteDetails: Decodable {
+        let reason: String?
+    }
+
     let outputText: String?
     let output: [Output]?
+    /// `completed` for a finished answer, `incomplete` for one the service stopped.
+    let status: String?
+    let incompleteDetails: IncompleteDetails?
 
     var text: String? {
         if let outputText, !outputText.isEmpty {
@@ -841,9 +858,37 @@ struct ResponsesResponse: Decodable {
         return nil
     }
 
+    /// An answer is cut when the service says it is incomplete, by its status or by giving a reason; the reason says
+    /// whether the output limit (`max_output_tokens`) or the content filter stopped it. A service that sends neither
+    /// is taken to have finished.
+    var ending: CleanupAnswerEnding {
+        if incompleteDetails?.reason == "content_filter" {
+            return .filtered
+        }
+        let stopped = status == "incomplete" || incompleteDetails != nil
+        return stopped ? .cutAtOutputLimit : .finished
+    }
+
     enum CodingKeys: String, CodingKey {
         case outputText = "output_text"
         case output
+        case status
+        case incompleteDetails = "incomplete_details"
+    }
+}
+
+extension CleanupAnswerEnding {
+    /// The ending a Chat Completions `finish_reason` names: `length` is the output limit and `content_filter` the
+    /// service's filter. `stop`, `tool_calls`, a value no one documented and a missing field are not evidence of a cut.
+    init(finishReason: String?) {
+        switch finishReason {
+        case "length":
+            self = .cutAtOutputLimit
+        case "content_filter":
+            self = .filtered
+        default:
+            self = .finished
+        }
     }
 }
 

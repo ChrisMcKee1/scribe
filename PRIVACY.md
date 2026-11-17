@@ -15,15 +15,17 @@ and does not sell personal information.
 The publisher does not operate a service that receives your microphone audio or
 dictation history. Scribe does, however, access and store personal information
 locally to provide its features. If you choose an online AI provider, certain
-text described below is sent to the provider you configure. Audio is never sent
-to an AI provider.
+text described below is sent to the provider you configure. AI cleanup never sends
+audio. Separately, selecting MAI-Transcribe-2 cloud speech sends recorded audio and
+vocabulary phrases to your configured Microsoft Foundry resource, as described below.
 
 ## Information Scribe accesses and stores
 
 ### Microphone audio
 
 Scribe accesses the microphone you select when you start a dictation. Audio is
-processed locally to detect speech and create a transcript.
+processed locally to detect speech. A local speech model creates the transcript on
+your PC by default; the optional cloud speech model sends audio for transcription.
 
 By default, captured audio is held in memory and discarded after processing. If
 you enable audio history, Scribe stores recorded audio locally with the
@@ -33,7 +35,12 @@ Deleting the entry or clearing your history removes its recording sooner. When a
 recording is removed, the entry's text stays, as described under Dictation
 history.
 
-Scribe never transmits microphone audio off your device unless you explicitly select the optional `MAI-Transcribe-2` cloud speech model in a direct install (or enable `MaiTranscribeSpeech`), in which case each dictation's recorded audio and up to 500 vocabulary phrases from your dictionary and AI-permitted word packs are sent to your configured Microsoft Foundry resource. AI cleanup never sends audio.
+Scribe never transmits microphone audio off your device unless you explicitly select the optional `MAI-Transcribe-2` cloud speech model in a direct install (or select it after enabling `MaiTranscribeSpeech` in a Store install), in which case each dictation's recorded audio and up to 500 vocabulary phrases from your dictionary and AI-permitted word packs are sent to your configured Microsoft Foundry resource. AI cleanup never sends audio. Turning AI cleanup off does not turn cloud speech off. Select a local speech model to stop cloud speech requests. Microsoft's service terms and retention policy apply to cloud speech; the `store=false` and prompt-cache choices for AI cleanup do not control speech requests.
+
+Word pack AI permission is checked again immediately before each cloud speech send, including a retry.
+A refused hand-off uses local Parakeet instead. Scribe does not follow cloud speech redirects. Sign-in,
+requests and response reading share one 25-second deadline; an unsupported transcription response
+falls back to local recognition rather than becoming an empty dictation.
 
 ### Reporting an AI result
 

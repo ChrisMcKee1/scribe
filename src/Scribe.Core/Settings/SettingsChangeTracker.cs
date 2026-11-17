@@ -103,7 +103,8 @@ public static class SettingsChangeTracker
         bool recoveredMode = false,
         IReadOnlyList<LoadedDictionaryDraftRow>? loadedDictionaryRows = null,
         IReadOnlyList<LoadedSnippetDraftRow>? loadedSnippetRows = null,
-        IReadOnlyList<LoadedProfileDraftRow>? loadedProfileRows = null)
+        IReadOnlyList<LoadedProfileDraftRow>? loadedProfileRows = null,
+        bool azureApiKeySelected = false)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         ArgumentNullException.ThrowIfNull(draft);
@@ -137,6 +138,7 @@ public static class SettingsChangeTracker
             baseline.StoreAudioHistory != draft.StoreAudioHistory);
 
         AddIf(SettingsPage.AiCleanup,
+            (azureApiKeySelected && string.IsNullOrWhiteSpace(draft.AiCleanupAzureApiKey)) ||
             baseline.EnableAiCleanup != draft.EnableAiCleanup ||
             baseline.AiCleanupProvider != draft.AiCleanupProvider ||
             !Same(baseline.AiCleanupModel, draft.AiCleanupModel) ||

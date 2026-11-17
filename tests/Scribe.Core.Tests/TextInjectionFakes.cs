@@ -429,7 +429,14 @@ internal static class TextInjectionFakes
 
         public bool StandardEdit { get; set; }
 
-        /// <summary>The text of every insertion the standard-edit path took, in order.</summary>
+        /// <summary>
+        /// What the standard-edit path answers, when a test needs more than <see cref="StandardEdit"/>'s yes or no: an
+        /// <see cref="StandardEditInsertion.Unconfirmed"/> scripts a message the control was sent and never answered.
+        /// Default: <see cref="StandardEditInsertion.Inserted"/> when <see cref="StandardEdit"/> is set, else a refusal.
+        /// </summary>
+        public StandardEditInsertion? StandardEditOutcome { get; set; }
+
+        /// <summary>The text of every insertion the standard-edit path was sent, in order, whether or not it was answered.</summary>
         public List<string> StandardEditTexts { get; } = [];
 
         public List<INPUT[]> Batches { get; } = [];
@@ -455,14 +462,18 @@ internal static class TextInjectionFakes
             return Deliver?.Invoke(Batches.Count - 1, batch) ?? (uint)batch.Length;
         }
 
-        public bool TryInsertIntoStandardEdit(string text, nint expectedForegroundWindow)
+        public bool TryInsertIntoStandardEdit(string text, nint expectedForegroundWindow) =>
+            InsertIntoStandardEdit(text, expectedForegroundWindow) == StandardEditInsertion.Inserted;
+
+        public StandardEditInsertion InsertIntoStandardEdit(string text, nint expectedForegroundWindow)
         {
-            if (StandardEdit)
+            var outcome = StandardEditOutcome ?? (StandardEdit ? StandardEditInsertion.Inserted : StandardEditInsertion.Declined);
+            if (outcome != StandardEditInsertion.Declined)
             {
                 StandardEditTexts.Add(text);
             }
 
-            return StandardEdit;
+            return outcome;
         }
 
         public void Sleep(int milliseconds)

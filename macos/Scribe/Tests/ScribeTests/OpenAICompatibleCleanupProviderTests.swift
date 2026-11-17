@@ -789,13 +789,67 @@ final class OpenAICompatibleCleanupProviderTests: XCTestCase {
         }
     }
 
-    /// An answer that stopped at the limit after some text is text.
+    /// An answer that stopped at the limit after some text is text, and the response says it was cut, so a dictation
+    /// does not type it as if it were whole.
     func testAnAnswerCutOffAfterSomeTextIsKept() async throws {
         let provider = makeProvider { request in StubReply.completion(request, "Cleaned so f", finishReason: "length") }
 
         let response = try await provider.clean(CleanupRequest(transcript: "raw text"))
 
         XCTAssertEqual(response.cleanedText, "Cleaned so f")
+        XCTAssertEqual(response.ending, .cutAtOutputLimit)
+    }
+
+    /// What the service said about how the answer ended travels with the text, from the finish reason alone: `stop`,
+    /// a value no one documents and a missing finish reason are not evidence of a cut.
+    func testTheFinishReasonSaysHowTheAnswerEnded() async throws {
+        let cases: [(String?, CleanupAnswerEnding)] = [
+            ("length", .cutAtOutputLimit), ("content_filter", .filtered), ("stop", .finished),
+            ("tool_calls", .finished), (nil, .finished),
+        ]
+        for (reason, expected) in cases {
+            let provider = makeProvider { request in
+                if let reason {
+                    return StubReply.completion(request, "Cleaned so f", finishReason: reason)
+                }
+                return StubReply.completion(request, "Cleaned so f")
+            }
+
+            let response = try await provider.clean(CleanupRequest(transcript: "raw text"))
+
+            XCTAssertEqual(response.cleanedText, "Cleaned so f")
+            XCTAssertEqual(response.ending, expected, "finish_reason \(reason ?? "missing")")
+        }
+    }
+
+    /// The Responses API says an answer it stopped is incomplete, by its status and its reason; one that says neither
+    /// is taken as finished.
+    func testAResponsesAnswerTheServiceMarksIncompleteIsReportedAsCut() async throws {
+        let cases: [(String, CleanupAnswerEnding)] = [
+            ("", .finished),
+            (#","status":"completed","incomplete_details":null"#, .finished),
+            (#","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}"#, .cutAtOutputLimit),
+            (#","status":"incomplete","incomplete_details":{"reason":"content_filter"}"#, .filtered),
+            (#","status":"incomplete""#, .cutAtOutputLimit),
+        ]
+        for (fields, expected) in cases {
+            let provider = OpenAICompatibleCleanupProvider(
+                model: "test-model",
+                serviceURL: URL(string: "https://ai.example.invalid/v1")!,
+                apiStyle: .responses,
+                session: makeStubSession { request in
+                    StubReply.json(
+                        request,
+                        #"{"output":[{"type":"message","content":[{"type":"output_text","text":"Cleaned so f"}]}]"#
+                            + fields + "}")
+                })
+
+            let response = try await provider.clean(
+                CleanupRequest(transcript: "raw text", writingStylePrompt: "Be terse.", maxOutputTokens: 16))
+
+            XCTAssertEqual(response.cleanedText, "Cleaned so f")
+            XCTAssertEqual(response.ending, expected, "Responses fields \(fields)")
+        }
     }
 }
 
@@ -931,6 +985,40 @@ final class ManagedOllamaCleanupProviderTests: XCTestCase {
                 XCTAssertEqual(error as? CleanupProviderError, .localRequestTooLarge)
             }
             XCTAssertEqual(log.all.filter { $0.url?.path == "/api/chat" }.count, 2)
+        }
+    }
+
+    /// Both native paths read `done_reason`: `length` is an answer cut at the token limit, and anything else is whole.
+    func testBothNativePathsReportAnAnswerThatReachedTheTokenLimitAsCut() async throws {
+        let cases: [(String, CleanupAnswerEnding)] = [("length", .cutAtOutputLimit), ("stop", .finished)]
+        for managed in [true, false] {
+            for (reason, expected) in cases {
+                let session = makeStubSession { request in
+                    switch request.url?.path {
+                    case "/api/show":
+                        return StubReply.json(request, #"{"model_info":{"gemma.context_length":8192}}"#)
+                    case "/api/ps":
+                        return StubReply.json(request, #"{"models":[{"name":"model","context_length":8192}]}"#)
+                    default:
+                        return StubReply.json(
+                            request, #"{"message":{"content":"Cleaned so f"},"done":true,"done_reason":"\#(reason)"}"#)
+                    }
+                }
+                let provider: any CleanupProvider =
+                    managed
+                    ? ManagedOllamaCleanupProvider(model: "model", contextTokens: 8192, session: session)
+                    : OpenAICompatibleCleanupProvider(
+                        model: "model", serviceURL: URL(string: LocalAiServer.ollamaAddress)!,
+                        localServerApp: .ollama,
+                        localTuning: { LocalModelTuning(contextTokens: 8192, sendWholeVocabulary: false) },
+                        session: session)
+
+                let response = try await provider.clean(
+                    CleanupRequest(transcript: "sample", writingStylePrompt: "Edit.", maxOutputTokens: 32))
+
+                XCTAssertEqual(response.cleanedText, "Cleaned so f")
+                XCTAssertEqual(response.ending, expected, "managed \(managed), done_reason \(reason)")
+            }
         }
     }
 

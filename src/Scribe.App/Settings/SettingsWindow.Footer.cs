@@ -190,7 +190,8 @@ public partial class SettingsWindow
             _settingsRecovered,
             _dictionaryLoad.IsLoaded ? _loadedDictionaryRows : null,
             _snippetLoad.IsLoaded ? _loadedSnippetRows : null,
-            _loadedProfileRows);
+            _loadedProfileRows,
+            azureApiKeySelected: IsAzureApiKeySelected);
         if (_wordPackWorkspace?.HasUnsavedChanges == true)
         {
             var pages = new HashSet<SettingsPage>(changes.Pages) { SettingsPage.Dictionary };

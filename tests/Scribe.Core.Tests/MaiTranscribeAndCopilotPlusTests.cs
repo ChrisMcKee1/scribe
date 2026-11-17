@@ -321,7 +321,7 @@ public sealed class MaiTranscribeAndCopilotPlusTests
             }),
             NullLogger<TranscriptionService>.Instance,
             fakeMai,
-            () => new MaiTranscribeOptions(
+            _ => new MaiTranscribeOptions(
                 Enabled: true,
                 MaiEndpointOverride: "https://speech.cognitiveservices.azure.com",
                 FoundryEndpoint: null,
@@ -329,13 +329,16 @@ public sealed class MaiTranscribeAndCopilotPlusTests
 
         var audio = new CapturedAudio([0.1f, -0.1f, 0.2f], 16_000);
 
-        var cloudResult = service.Transcribe(audio);
+        // Cloud speech is reachable only through the admission the recording was admitted with.
+        var admission = new TranscriptionAdmission(AppSettings.CreateDefault(), VocabularyGeneration.Empty);
+
+        var cloudResult = service.Transcribe(audio, admission, CancellationToken.None);
         Assert.Equal("Cloud transcript from MAI-Transcribe-2.", cloudResult.Text);
         Assert.Equal(TranscriptionModelCatalog.MaiTranscribe2Id, cloudResult.ModelId);
         Assert.Equal(0, localCalls);
 
         shouldSucceed = false;
-        var fallbackResult = service.Transcribe(audio);
+        var fallbackResult = service.Transcribe(audio, admission, CancellationToken.None);
         Assert.Equal("Offline Parakeet fallback transcript.", fallbackResult.Text);
         Assert.Equal(TranscriptionModelCatalog.DefaultId, fallbackResult.ModelId);
         Assert.Equal(1, localCalls);

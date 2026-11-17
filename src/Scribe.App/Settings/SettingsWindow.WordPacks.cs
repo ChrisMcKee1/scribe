@@ -2197,12 +2197,14 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
 
     private async Task TrySettlePendingWordPackSaveAsync()
     {
-        if (!_wordPackSaveProtocol.HasPendingSave || _closed)
+        // An earlier Save that is not finished: its outcome is not known yet, or it committed and its stored settings are
+        // still waiting to take effect. Either is settled here, and the settlement applies the settings as stored.
+        if (!(_wordPackSaveProtocol.HasPendingSave || _wordPackSaveProtocol.ApplicationOwed) || _closed)
         {
             return;
         }
 
-        var result = await _wordPackSaveProtocol.TrySettlePendingAsync(BuildWordPackSaveRequest(null, null, null, null, null, useVocabularyReload: true));
+        var result = await _wordPackSaveProtocol.TrySettlePendingAsync(BuildWordPackSaveRequest(null, null, null, null, null));
         ShowWordPackSaveResult(result);
     }
 
@@ -2230,25 +2232,44 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         string? dictionarySignature,
         string? snippetSignature,
         StartupRegistrationStatus? observedStartup = null,
-        bool useVocabularyReload = false,
         IReadOnlyList<SnippetSubmission>? snippetSubmission = null,
         IReadOnlyList<ProfileSubmission>? profileSubmission = null,
         IReadOnlyList<DictionarySubmission>? dictionarySubmission = null,
         string? capturedDraft = null,
-        SaveDraftSections.Capture? capturedSections = null)
+        SaveDraftSections.Capture? capturedSections = null,
+        AppSettings? preflightSettings = null)
     {
-        var savedAiIntent = intents?.AiCleanup ?? 0;
-        var savedMicrophoneIntent = intents?.Microphone ?? 0;
         var savedSections = capturedSections;
+
+        // The document this Save stores is frozen here, with the intents it carries, before the protocol's first await.
+        // The Save waits for its word pack journal to be prepared, and the window keeps running meanwhile: a tray change
+        // is adopted into _settings at once, before its own write has stored it, and put back out when that write fails.
+        // Storing _settings when the commit finally ran would store whatever it held then under the intents frozen now,
+        // a newer tray choice that was never stored, or a rolled back one in place of the choice this Save captured. The
+        // Save stores, and takes its baseline from, this copy; _settings gets back only what the store kept for a setting
+        // the window holds nothing newer for. A Save that went through a preflight freezes what the preflight captured,
+        // which holds the AI cleanup switch and the microphone together with the intents it carries, so a newer tray
+        // choice adopted while the Save waited for its confirmations stays in _settings and is never stored under an
+        // older intent (SaveCandidate.FreezePreflight).
+        var frozenIntents = intents ?? new ExternalIntents(0, 0);
+        var candidate = preflightSettings is null
+            ? SaveCandidate.Freeze(_settings, frozenIntents)
+            : SaveCandidate.FreezePreflight(preflightSettings, _settings, frozenIntents);
+
+        // What the Save puts into effect is the settings as stored when the protocol applies them, never _settings. The
+        // protocol applies only after it awaits the library completion and any reference repairs, so applying the editing
+        // document then would put an unstored choice into dictation and leave the tray's rollback reading it back from
+        // there. The stored settings are the Save's own document plus whatever the tray has stored since, and an earlier
+        // Save that is only now settled puts them into effect the same way.
         return new WordPackSaveProtocolRequest(
             _wordPackWorkspace,
             payload => _settingsRepository.SaveBundle(
-                _settings,
+                candidate.Document,
                 entries,
                 snippets,
-                intents ?? new ExternalIntents(0, 0),
+                candidate.Intents,
                 payload),
-            useVocabularyReload ? _reloadVocabulary : () => _applySettings(_settings),
+            () => StoredSettingsReapply.Reapply(_settingsRepository, _applySettings, _reloadVocabulary),
             () => capturedDraft ?? SaveDraftSignature(BuildSaveDraftSections(), savedSections),
             () => SaveDraftSignature(BuildSaveDraftSections(), savedSections),
             Validate: null,
@@ -2258,8 +2279,9 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
         void OnSettingsCommitted()
         {
             // The saved and running settings, which the page's notices compare against (Try dictation): refreshed only
-            // once SaveBundle has stored the document.
-            _committedSettings = _settings.Clone();
+            // once SaveBundle has stored the document, from the document the Save stored and never from _settings, which
+            // may already hold a tray change this Save did not store.
+            _committedSettings = candidate.Document.Clone();
             OnCommittedSettingsChanged();
 
             // A Save that makes Foundry Local serve the model an earlier Set up or Load was for starts a new setup, and the
@@ -2274,14 +2296,17 @@ private bool CanDeleteWordPackTerm(LibraryTermRow row)
             }
 
             _settingsRecovered = false;
-            _savedBinding = _settings.Hotkey;
-            _savedDictationOnlyBinding = _settings.DictationOnlyHotkey;
+            _savedBinding = candidate.Document.Hotkey;
+            _savedDictationOnlyBinding = candidate.Document.DictationOnlyHotkey;
 
-            // Only now, once the document is stored: _settings already holds the picked provider, and a
+            // Only now, once the document is stored: the editing document already holds the picked provider, and a
             // Save that fails keeps it there while cleanup goes on serving the saved one.
-            _savedAiProvider = _settings.AiCleanupProvider;
-            _externalAiCleanup.SavedThrough(savedAiIntent);
-            _externalMicrophone.SavedThrough(savedMicrophoneIntent);
+            _savedAiProvider = candidate.Document.AiCleanupProvider;
+
+            // The intents the Save carried are stored. The editing document takes what the store kept for a setting the
+            // window holds nothing newer for (a tray change that committed before word of it arrived); a newer tray
+            // choice adopted while the Save waited stays the window's own, until its own write or failure settles it.
+            candidate.Settle(_settings, _externalAiCleanup, _externalMicrophone);
             if (_externalAiCleanup.NewestRevision == 0 && (AiCleanupCheck.IsChecked == true) != _settings.EnableAiCleanup)
             {
                 ShowExternalAiCleanup(_settings.EnableAiCleanup);

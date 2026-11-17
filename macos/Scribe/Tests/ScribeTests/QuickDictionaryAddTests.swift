@@ -217,6 +217,122 @@ final class QuickDictionaryAddTests: XCTestCase {
         XCTAssertEqual(plan.kind, .create)
     }
 
+    // MARK: - Saving every way Scribe hears the word
+
+    /// The popup shows a plan and writes it: the whole-word choice, the switched-off rule turned on and the trimmed
+    /// text the sentence promised, for the first way and for every other.
+    func testASavePlanWritesExactlyWhatThePreviewPromised() {
+        let existing = [
+            DictionaryEntry(id: 7, pattern: "cloud pilot", replacement: "Copilot", wholeWord: true, enabled: false)
+        ]
+        let preview = QuickDictionaryAdd.build(
+            pattern: " cloud pilot ", replacement: " GitHub Copilot ", wholeWord: false, existing: existing)
+
+        let save = QuickDictionaryAdd.buildSave(
+            forms: [" cloud pilot ", "  clowd pilot  ", "   "], replacement: " GitHub Copilot ", wholeWord: false,
+            existing: existing)
+
+        XCTAssertEqual(preview.kind, .update)
+        XCTAssertEqual(
+            save.updates,
+            [
+                DictionaryEntry(
+                    id: 7, pattern: "cloud pilot", replacement: "GitHub Copilot", wholeWord: false, enabled: true)
+            ])
+        XCTAssertEqual(save.updates.first, preview.entry)
+        XCTAssertEqual(
+            save.inserts,
+            [
+                DictionaryEntry(
+                    id: 0, pattern: "clowd pilot", replacement: "GitHub Copilot", wholeWord: false, enabled: true)
+            ])
+        XCTAssertTrue(save.canSave)
+        XCTAssertEqual(save.message, preview.message)
+    }
+
+    func testAnotherWayThatRepeatsAnEarlierWayOrAStoredRuleBlocksTheSave() {
+        let existing = [DictionaryEntry(id: 3, pattern: "kube", replacement: "Kubernetes")]
+
+        let repeated = QuickDictionaryAdd.buildSave(
+            forms: ["cloud pilot", "Cloud Pilot"], replacement: "Copilot", wholeWord: true, existing: empty)
+        let stored = QuickDictionaryAdd.buildSave(
+            forms: ["cloud pilot", "KUBE"], replacement: "Copilot", wholeWord: true, existing: existing)
+
+        XCTAssertFalse(repeated.canSave)
+        XCTAssertEqual(repeated.message, DictionaryWordEditor.duplicateMessage(for: "Cloud Pilot"))
+        XCTAssertFalse(stored.canSave)
+        XCTAssertEqual(stored.message, DictionaryWordEditor.duplicateMessage(for: "KUBE"))
+    }
+
+    func testAnExtraWayThatCouldNeverFireIsNamedInTheMessage() {
+        let save = QuickDictionaryAdd.buildSave(
+            forms: ["cloud pilot", "Copilot"], replacement: "Copilot", wholeWord: true, existing: empty)
+
+        XCTAssertFalse(save.canSave)
+        XCTAssertEqual(save.message, "\"Copilot\": That is already what Scribe writes, so nothing would change.")
+    }
+
+    func testABlankFirstWayCannotBeSavedWhateverTheOthersSay() {
+        let save = QuickDictionaryAdd.buildSave(
+            forms: ["", "clowd pilot"], replacement: "Copilot", wholeWord: true, existing: empty)
+
+        XCTAssertFalse(save.canSave)
+        XCTAssertEqual(
+            save.message,
+            QuickDictionaryAdd.build(pattern: "", replacement: "Copilot", wholeWord: true, existing: empty).message)
+    }
+
+    func testAnUnchangedFirstWayStillSavesANewExtraWay() {
+        let existing = [DictionaryEntry(id: 7, pattern: "cloud pilot", replacement: "Copilot")]
+
+        let save = QuickDictionaryAdd.buildSave(
+            forms: ["cloud pilot", "clowd pilot"], replacement: "Copilot", wholeWord: true, existing: existing)
+
+        XCTAssertTrue(save.canSave)
+        XCTAssertTrue(save.updates.isEmpty)
+        XCTAssertEqual(save.inserts.map(\.pattern), ["clowd pilot"])
+    }
+
+    /// What `persist` writes to the database is the plan: the whole-word choice and the turned-on rule included, which
+    /// the popup used to leave to a second builder that set neither.
+    func testPersistWritesThePlanExactlyAndReturnsTheStoredRows() async throws {
+        let directory = try StorageTestDirectory()
+        defer { directory.remove() }
+        let store = PersistenceStore(databaseURL: directory.databaseURL)
+        try store.initialize()
+        let id = try store.insertDictionaryEntry(
+            DictionaryEntry(pattern: "cloud pilot", replacement: "Copilot", wholeWord: true, enabled: false))
+        let existing = try store.fetchAllDictionaryEntries()
+        let plan = QuickDictionaryAdd.buildSave(
+            forms: ["cloud pilot", " clowd pilot "], replacement: " GitHub Copilot ", wholeWord: false,
+            existing: existing)
+
+        let saved = try await QuickDictionaryAdd.persist(plan, in: store)
+
+        let stored = try store.fetchAllDictionaryEntries().sorted { $0.pattern < $1.pattern }
+        XCTAssertEqual(stored.map(\.pattern), ["cloud pilot", "clowd pilot"])
+        XCTAssertEqual(stored.map(\.replacement), ["GitHub Copilot", "GitHub Copilot"])
+        XCTAssertEqual(stored.map(\.wholeWord), [false, false])
+        XCTAssertEqual(stored.map(\.enabled), [true, true])
+        XCTAssertEqual(saved.map(\.pattern), ["cloud pilot", "clowd pilot"])
+        XCTAssertEqual(saved.first?.id, id)
+        XCTAssertNotEqual(saved.last?.id, 0)
+    }
+
+    func testPersistWritesNothingForAPlanThatCannotBeSaved() async throws {
+        let directory = try StorageTestDirectory()
+        defer { directory.remove() }
+        let store = PersistenceStore(databaseURL: directory.databaseURL)
+        try store.initialize()
+        let plan = QuickDictionaryAdd.buildSave(
+            forms: ["", "clowd pilot"], replacement: "Copilot", wholeWord: true, existing: empty)
+
+        let saved = try await QuickDictionaryAdd.persist(plan, in: store)
+
+        XCTAssertTrue(saved.isEmpty)
+        XCTAssertTrue(try store.fetchAllDictionaryEntries().isEmpty)
+    }
+
     // MARK: - Apply (mirrors the live post-processor exactly; see TextPostProcessor.applyRule)
 
     private func rule(_ pattern: String, _ replacement: String, wholeWord: Bool = true) -> DictionaryEntry {

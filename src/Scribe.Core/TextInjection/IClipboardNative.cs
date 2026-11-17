@@ -69,7 +69,9 @@ internal interface IClipboardNative
 
     /// <summary>
     /// GetClipboardOwner, then SendMessageTimeout of WM_NULL to it: true when the clipboard has no owner window or the
-    /// owner answers within <paramref name="timeoutMs"/>.
+    /// owner answers within <paramref name="timeoutMs"/>. <see cref="ClipboardBorrower"/> asks before it reads any data from
+    /// the clipboard, plain text included, so an owner that is already not answering is not asked to render; an owner that
+    /// stops answering after it did can still hold a read.
     /// </summary>
     bool OwnerResponds(uint timeoutMs);
 }

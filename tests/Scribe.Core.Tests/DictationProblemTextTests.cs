@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Media;
 using Scribe.Core.Overlay;
 using Scribe.Core.Models;
+using Scribe.Core.TextInjection;
 using Scribe.Core.Tray;
 
 namespace Scribe.Core.Tests;
@@ -31,6 +32,7 @@ public sealed class DictationProblemTextTests
         yield return Row(DictationProblem.FallbackMicrophone, null, "Laptop", "Jabra", 10, HotkeyMode.Hold, "Page Down", "Using another microphone", "\"Laptop\" isn't available, so Scribe is recording from \"Jabra\", the Windows default. To choose another, right-click the Scribe icon and choose Microphone.", TrayNoticeKind.RecordingWarning, true, TrayNoticeAction.None);
         yield return Row(DictationProblem.FallbackMicrophone, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Using another microphone", "Your chosen microphone isn't available, so Scribe is recording from the Windows default microphone. To choose another, right-click the Scribe icon and choose Microphone.", TrayNoticeKind.RecordingWarning, true, TrayNoticeAction.None);
         yield return Row(DictationProblem.MicrophoneNotSending, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Your microphone isn't sending sound", "Unplug it and plug it back in, or choose another from the Microphone menu. Scribe is still recording.", TrayNoticeKind.RecordingWarning, true, TrayNoticeAction.None);
+        yield return Row(DictationProblem.DeliveryUnconfirmed, null, null, null, 10, HotkeyMode.Hold, "Page Down", "Couldn't confirm your dictation", "The app didn't confirm the text in time, so Scribe didn't type it again. It may already be there. Check the app before copying. If it isn't there, right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Warning, false, TrayNoticeAction.None);
     }
 
     public static IEnumerable<object?[]> PillRows()
@@ -53,6 +55,7 @@ public sealed class DictationProblemTextTests
         yield return Pill(DictationProblem.FallbackMicrophone, HotkeyMode.Hold, 10, "Using the default mic");
         yield return Pill(DictationProblem.MicrophoneDisconnected, HotkeyMode.Hold, 10, null);
         yield return Pill(DictationProblem.MicrophoneNotSending, HotkeyMode.Hold, 10, "No sound from the mic");
+        yield return Pill(DictationProblem.DeliveryUnconfirmed, HotkeyMode.Hold, 10, null);
     }
 
     [Theory]
@@ -169,6 +172,20 @@ public sealed class DictationProblemTextTests
         Assert.Equal("That was too quick. Hold the middle mouse button while you speak, then let go.", DictationProblemText.Describe(DictationProblem.TooQuick, HotkeyMode.Hold, "the middle mouse button").Body);
     }
 
+    [Theory]
+    [InlineData(InjectionResult.FocusChangedError, DictationProblem.FocusChanged)]
+    [InlineData(InjectionResult.DeliveryUnconfirmedError, DictationProblem.DeliveryUnconfirmed)]
+    [InlineData("Only part of the text was accepted by Windows.", DictationProblem.TypingIncomplete)]
+    [InlineData(null, DictationProblem.TypingIncomplete)]
+    public void A_failed_insertion_is_reported_as_the_problem_its_error_names(string? error, DictationProblem expected)
+    {
+        // The one mapping from an insertion's error to what the shell tells the user. The unconfirmed one must not fall
+        // into TypingIncomplete, whose notice says to copy the dictation into the app, which may already hold it.
+        var failed = new InjectionResult(false, "unicode", 0, 6, error);
+
+        Assert.Equal(expected, DictationProblemReport.ForFailedInsertion(failed).Problem);
+    }
+
     [Fact]
     public void Routing_covers_every_problem_with_indicator_on_and_off()
     {
@@ -183,7 +200,7 @@ public sealed class DictationProblemTextTests
         static DictationProblemSurface Expected(DictationProblem problem, bool indicatorOn) => problem switch
         {
             DictationProblem.NoSpeechModel or DictationProblem.FocusChanged or DictationProblem.TypingIncomplete => DictationProblemSurface.PillAndNotice,
-            DictationProblem.MicrophoneDisconnected or DictationProblem.DurationLimit => DictationProblemSurface.Notice,
+            DictationProblem.MicrophoneDisconnected or DictationProblem.DurationLimit or DictationProblem.DeliveryUnconfirmed => DictationProblemSurface.Notice,
             DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone or DictationProblem.MicrophoneNotSending =>
                 indicatorOn ? DictationProblemSurface.RecordingPill : DictationProblemSurface.Notice,
             _ => indicatorOn ? DictationProblemSurface.PillOutcome : DictationProblemSurface.Notice,

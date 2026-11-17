@@ -114,15 +114,47 @@ public sealed class SaveDraftCoverageTests
         // SaveBundle takes the settings, the dictionary rows, the snippets and the tray intents, and nothing else. The rows
         // are carried by whether they differ from storage (and a row edit in progress); the intents' revisions only order
         // this Save against the tray's own writes, which store themselves, and a tray change that alters what this window
-        // would store alters ForSave, which the draft reads.
+        // would store alters ForSave, which the draft reads. The settings are the document the Save froze when its request
+        // was built (a copy of _settings with those intents), never _settings itself: a tray change adopted into it while
+        // the Save waits for its journal would otherwise be stored under the intents frozen before it.
         var request = Body(window, "private WordPackSaveProtocolRequest BuildWordPackSaveRequest(");
-        var bundle = Regex.Match(request, @"_settingsRepository\.SaveBundle\((?<arguments>[^;]*)\);");
-        Assert.True(bundle.Success, "SaveBundle's call was not found.");
-        Assert.Contains("_settings", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
-        Assert.Contains("entries", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
-        Assert.Contains("snippets", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
-        Assert.Contains("intents ?? new ExternalIntents(0, 0)", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
-        Assert.Contains("payload", bundle.Groups["arguments"].Value, StringComparison.Ordinal);
+        var callStart = request.IndexOf("_settingsRepository.SaveBundle(", StringComparison.Ordinal);
+        Assert.True(callStart >= 0, "SaveBundle's call was not found.");
+        var open = callStart + "_settingsRepository.SaveBundle".Length;
+        var depth = 0;
+        var close = -1;
+        for (var i = open; i < request.Length && close < 0; i++)
+        {
+            if (request[i] == '(')
+            {
+                depth++;
+            }
+            else if (request[i] == ')' && --depth == 0)
+            {
+                close = i;
+            }
+        }
+
+        Assert.True(close > open, "SaveBundle's call is not closed.");
+        var arguments = request[(open + 1)..close];
+        Assert.Contains("var frozenIntents = intents ?? new ExternalIntents(0, 0);", request, StringComparison.Ordinal);
+        Assert.Contains("? SaveCandidate.Freeze(_settings, frozenIntents)", request, StringComparison.Ordinal);
+        Assert.Contains(": SaveCandidate.FreezePreflight(preflightSettings, _settings, frozenIntents);", request, StringComparison.Ordinal);
+        Assert.True(
+            request.IndexOf("var candidate = preflightSettings is null", StringComparison.Ordinal) < request.IndexOf("return new WordPackSaveProtocolRequest(", StringComparison.Ordinal),
+            "The Save's document is not frozen before its request is built.");
+
+        // A Save that went through a preflight freezes what the preflight captured, and the window's editing document keeps
+        // the newest AI cleanup and microphone choices: the copy of the preflight over it skips what the tray can change.
+        var save2 = Body(window, "private async Task<bool> TrySaveAsync()");
+        Assert.Contains("preflightSettings: preflight.Settings", save2, StringComparison.Ordinal);
+        Assert.Contains("!SaveCandidate.IsExternal(property.Name)", Body(window, "private static void CopySettings("), StringComparison.Ordinal);
+        Assert.Contains("candidate.Document", arguments, StringComparison.Ordinal);
+        Assert.DoesNotContain("_settings", arguments, StringComparison.Ordinal);
+        Assert.Contains("entries", arguments, StringComparison.Ordinal);
+        Assert.Contains("snippets", arguments, StringComparison.Ordinal);
+        Assert.Contains("candidate.Intents", arguments, StringComparison.Ordinal);
+        Assert.Contains("payload", arguments, StringComparison.Ordinal);
         Assert.Contains("sections.Write(draft.Part(\"async-sections\"), capture);", draft, StringComparison.Ordinal);
         Assert.Contains("DictionarySignature()", window, StringComparison.Ordinal);
         Assert.Contains("RowEditInProgress(DictionaryGrid)", draft, StringComparison.Ordinal);

@@ -18,6 +18,9 @@ advanced **Copilot+ PC NPU** features.
   - **Automatic regional & offline fallback:** Uses `MAI-Transcribe-2` (`enhancedMode`) where
     deployed, automatically falls back to Azure Fast Transcription in other Speech regions, and
     falls back to offline **Parakeet** on your PC if you lose internet connectivity.
+    Sign-in and requests share one 25-second deadline. Scribe does not follow redirects, rechecks
+    word pack AI permission immediately before each send, and uses Parakeet if a response is not a
+    recognized transcription response.
 - **Copilot+ PC NPU acceleration:**
   - **On-device AI cleanup on your NPU** (Qualcomm Hexagon via `QNN`, Intel AI Boost via
     `OpenVINO`, AMD XDNA via `Vitis AI`) with automatic `Phi-4 Mini` selection and automatic NPU-to-CPU fallback. (This is active in **both** the Microsoft Store and Direct Installer builds.)
@@ -28,7 +31,8 @@ advanced **Copilot+ PC NPU** features.
 - **Microsoft Store certification rules:** Microsoft's developer policy explicitly prohibits
   publishing apps that enable experimental Windows AI Speech APIs in the Microsoft Store, and
   Scribe's Microsoft Store listing is certified under a strict **offline-audio-by-default** privacy
-  posture where microphone audio never leaves the PC.
+  posture where local speech models keep microphone audio on the PC. Explicitly selecting cloud
+  speech is a separate choice that sends audio to Microsoft Foundry, including in a flagged Store install.
 - To stay 100% compliant with Microsoft Store policies while giving power users every capability,
   Scribe uses **installer-aware gating**:
   - The **Microsoft Store build** keeps `MAI-Transcribe-2` and experimental NPU speech hidden by
@@ -42,26 +46,34 @@ advanced **Copilot+ PC NPU** features.
 
 If you already have the **Microsoft Store** version of Scribe installed, **do not keep both
 installed** (both would try to start with Windows and compete for your dictation shortcut), and
-**follow this exact order so you do not lose your dictionary, word packs, snippets or history**:
+**back up and verify your data before uninstalling anything**:
 
 > **Why order matters:** A fresh Microsoft Store install stores its data inside Windows' per-package
 > container (`%LOCALAPPDATA%\Packages\53984VeteranApps.ScribeAI_e3jkm6dfkwwbm\LocalCache\Local\ScribeData`).
 > Uninstalling the Store app *before* running the Direct Installer deletes that package container.
-> Running the Direct Installer *first* automatically migrates your Store database and word packs into
-> `%LOCALAPPDATA%\ScribeData` so nothing is lost when you uninstall the Store version.
+> The Direct Installer does **not** automatically discover and migrate a Store-only data folder.
+> Launching it once is not proof that your data moved. Keep a complete backup outside the package
+> container, and verify your data in the direct install before uninstalling the Store version.
 
-1. **Quit Scribe** in the system tray (right-click the Scribe icon in the taskbar notification area
-   and choose **Quit**).
-2. **Download and run the Direct Installer (`Setup.exe`) for your PC:**
+1. **Find your current data folder** in Scribe's **Settings > About**, then **quit Scribe** in the
+   system tray. Do not copy a running database.
+2. **Back up the entire data folder** to a safe folder outside the package container, not just
+   `scribe.db`. Keep all its files and subfolders, including word packs and their edits.
+3. If About already showed `%LOCALAPPDATA%\ScribeData`, both installs use that folder and no copy is
+   needed. Otherwise, copy the complete backed-up folder to `%LOCALAPPDATA%\ScribeData` while both
+   copies of Scribe are closed. **If that destination already contains data, do not overwrite or merge
+   it.** Keep both backups and resolve which data to keep before proceeding.
+4. **Download and run the Direct Installer (`Setup.exe`) for your PC:**
    - **Snapdragon Copilot+ PCs (`ARM64`):**
      `https://github.com/ChrisMcKee1/scribe/releases/latest/download/Scribe-win-arm64-Setup.exe`
    - **Intel & AMD PCs (`x64`):**
      `https://github.com/ChrisMcKee1/scribe/releases/latest/download/Scribe-win-x64-Setup.exe`
    - *(Note: Direct installers from GitHub are not Store-signed; if Windows SmartScreen prompts you,
      click **More info > Run anyway**.)*
-3. **Wait for Scribe to launch once** into the system tray (this completes the automatic migration
-   of your settings, dictionary, word packs, snippets and history into `%LOCALAPPDATA%\ScribeData`).
-4. **Uninstall the Microsoft Store version:** Open **Windows Settings > Apps > Installed apps**,
+5. **Verify the direct install** before removing anything: open Settings and check your settings,
+   dictionary, custom and edited word packs, snippets and history. About must show the expected data
+   folder. If anything is missing, quit Scribe and keep the Store install and backup intact.
+6. **Only after verification, uninstall the Microsoft Store version:** Open **Windows Settings > Apps > Installed apps**,
    find the Microsoft Store copy of **Scribe AI**, and choose **Uninstall** so only the Direct
    Installer version remains.
 
@@ -105,8 +117,8 @@ model** card right below **Microphone**:
 The **Speech model** card shows which speech model is currently active and gives you two direct
 shortcuts:
 
-1. **Set up Microsoft Foundry sign-in on AI cleanup**: opens the **AI cleanup** page with
-   **Microsoft Foundry** selected so you can configure your sign-in and resource address.
+1. **Set up Microsoft Foundry sign-in on AI cleanup**: opens the **AI cleanup** page and reveals
+   Microsoft Foundry sign-in and resource details without changing where AI cleanup runs or turning it on.
 2. **Choose speech model on Advanced**: jumps straight to the **Speech model** picker on the
    **Advanced** page.
 
@@ -114,12 +126,16 @@ shortcuts:
 
 ## Step 2: Configure your Microsoft Foundry authentication on AI cleanup
 
-Choose **Set up Microsoft Foundry sign-in on AI cleanup** (or select **AI cleanup** in the left
-navigation rail and pick **Microsoft Foundry**).
+Choose **Set up Microsoft Foundry sign-in on AI cleanup** on the Dictation page.
 
-> **Note:** You do not have to keep **Use AI cleanup** turned on after saving if you only want to
+> **Note:** You do not have to turn **Use AI cleanup** on if you only want to
 > use `MAI-Transcribe-2` for speech recognition. `MAI-Transcribe-2` reuses the saved Microsoft
 > Foundry sign-in and resource address even when AI cleanup itself is turned off.
+
+When AI cleanup is off or runs elsewhere, **Test connection** sends a short synthetic check with
+Scribe's default instructions, not your authored cleanup instructions, writing style or vocabulary.
+When enabled AI cleanup runs in Microsoft Foundry, the test checks its actual cleanup instructions
+and writing style, without vocabulary.
 
 Pick the sign-in method that matches how you access Azure:
 

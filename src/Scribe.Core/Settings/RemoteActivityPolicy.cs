@@ -149,10 +149,17 @@ public sealed class RemoteActivityAuthorization
 
 public static class RemoteActivityPolicy
 {
-    public static bool MayContact(AppSettings savedSettings, AppSettings draft, RemoteActivityTrigger trigger)
+    public static bool MayContact(AppSettings savedSettings, AppSettings draft, RemoteActivityTrigger trigger,
+        bool azureApiKeySelected = false)
     {
         ArgumentNullException.ThrowIfNull(savedSettings);
         ArgumentNullException.ThrowIfNull(draft);
+
+        if (draft.AiCleanupProvider == CleanupProvider.AzureFoundry &&
+            azureApiKeySelected && string.IsNullOrWhiteSpace(draft.AiCleanupAzureApiKey))
+        {
+            return false;
+        }
 
         if (trigger == RemoteActivityTrigger.ButtonPress)
         {
@@ -172,7 +179,8 @@ public static class RemoteActivityPolicy
             return false;
         }
 
-        return RemoteActivityFingerprint.From(savedSettings).Equals(RemoteActivityFingerprint.From(draft));
+        return IsSavedAndActive(savedSettings, draft, azureApiKeySelected) &&
+            RemoteActivityFingerprint.From(savedSettings).Equals(RemoteActivityFingerprint.From(draft));
     }
 
     public static RemoteActivityAuthorization? CaptureAutomaticContact(
@@ -226,13 +234,15 @@ public static class RemoteActivityPolicy
         return true;
     }
 
-    public static bool IsSavedAndActive(AppSettings savedSettings, AppSettings draft)
+    public static bool IsSavedAndActive(AppSettings savedSettings, AppSettings draft, bool azureApiKeySelected = false)
     {
         ArgumentNullException.ThrowIfNull(savedSettings);
         ArgumentNullException.ThrowIfNull(draft);
 
         return savedSettings.EnableAiCleanup &&
             draft.EnableAiCleanup &&
+            !(draft.AiCleanupProvider == CleanupProvider.AzureFoundry &&
+                azureApiKeySelected && string.IsNullOrWhiteSpace(draft.AiCleanupAzureApiKey)) &&
             savedSettings.AiCleanupProvider == draft.AiCleanupProvider &&
             SameProviderConfiguration(savedSettings, draft, savedSettings.AiCleanupProvider);
     }

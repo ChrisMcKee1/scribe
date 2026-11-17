@@ -23,7 +23,8 @@ public interface ITranscriptionService : IDisposable
     /// <summary>
     /// Decodes a capture to text, loading the model first if it is not resident. Loading and decoding happen as one
     /// step, so a concurrent <see cref="Unload"/> lands before (and this call reloads) or after, never in between.
-    /// <see cref="TranscriptionResult.DecodeDuration"/> covers decoding only; a cold load is logged separately.
+    /// <see cref="TranscriptionResult.DecodeDuration"/> covers decoding only; a cold load is logged separately. Always on
+    /// this PC: the audio never leaves it through this overload.
     /// </summary>
     /// <remarks>
     /// Cancellation is cooperative. It is observed before the model loads, once the engine has been acquired, and
@@ -32,6 +33,16 @@ public interface ITranscriptionService : IDisposable
     /// progress runs to completion, because the engine offers no way to interrupt it.
     /// </remarks>
     TranscriptionResult Transcribe(CapturedAudio audio, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <see cref="Transcribe(CapturedAudio, CancellationToken)"/> for a capture whose recording was admitted with
+    /// <paramref name="admission"/>, the only way a capture can reach cloud speech. Whether the audio may leave this PC,
+    /// and which of the user's words may travel with it, are decided from that admission and never from a fresh read of
+    /// the stored settings or the dictionary, so a Save, a reset or a permission change made while the dictation is
+    /// processed cannot redirect it, and a failure in the cloud step, whatever it is, can never stop the speech model on
+    /// this PC from decoding what was recorded. Only <paramref name="cancellationToken"/> ends the call without a result.
+    /// </summary>
+    TranscriptionResult Transcribe(CapturedAudio audio, TranscriptionAdmission admission, CancellationToken cancellationToken);
 
     /// <summary>
     /// Releases the loaded recognizer and every byte ONNX Runtime's arena is holding, which is the

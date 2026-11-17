@@ -276,6 +276,13 @@ extension SettingsDrafts {
             {
                 throw SettingsDraftSaveError(LibraryEditor.message(for: issue))
             }
+            // A client secret is kept under its client ID, so one typed with no client ID cannot be stored. Said
+            // before anything is written, so the other fields are not saved ahead of a secret that then fails.
+            if !drafts.azureClientSecret.isEmpty,
+                CleanupSettingsStore.secretAccount(forClientId: cleanupSettings.azureClientId).isEmpty
+            {
+                throw SettingsDraftSaveError(CleanupSettingsModel.clientIdRequiredMessage)
+            }
             // Existing macOS add/credential actions remain immediate; the footer submits only pending input.
             if !drafts.dictionaryPattern.isEmpty || !drafts.dictionaryReplacement.isEmpty {
                 let model = DictionarySettingsModel(access: .live(store), drafts: drafts, onChanged: onChanged)
@@ -305,7 +312,7 @@ extension SettingsDrafts {
                 if let error = model.errorMessage { throw SettingsDraftSaveError(error) }
             }
             if !drafts.openAIApiKey.isEmpty || !drafts.azureClientSecret.isEmpty || !drafts.azureApiKey.isEmpty {
-                let model = CleanupSettingsModel(access: .live, drafts: drafts)
+                let model = CleanupSettingsModel(access: .storing(in: cleanupSettings), drafts: drafts)
                 model.reload()
                 if !drafts.openAIApiKey.isEmpty {
                     model.saveOpenAIApiKey()

@@ -454,6 +454,38 @@ public class TextInjectorClipboardPasteTests : InsertionFlagTest
     }
 
     [Fact]
+    public void The_key_ups_that_end_a_partial_chord_are_sent_even_when_focus_moves_during_their_retry()
+    {
+        // Content is judged by focus before every send, but the key-ups that finish a chord are content for no window: a
+        // Ctrl left down would turn whatever the user types next into shortcuts, wherever it lands.
+        var rig = new Rig(Flags);
+        rig.Clipboard.SeedText(Previous);
+
+        // The chord stops after Ctrl went down and its release is cut short too; the user clicks another window while the
+        // release's retry sleeps.
+        rig.Platform.Deliver = (index, inputs) => index < 2 ? 1u : (uint)inputs.Length;
+        rig.Platform.OnSleep = ms =>
+        {
+            if (ms == 12)
+            {
+                rig.Platform.Foreground = 0x9999;
+            }
+        };
+
+        var result = rig.Paste();
+
+        // Ctrl+V (one event taken), its release (one taken) and the one key-up left, sent although focus had moved; then
+        // nothing, because the text is typed only into the window that had focus.
+        Assert.Equal(PasteDelivery.ChordIncomplete, result.Paste);
+        Assert.Equal([4, 2, 1], rig.Platform.Batches.Select(batch => batch.Length));
+        var last = Assert.Single(rig.Platform.Batches[2]).U.ki;
+        Assert.Equal(InjectionNativeMethods.VK_V, last.wVk);
+        Assert.Equal(InjectionNativeMethods.KEYEVENTF_KEYUP, last.dwFlags);
+        Assert.Equal(ClipboardRestoreOutcome.Restored, result.ClipboardRestore);
+        Assert.Equal(Previous, rig.Clipboard.Text);
+    }
+
+    [Fact]
     public void A_clipboard_that_stays_busy_is_left_untouched_and_the_text_is_typed()
     {
         var rig = new Rig(Flags);
@@ -472,6 +504,34 @@ public class TextInjectorClipboardPasteTests : InsertionFlagTest
         Assert.Equal(
             ClipboardBorrower.OpenAttempts - 1,
             rig.Platform.Sleeps.Count(ms => ms == ClipboardBorrower.OpenRetryDelayMs));
+    }
+
+    [Fact]
+    public void A_clipboard_owner_that_does_not_answer_is_left_untouched_and_the_text_is_typed()
+    {
+        // Reading the user's text would make an owner that supplies it on request render it, with no documented bound on
+        // the wait, while Scribe holds the clipboard. The owner is asked first; when it does not answer, nothing is read or
+        // replaced, no Ctrl+V is sent and the text is typed.
+        var rig = new Rig(Flags);
+        rig.Clipboard.SeedText(Previous);
+        rig.Clipboard.OwnerResponding = false;
+        uint sequence = rig.Clipboard.Sequence;
+
+        var result = rig.Paste();
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("unicode", result.Method);
+        Assert.Equal(PasteDelivery.SnapshotUnreadable, result.Paste);
+        Assert.Equal(ClipboardRestoreOutcome.NotApplicable, result.ClipboardRestore);
+        Assert.Equal(0, rig.Platform.CtrlVChords);
+        Assert.Equal(TypedEventsFor(Dictation), rig.Platform.UnicodeEvents);
+        Assert.Equal(new[] { "open", "owner-responds", "close" }, rig.Clipboard.Trace);
+        Assert.Equal(sequence, rig.Clipboard.Sequence);
+        Assert.Equal(Previous, rig.Clipboard.Text);
+        var line = Assert.Single(rig.Log.Entries, entry => entry.Contains("Clipboard paste", StringComparison.Ordinal));
+        Assert.StartsWith("Warning:", line, StringComparison.Ordinal);
+        Assert.Contains("Delivery=SnapshotUnreadable", line, StringComparison.Ordinal);
+        Assert.Contains("TypingInstead=True", line, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -730,8 +790,9 @@ public class TextInjectorClipboardPasteTests : InsertionFlagTest
         ActivitySource.AddActivityListener(listener);
 
         // A delivered paste, a paste refused over rich clipboard content (typed instead), one refused over
-        // a receipt that could not be written, Unicode typing, and the standard edit control fast path:
-        // between them every tag the injector sets, in every shape a delivery takes.
+        // a receipt that could not be written, Unicode typing, the standard edit control fast path and one that
+        // was sent the text and never answered: between them every tag the injector sets, in every shape a
+        // delivery takes.
         var arrangements = new Action<Rig>[]
         {
             rig => rig.Clipboard.SeedText(Previous),
@@ -743,6 +804,7 @@ public class TextInjectorClipboardPasteTests : InsertionFlagTest
                 rig.Clipboard.SetDataSucceeds = format => format != receiptFormat;
             },
             rig => rig.Platform.StandardEdit = true,
+            rig => rig.Platform.StandardEditOutcome = StandardEditInsertion.Unconfirmed,
         };
 
         foreach (var arrange in arrangements)
@@ -770,6 +832,9 @@ public class TextInjectorClipboardPasteTests : InsertionFlagTest
             tag.Key == ScribeTelemetry.TagPasteDelivery && Equals(tag.Value, nameof(PasteDelivery.ReceiptFailed)));
         Assert.Contains(seen, tag => tag.Key == ScribeTelemetry.TagClipboardRestore);
         Assert.Contains(seen, tag => tag.Key == ScribeTelemetry.TagInjectFallback && tag.Value is true);
+
+        // Only the edit control that never answered leaves a span incomplete in this list.
+        Assert.Contains(seen, tag => tag.Key == ScribeTelemetry.TagInjectComplete && tag.Value is false);
         Assert.All(seen, tag =>
         {
             Assert.True(TraceTagPolicy.TryFormatValue(tag.Key, tag.Value, out var formatted), $"{tag.Key} is not on the allowlist");
@@ -835,6 +900,7 @@ public class TextInjectorClipboardPasteTests : InsertionFlagTest
                     }
                 };
             },
+            rig => rig.Platform.StandardEditOutcome = StandardEditInsertion.Unconfirmed,
         };
 
         foreach (var arrange in scenarios)
@@ -850,8 +916,10 @@ public class TextInjectorClipboardPasteTests : InsertionFlagTest
         Assert.Contains(log.Entries, entry => entry.Contains("Delivery=Unconfirmed", StringComparison.Ordinal));
         Assert.Contains(log.Entries, entry => entry.Contains("Delivery=ReceiptFailed", StringComparison.Ordinal));
         Assert.Contains(log.Entries, entry => entry.Contains("Restore=Failed", StringComparison.Ordinal));
+        Assert.Contains(log.Entries, entry => entry.Contains("did not answer the insertion in time", StringComparison.Ordinal));
         Assert.Contains(spans, tag => tag == $"{ScribeTelemetry.TagClipboardRestore}=Restored");
         Assert.Contains(spans, tag => tag == $"{ScribeTelemetry.TagPasteDelivery}=Superseded");
+        Assert.Contains(spans, tag => tag == $"status={InjectionResult.DeliveryUnconfirmedError}");
         foreach (var secret in new[] { Previous, Dictation, Newer, "7f3a", "c41e", "9d2b" })
         {
             Assert.DoesNotContain(everything, entry => entry.Contains(secret, StringComparison.OrdinalIgnoreCase));

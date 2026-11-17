@@ -195,7 +195,7 @@ enum WordPackSaveError: Error, Equatable, LocalizedError {
 /// Test seams for the save journal. Each runs where the app could stop; one that throws stops the save right there,
 /// as a crash would, so a test can then load from a fresh service and check what recovery makes of it.
 struct WordPackSaveHooks: Sendable {
-    /// After the save is prepared, before anything is stored.
+    /// After the save is prepared and has narrowed the permission AI cleanup is held to, before anything is stored.
     var beforeCommit: (@Sendable () throws -> Void)?
     /// Right after the commit, before any file step.
     var afterCommit: (@Sendable () throws -> Void)?

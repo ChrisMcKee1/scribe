@@ -76,7 +76,9 @@ struct CleanupRestoration {
 /// provider is sent (`correctVocabulary`), and the snippets and the template-like replacements after the accepted
 /// reply, each at most once and only where the reply kept the words that set it off (`finishAfterCleanup`). So no
 /// snippet template or template-like replacement reaches a provider, no rule runs twice or on another rule's or the
-/// model's output, and a model that returns what it was sent gets exactly the cleanup-off text.
+/// model's output, and a model that returns what it was sent gets exactly the cleanup-off text. The rules of a word
+/// pack kept from AI cleanup are held back the same way, whatever their shape, so a pack the user kept local never has
+/// its text sent, though it still applies on this Mac.
 final class TextPostProcessor {
     /// Windows' per-term cap on what its cleanup glossary carries (`CleanupPrompt.MaxGlossaryTermChars`), counted
     /// in UTF-16 units as .NET counts a string.
@@ -90,8 +92,18 @@ final class TextPostProcessor {
     ///   (see `DictionaryLibraryService`), already filtered to `enabled`. Merged behind the base
     ///   dictionary so a user's own entry always wins over a library's for the same spoken form.
     ///   Mirrors Windows' `DictionaryLibraryComposer.Merge` usage in `TextPostProcessor.Reload`.
-    func reload(dictionaryEntries: [DictionaryEntry], snippets: [Snippet], libraryEntries: [DictionaryEntry] = []) {
-        rules = CompiledRules(dictionaryEntries: dictionaryEntries, snippets: snippets, libraryEntries: libraryEntries)
+    ///
+    /// `aiLibraryEntries` are the entries of `libraryEntries` that belong to word packs AI cleanup may use
+    /// (`LibraryVocabulary.aiEntries`); `nil` says every library entry may. A rule of a word pack kept from AI cleanup
+    /// still applies on this Mac, but with cleanup on it is held back like a template and made after the reply
+    /// (`CompiledRules.init`), so what it writes is never sent to a provider.
+    func reload(
+        dictionaryEntries: [DictionaryEntry], snippets: [Snippet], libraryEntries: [DictionaryEntry] = [],
+        aiLibraryEntries: [DictionaryEntry]? = nil
+    ) {
+        rules = CompiledRules(
+            dictionaryEntries: dictionaryEntries, snippets: snippets, libraryEntries: libraryEntries,
+            aiLibraryEntries: aiLibraryEntries)
     }
 
     /// Replaces the rules in one step with ones compiled elsewhere, off the main actor in the app
@@ -130,7 +142,8 @@ final class TextPostProcessor {
     /// template-like, and its replacement never leaves the Mac: a template in all but name, a deletion, a replacement
     /// with a dash (made after the reply's dash normalization, so the user's own dash survives, as on Windows, where
     /// every rule runs after cleanup), and one whose spacing the normalization of the reply would change. The Usage
-    /// Insights request leaves template-like replacements out by this same test.
+    /// Insights request leaves template-like replacements out by this same test. That is the replacement's shape alone:
+    /// the rule of a word pack kept from AI cleanup is held back whatever its shape (`CompiledRules.init`).
     static func isVocabulary(_ entry: DictionaryEntry) -> Bool {
         let replacement = entry.replacement
         return !replacement.isEmpty
@@ -148,23 +161,58 @@ final class TextPostProcessor {
         /// Every enabled dictionary and library rule, for the pass after the snippets.
         private let dictionaryRules: [DictionaryRule]
         private let snippetRules: [SnippetRule]
-        /// The rules whose replacements may be made in text a provider is sent (`isVocabulary`). With cleanup on they
-        /// also write the words of a held-back replacement in the user's spellings (`writtenForm`).
+        /// The rules whose replacements may be made in text a provider is sent (`isVocabulary`, and not the rule of a
+        /// word pack kept from AI cleanup). With cleanup on they also write the words of a held-back replacement in
+        /// the user's spellings (`writtenForm`).
         private let vocabularyRules: [DictionaryRule]
 
-        init(dictionaryEntries: [DictionaryEntry], snippets: [Snippet], libraryEntries: [DictionaryEntry]) {
+        /// - Parameter aiLibraryEntries: the entries of `libraryEntries` that belong to word packs AI cleanup may use,
+        ///   or `nil` when every library entry may. A rule of any other word pack is held back with cleanup on, as a
+        ///   template-like rule is: the words that set it off go to the provider as spoken and the replacement is made
+        ///   on the accepted reply, so a word pack kept from AI cleanup never has its text sent, which the vocabulary
+        ///   sent with a request already leaves out. With cleanup off it applies as every rule does.
+        init(
+            dictionaryEntries: [DictionaryEntry], snippets: [Snippet], libraryEntries: [DictionaryEntry],
+            aiLibraryEntries: [DictionaryEntry]? = nil
+        ) {
             let base = dictionaryEntries.filter { $0.enabled && !$0.pattern.isEmpty }
             let effective =
                 libraryEntries.isEmpty
                 ? base
                 : DictionaryLibraryComposer.merge(baseEntries: base, libraryEntries: libraryEntries)
-            let dictionary = effective.map(DictionaryRule.init)
+            let reach = ProviderReach(personal: base, aiLibraryEntries: aiLibraryEntries)
+            let dictionary = effective.map { DictionaryRule(entry: $0, mayReachProvider: reach.allows($0)) }
             dictionaryRules = dictionary
             snippetRules =
                 snippets
                 .filter { $0.enabled && !$0.phrase.isEmpty && !$0.template.isEmpty }
                 .map(SnippetRule.init)
             vocabularyRules = dictionary.filter(\.isVocabulary)
+        }
+
+        /// Which rules may be made in text a provider is sent, as far as where they come from decides it: the user's
+        /// own rules always, and a word pack's rule only when AI cleanup may use the pack. The pack is known by its
+        /// entries (`LibraryVocabulary.aiEntries`), each by its spoken form, replacement and whole-word choice, so a
+        /// rule of another pack that shares a spoken form with one of them is not taken for it.
+        private struct ProviderReach {
+            private let personalKeys: Set<String>
+            private let permitted: Set<String>?
+
+            init(personal: [DictionaryEntry], aiLibraryEntries: [DictionaryEntry]?) {
+                personalKeys = Set(personal.map { DictionaryLibraryComposer.key(of: $0.pattern) })
+                permitted = aiLibraryEntries.map { Set($0.map(Self.permissionKey)) }
+            }
+
+            func allows(_ entry: DictionaryEntry) -> Bool {
+                guard let permitted else { return true }
+                return personalKeys.contains(DictionaryLibraryComposer.key(of: entry.pattern))
+                    || permitted.contains(Self.permissionKey(entry))
+            }
+
+            private static func permissionKey(_ entry: DictionaryEntry) -> String {
+                DictionaryLibraryComposer.key(of: entry.pattern) + "\u{0}" + entry.replacement + "\u{0}"
+                    + (entry.wholeWord ? "1" : "0")
+            }
         }
 
         /// With cleanup off: snippets, then the dictionary and the libraries, each phase in one pass.
@@ -426,7 +474,8 @@ final class TextPostProcessor {
     private struct DictionaryRule: Rule {
         let entry: DictionaryEntry
         let order: Int = 0
-        /// Whether the rule's replacement may be made in text a provider is sent (`TextPostProcessor.isVocabulary`).
+        /// Whether the rule's replacement may be made in text a provider is sent (`TextPostProcessor.isVocabulary`,
+        /// and the rule's word pack, when it comes from one, is one AI cleanup may use).
         let isVocabulary: Bool
         var pattern: String { entry.pattern }
         private let regex: NSRegularExpression?
@@ -439,9 +488,11 @@ final class TextPostProcessor {
         // `CompiledRule._replacementContainsPattern`.
         private let replacementContainsPattern: Bool
 
-        init(entry: DictionaryEntry) {
+        /// - Parameter mayReachProvider: false for a rule of a word pack kept from AI cleanup, whose replacement is
+        ///   then never made in text a provider is sent, whatever its shape.
+        init(entry: DictionaryEntry, mayReachProvider: Bool = true) {
             self.entry = entry
-            isVocabulary = TextPostProcessor.isVocabulary(entry)
+            isVocabulary = mayReachProvider && TextPostProcessor.isVocabulary(entry)
             let escaped = NSRegularExpression.escapedPattern(for: entry.pattern)
             let pattern = entry.wholeWord ? "(?<!\\w)\(escaped)(?!\\w)" : escaped
             self.regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])

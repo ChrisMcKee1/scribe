@@ -71,6 +71,22 @@ final class StorageMaintenanceTests: XCTestCase {
 
     // MARK: - Retention
 
+    /// A pass reports through `ScribeLog`, as the report's case names and numbers, so the diagnostics export that
+    /// observes it holds what maintenance did.
+    func testAPassLogsItsReportThroughScribeLog() throws {
+        let log = recordScribeLog()
+        let store = try makeStore()
+        try store.setHistoryRetention(.days(30))
+        try record(store, daysAgo: 45, "old")
+
+        _ = makeMaintenance(store).runPass()
+
+        let line = try XCTUnwrap(log.lines.first { $0.contains("Storage maintenance pass finished") })
+        for field in ["retention=applied", "retentionDays=30", "retentionRemoved=1"] {
+            XCTAssertTrue(line.contains(field), "\(field) is missing from: \(line)")
+        }
+    }
+
     func testRetentionRemovesOnlyEntriesPastTheChosenLimit() throws {
         let store = try makeStore()
         try store.setHistoryRetention(.days(30))

@@ -33,10 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         load: { [persistenceStore, weak self] in
             let rules = try await persistenceStore.loadRuleSet()
             let vocabulary = try await self?.loadLibraryVocabulary() ?? .empty
-            return await DictationRuleSnapshot.compile(
-                rules,
-                libraryEntries: vocabulary.entries,
-                cleanupVocabularyEntries: vocabulary.aiEntries)
+            return await DictationRuleSnapshot.compile(rules, vocabulary: vocabulary)
         },
         apply: { [weak self] snapshot in self?.installRules(snapshot) },
         onFailure: { [weak self] error in self?.reportRuleLoadFailure(error) })
@@ -605,11 +602,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     self?.quickAddWindowController?.close()
                     self?.quickAddWindowController = nil
                 },
-                persistAction: { [weak self] result in
+                persistAction: { [weak self] plan in
                     guard let self else {
                         throw QuickAddPersistError.noPersistAction
                     }
-                    return try await self.persistQuickAddEntries(result)
+                    return try await QuickDictionaryAdd.persist(plan, in: self.persistenceStore)
                 }))
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Add to Dictionary"
@@ -624,34 +621,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         quickAddWindowController?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
-    }
-
-    /// Writes the entry (insert for a new rule, update in place for an existing one, keyed by a non-zero id) and
-    /// returns the row's id, mirroring Windows' `persist` delegate. The write waits on the storage queue, not the
-    /// main actor.
-    private func persistQuickAddEntries(_ result: DictionaryWordEditor.Result) async throws -> [DictionaryEntry] {
-        let inserts = result.addedEntries
-        let updates = result.editedEntry.map { [$0] } ?? []
-        try await persistenceStore.saveDictionaryChanges(inserts: inserts, updates: updates)
-
-        var saved: [DictionaryEntry] = []
-        if let updated = result.editedEntry {
-            saved.append(updated)
-        }
-        if !inserts.isEmpty {
-            let existing = try await persistenceStore.loadAllDictionaryEntries()
-            for inserted in inserts {
-                if let savedEntry = existing.first(where: {
-                    $0.pattern == inserted.pattern
-                        && $0.replacement == inserted.replacement
-                        && $0.wholeWord == inserted.wholeWord
-                        && $0.enabled == inserted.enabled
-                }) {
-                    saved.append(savedEntry)
-                }
-            }
-        }
-        return saved
     }
 
     /// After a successful save: refreshes the rules so the new one takes effect on the next dictation and repairs the

@@ -10,6 +10,32 @@ namespace Scribe.Core.Tests;
 public sealed class SettingsPhaseThreeToSevenRulesTests
 {
     [Theory]
+    [InlineData(AzureSetupResult.NotChecked, AiCleanupActionId.CheckSignIn)]
+    [InlineData(AzureSetupResult.CliMissing, AiCleanupActionId.InstallAzureCli)]
+    [InlineData(AzureSetupResult.NotSignedIn, AiCleanupActionId.SignIn)]
+    public void Speech_credentials_offer_the_Azure_action_without_enabling_cleanup(
+        AzureSetupResult result, AiCleanupActionId action)
+    {
+        foreach (var enabled in new[] { false, true })
+        {
+            foreach (var provider in Enum.GetValues<CleanupProvider>())
+            {
+                var presentation = AiCleanupPageState.Credentials(enabled, provider, true, new(result));
+                Assert.True(presentation.ShowCard);
+                Assert.True(presentation.ShowAzure);
+                Assert.Equal(enabled, presentation.ShowOtherSetup);
+                Assert.Equal(enabled, presentation.ShowCleanupChoices);
+                Assert.Equal(action, presentation.StatusRow!.Primary!.Id);
+
+                var dismissed = AiCleanupPageState.Credentials(enabled, provider, false, new(result));
+                Assert.Equal(enabled, dismissed.ShowCard);
+                Assert.Equal(enabled && provider == CleanupProvider.AzureFoundry, dismissed.ShowAzure);
+                Assert.Equal(enabled, dismissed.ShowOtherSetup);
+            }
+        }
+    }
+
+    [Theory]
     [InlineData(HotkeyMode.Hold, null, false, SilenceStopApplies.None, ShortcutRules.SilenceStopDisabled)]
     [InlineData(HotkeyMode.Hold, HotkeyMode.Hold, false, SilenceStopApplies.None, ShortcutRules.SilenceStopDisabled)]
     [InlineData(HotkeyMode.Hold, HotkeyMode.Toggle, true, SilenceStopApplies.Secondary, ShortcutRules.SilenceStopSecondary)]
@@ -704,8 +730,10 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
             .Select(File.ReadAllText));
         var tryDictation = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Settings", "SettingsWindow.TryDictation.cs"));
 
-        Assert.Contains("_committedSettings = _settings.Clone();", source, StringComparison.Ordinal);
-        Assert.Equal(2, CountOccurrences(source, "_committedSettings = _settings.Clone();"));
+        // The baseline comes from _settings where the settings load, and once a Save has stored its document from that
+        // document: the copy the Save froze, never _settings, which may already hold a tray change the Save did not store.
+        Assert.Equal(1, CountOccurrences(source, "_committedSettings = _settings.Clone();"));
+        Assert.Equal(1, CountOccurrences(source, "_committedSettings = candidate.Document.Clone();"));
         Assert.Contains("var changes = currentChanges ?? ComputeCurrentChanges();", tryDictation, StringComparison.Ordinal);
         Assert.Contains("_committedSettings.AiCleanupProvider", tryDictation, StringComparison.Ordinal);
 
@@ -1176,6 +1204,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         saved.AiCleanupAzureEndpoint = "https://example.test";
         saved.AiCleanupAzureDeployment = "cleanup";
         saved.AiCleanupModel = "qwen3-1.7b";
+        saved.AiCleanupAzureApiKey = "test-key";
 
         var draft = saved.Clone();
         draft.AiCleanupProvider = CleanupProvider.FoundryLocal;
@@ -1238,6 +1267,19 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         Assert.Equal(action, state.StatusRow.ActionText);
         Assert.Equal(actionEnabled, state.StatusRow.ActionEnabled);
         Assert.Equal(secondary, state.StatusRow.SecondaryActionText);
+    }
+
+    [Fact]
+    public void Azure_partial_discovery_keeps_usable_models_and_offers_refresh_not_total_failure()
+    {
+        var partial = ActiveAzure(AiCleanupPageState.AzureModelListing(3, 1)!);
+        Assert.Equal(AiCleanupStatusKind.Warning, partial.StatusRow!.Kind);
+        Assert.Equal("Found 3 compatible model(s). Some organizations couldn't be checked.", partial.StatusRow.Text);
+        Assert.Equal(AiCleanupActionId.RefreshModels, partial.StatusRow.Primary!.Id);
+        var failed = ActiveAzure(AiCleanupPageState.AzureModelListing(0, 1)!);
+        Assert.Equal(AiCleanupStatusKind.Error, failed.StatusRow!.Kind);
+        Assert.Equal(AiCleanupActionId.TryAgain, failed.StatusRow.Primary!.Id);
+        Assert.Null(AiCleanupPageState.AzureModelListing(3, 0));
     }
 
     public static TheoryData<CopilotSetupResult, AiCleanupStatusKind, string, string?, string?> CopilotRows => new()
@@ -1403,6 +1445,7 @@ public sealed class SettingsPhaseThreeToSevenRulesTests
         saved.AiCleanupProvider = CleanupProvider.AzureFoundry;
         saved.AiCleanupAzureEndpoint = "https://example.test";
         saved.AiCleanupAzureDeployment = "cleanup";
+        saved.AiCleanupAzureApiKey = setup.ApiKeySelected ? "test-key" : null;
         var draft = saved.Clone();
         return AiCleanupPageState.Describe(saved, draft, status, azureSetup: setup, safeReason: safeReason);
     }

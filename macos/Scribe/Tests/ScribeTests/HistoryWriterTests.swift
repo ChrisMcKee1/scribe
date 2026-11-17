@@ -214,6 +214,69 @@ final class HistoryWriterTests: XCTestCase {
         writer.complete(timeout: 5)
     }
 
+    // MARK: - Logging
+
+    /// The writer's failures go through `ScribeLog`, so the observer that supplies the diagnostics export sees them,
+    /// as the failure's shape and the dictation's number and never its text.
+    func testAFailedWriteIsLoggedThroughScribeLogAsAShapeWithoutTheText() throws {
+        let log = recordScribeLog()
+        let recorder = StorageTestGatedRecorder()
+        recorder.failWrite(number: 1)
+        let writer = HistoryWriter(recorder: recorder)
+
+        writer.enqueue(record(PrivacyCanary.transcript), dictationID: 41)
+        XCTAssertTrue(writer.waitForAcceptedWrites(timeout: 10))
+        writer.complete(timeout: 5)
+
+        let line = try XCTUnwrap(log.lines.first { $0.contains("A history write failed") })
+        XCTAssertTrue(line.contains("dictation=41"), line)
+        XCTAssertTrue(line.contains("InjectedFailure"), line)
+        PrivacyCanary.assertAbsent(from: log.publicText)
+    }
+
+    func testARefusedEntryIsLoggedThroughScribeLogWithItsDictationNumber() {
+        let log = recordScribeLog()
+        let recorder = StorageTestGatedRecorder()
+        recorder.closeGate()
+        let writer = HistoryWriter(recorder: recorder, capacity: 1)
+
+        XCTAssertTrue(writer.enqueue(record("one"), dictationID: 7))
+        XCTAssertTrue(recorder.waitUntilStarted(1))
+        XCTAssertFalse(writer.enqueue(record("two"), dictationID: 8))
+        recorder.openGate()
+        XCTAssertTrue(writer.waitForAcceptedWrites(timeout: 10))
+        writer.complete(timeout: 5)
+        XCTAssertFalse(writer.enqueue(record("three"), dictationID: 9))
+
+        XCTAssertTrue(
+            log.lines.contains {
+                $0.contains("earlier writes are still outstanding") && $0.contains("dictation=8")
+                    && $0.contains("outstanding=1")
+            })
+        XCTAssertTrue(
+            log.lines.contains { $0.contains("history writer has shut down") && $0.contains("dictation=9") })
+    }
+
+    func testClearHistoryOutcomesAreLoggedThroughScribeLog() async throws {
+        let log = recordScribeLog()
+        let recorder = StorageTestGatedRecorder()
+        recorder.failWrite(number: 1)
+        let writer = HistoryWriter(recorder: recorder)
+
+        do {
+            _ = try await writer.clearHistory(timeout: 10)
+            XCTFail("expected the first Clear to fail")
+        } catch {
+            XCTAssertTrue(error is StorageTestGatedRecorder.InjectedFailure)
+        }
+        let removed = try await writer.clearHistory(timeout: 10)
+
+        XCTAssertEqual(removed, 0)
+        XCTAssertTrue(log.lines.contains { $0.contains("Clear history failed") && $0.contains("InjectedFailure") })
+        XCTAssertTrue(log.lines.contains { $0.contains("History cleared in order") && $0.contains("removed=0") })
+        writer.complete(timeout: 5)
+    }
+
     // MARK: - Clear in line
 
     func testClearRunsAfterEveryWriteAcceptedBeforeItAndBeforeAnyAcceptedAfter() async throws {

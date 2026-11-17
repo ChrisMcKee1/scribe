@@ -85,7 +85,8 @@ final class ManagedOllamaCleanupProvider: CleanupProvider {
             try await complete(request)
         }
         return CleanupResponse(
-            cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model)
+            cleanedText: completion.text, latency: completion.latency, providerID: id, modelID: model,
+            ending: completion.ending)
     }
 
     private func complete(

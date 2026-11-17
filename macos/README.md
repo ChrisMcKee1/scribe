@@ -72,6 +72,10 @@ are named explicitly rather than showing the previous period's figures or claimi
 Diagnostics also shows the newest 20 dictation problems from this session, including AI cleanup falling back and
 incomplete typing. The list keeps only timestamps and fixed outcome categories, never dictated text or service error
 details. It clears with history, is not saved to disk, and is not included in diagnostics exports.
+The history writer, the database's startup and retention events, storage maintenance and the Open at Login switch
+log through `ScribeLog` like the rest of the app (ids, counts, durations, case names and failure shapes, never a
+dictation), so a saved diagnostics archive holds them. `TextInjector`'s legacy logger is the one exception, and the
+archive leaves its unshaped lines out.
 
 ## Build
 
@@ -172,7 +176,10 @@ so resizing cannot subtract the title bar from the space reserved for the page a
   request contains the dictation with your vocabulary corrections applied, never a snippet body or a
   template-like replacement; no rule runs twice, none is matched against the model's text, and a model that
   returns what it was sent gives exactly the cleanup-off text (except that an em or en dash the transcript itself
-  held is rewritten with the reply's). If cleanup fails, the text is exactly what it would be with cleanup off. You
+  held is rewritten with the reply's). A word pack kept from AI cleanup is handled like a template-like replacement:
+  its replacements are made after the reply and never in the text sent. A reply the service reports as cut off at
+  its output limit or filtered counts as a failure and is never typed. If cleanup fails, the text is exactly what it
+  would be with cleanup off. You
   can start the next dictation while the last one is still being processed; the text goes in in the order you spoke
   it
 - On-device ASR via Foundry Local's `parakeet-tdt-0.6b-v2`, an English model (`TranscriptionEngine.swift`).
@@ -206,7 +213,9 @@ so resizing cannot subtract the title bar from the space reserved for the page a
 - If a chosen microphone is unavailable, Scribe says when it uses the system default instead, once until the
   chosen microphone works again or the saved selection changes. A selection that cannot be confirmed says so
   without claiming which microphone recorded. Recent Dictations reports whether copying succeeded; Quick Add
-  says "Saved to your dictionary" only once the new rules are in use, otherwise "Saved, but not in use yet".
+  says "Saved to your dictionary" only once the new rules are in use, otherwise "Saved, but not in use yet". Its
+  status line, Save buttons and stored rows come from one plan, so a switched-off rule is turned back on, the
+  whole-word choice shown is the one stored, and a repeated way of hearing the word is refused as the line says.
   Notifications contain no dictated text. Copy Dictation retains only the last five texts in memory and
   Clear history withdraws those copies. See the [notice trigger matrix](PORTING-PLAN.md#tray-and-dictation-notices)
   for the Windows mapping and platform-specific limits
@@ -224,7 +233,8 @@ so resizing cannot subtract the title bar from the space reserved for the page a
   credential input and word pack edits are kept across page navigation; Save uses their existing
   stores, Discard changes clears pending input, and the window's Close button or Command-W asks
   Save / Discard changes / Keep editing. Keep editing is the default. A failed save stays open,
-  keeps uncommitted edits and shows its error in the footer. Settings that already apply immediately
+  keeps uncommitted edits and shows its error in the footer. A client secret typed with no client ID fails the
+  save and stays typed. Settings that already apply immediately
   on macOS, including tray choices, Open at Login, dictation controls, history retention and existing
   dictionary/snippet/profile row actions, stay immediate and are not rolled back by Discard.
   `SettingsWindowController.prepareForApplicationTermination()` reuses the same decisions for quit
@@ -241,6 +251,21 @@ so resizing cannot subtract the title bar from the space reserved for the page a
   (all 11 built-in packs, custom CSV import/export, staged editing with undo, redo, save and discard,
   per-pack AI vocabulary permission), voice snippets, and per-app profiles (writing style, newline
   mode and text format by focused app)
+- A built-in word pack whose edits file cannot be read (any failure other than the file being absent) is paused with
+  no terms until it can be, so a term you turned off never comes back. A save that withdraws a word pack's AI
+  permission, or rewrites the pack, also reaches a cleanup request already waiting for its credential: it is not
+  sent, and the dictation keeps the text cleanup off would make. A save judges each pack it writes by the content the
+  permission was published for, so a file another program already left with exactly the bytes the save writes still
+  loses the permission it had for the older content. The permission is ordered by the operations that change it, in
+  memory, never by the stored generation, and each read takes its place when it begins, before it looks at anything. A
+  read that began before another one that has already published can only narrow what that one found, never widen it,
+  because it may have looked at the files later and seen a revocation the other missed. A read that began before a
+  committed save can only narrow what the save left. A read that began after both replaces the permission, wider or
+  narrower, which is how a repaired state restores what an unreadable one withdrew. A save that does not commit gives
+  back only what it narrowed itself, never what a read found revoked meanwhile. Only this app's own saves narrow that
+  permission in advance; a change made to the word pack files by another program is seen at the next load. A stale
+  narrowing (an older read that looked before a permission was granted) or a refresh that fails after a committed
+  save leaves the permission narrowed until the next successful load, which costs only AI cleanup for that time
 - App-aware formatting, on by default: literal Markdown pasted as one piece into known Markdown apps (Claude,
   Slack, VS Code, Obsidian and others), and in Teams, Microsoft Copilot and Codex also an HTML copy so lists, bold,
   links and code show as formatting. A Markdown paste puts back whatever was on the clipboard, a screenshot or

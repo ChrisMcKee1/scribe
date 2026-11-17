@@ -137,12 +137,17 @@ enum CommandLineTranscriptionTool {
             exit(EXIT_FAILURE)
         }
 
-        switch CleanupResponseGuard.sanitize(candidate: response.cleanedText, original: rawTranscript) {
-        case .accepted(let sanitizedText):
-            fputs("\(sanitizedText)\n", stdout)
-        case .rejected(let reason):
+        if response.ending.isIncomplete {
             fputs("\(rawTranscript)\n", stdout)
-            fputs("The reply was rejected (\(reason.rawValue)), so the input is printed unchanged.\n", stderr)
+            fputs("The reply was cut short (\(response.ending)), so the input is printed unchanged.\n", stderr)
+        } else {
+            switch CleanupResponseGuard.sanitize(candidate: response.cleanedText, original: rawTranscript) {
+            case .accepted(let sanitizedText):
+                fputs("\(sanitizedText)\n", stdout)
+            case .rejected(let reason):
+                fputs("\(rawTranscript)\n", stdout)
+                fputs("The reply was rejected (\(reason.rawValue)), so the input is printed unchanged.\n", stderr)
+            }
         }
         fputs(
             "(\(response.providerID)/\(response.modelID), \(String(format: "%.2f", response.latency))s)\n",

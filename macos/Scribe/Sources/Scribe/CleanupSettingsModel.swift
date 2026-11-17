@@ -97,6 +97,15 @@ extension CleanupSettingsAccess {
 
     /// The tab over `store`, with Test Connection through `providers`, which should read the same store.
     static func backed(by store: CleanupSettingsStore, providers: CleanupProviderCache) -> CleanupSettingsAccess {
+        var access = storing(in: store)
+        access.checkConnection = { await providers.checkConnection() }
+        access.checkCandidateConnection = { await providers.checkConnection(candidate: $0) }
+        return access
+    }
+
+    /// Stored settings and credentials over `store` alone, which never tests a connection. For a caller that writes
+    /// what the tab holds, such as the Settings footer's Save, and must write to the store it was given.
+    static func storing(in store: CleanupSettingsStore) -> CleanupSettingsAccess {
         CleanupSettingsAccess(
             load: {
                 return CleanupSettingsValues(
@@ -187,8 +196,8 @@ extension CleanupSettingsAccess {
             setAzureClientSecret: { try store.setAzureClientSecret($0, clientId: $1) },
             hasAzureApiKey: { store.azureApiKey() != nil },
             setAzureApiKey: { try store.setAzureApiKey($0) },
-            checkConnection: { await providers.checkConnection() },
-            checkCandidateConnection: { await providers.checkConnection(candidate: $0) })
+            checkConnection: { CleanupConnectionCheck(reachable: false, message: "Not tested.") },
+            checkCandidateConnection: nil)
     }
 }
 
@@ -604,7 +613,15 @@ final class CleanupSettingsModel: ObservableObject {
         }
     }
 
+    /// What Save says when a client secret is typed and no client ID is set, since the secret is kept under its client
+    /// ID: a blank one would store nothing, and reporting a save would discard what was typed.
+    static let clientIdRequiredMessage = "Enter the client ID before saving the client secret."
+
     func saveAzureClientSecret() {
+        guard !CleanupSettingsStore.secretAccount(forClientId: values.azureClientId).isEmpty else {
+            show(error: Self.clientIdRequiredMessage)
+            return
+        }
         do {
             try access.setAzureClientSecret(drafts.azureClientSecret, values.azureClientId)
             drafts.azureClientSecret = ""

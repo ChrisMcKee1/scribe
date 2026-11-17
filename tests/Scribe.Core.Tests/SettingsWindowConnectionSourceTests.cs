@@ -2,6 +2,41 @@
 
 public sealed class SettingsWindowConnectionSourceTests
 {
+    [Fact]
+    public void Azure_model_listing_outcomes_reach_the_visible_status_and_retry_lists_again()
+    {
+        var source = SettingsWindowSource;
+        var listing = Slice(source, "private async Task ListAzureDeploymentsAsync()", "private async Task<(IReadOnlyList<AzureFoundryDeployment>");
+        var visible = Slice(source, "private AzureAiSetupState CurrentAzureSetup()", "private CopilotSetupState CurrentCopilotSetup()");
+        var retry = Slice(source, "private async Task RunAzurePrimaryActionAsync", "private void AzureEndpointBox_TextChanged");
+
+        Assert.Contains("_azureModelListing = new(AzureSetupResult.ListingModels)", listing, StringComparison.Ordinal);
+        Assert.Contains("_azureModelListing = new(AzureSetupResult.ListingFailed", listing, StringComparison.Ordinal);
+        Assert.Contains("_azureModelListing ?? new(AzureSetupResult.SignedIn", visible, StringComparison.Ordinal);
+        Assert.Contains("AiCleanupActionId.RefreshModels or AiCleanupActionId.TryAgain", retry, StringComparison.Ordinal);
+        var refresh = Slice(source, "private async Task RefreshAzureConnectionAsync(", "private async Task<AzureSignInStatus>");
+        var retire = refresh.IndexOf("++_azureDeploymentLoadVersion", StringComparison.Ordinal);
+        var clear = refresh.IndexOf("_azureModelListing = null;", StringComparison.Ordinal);
+        var signIn = refresh.IndexOf("await AzureCliSignIn", StringComparison.Ordinal);
+        Assert.True(signIn >= 0);
+        Assert.True(retire >= 0 && retire < signIn);
+        Assert.True(clear >= 0 && clear < signIn);
+        Assert.Contains("AiCleanupPageState.AzureModelListing(deployments.Count, discovery.FailedTenantCount)", listing,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Both_save_validation_paths_keep_the_explicit_API_key_choice_and_show_its_refusal()
+    {
+        var source = File.ReadAllText(FindRepoFile("src", "Scribe.App", "Settings", "SettingsWindow.Closing.cs"));
+        var preflight = Slice(source, "private async Task<SavePreflightInput?> PrepareSavePreflightAsync()", "private ");
+        var direct = Slice(source, "private bool ValidateDraftBeforeSave()", "private IReadOnlyList<DurationDraftField>");
+        Assert.Contains("AzureApiKeySelected: IsAzureApiKeySelected", preflight, StringComparison.Ordinal);
+        Assert.Contains("AzureApiKeySelected: IsAzureApiKeySelected", direct, StringComparison.Ordinal);
+        Assert.Contains("case ValidationCode.ApiKeyEmpty:", source, StringComparison.Ordinal);
+        Assert.Contains("RevealAzureSpeechCredentials(nameof(AzureApiKeyBox))", source, StringComparison.Ordinal);
+    }
+
     private static string SettingsWindowSource =>
         File.ReadAllText(FindRepoFile("src", "Scribe.App", "Settings", "SettingsWindow.xaml.cs"));
 
@@ -35,7 +70,7 @@ public sealed class SettingsWindowConnectionSourceTests
     {
         var startIndex = source.IndexOf(start, StringComparison.Ordinal);
         Assert.True(startIndex >= 0, $"Missing start marker {start}.");
-        var endIndex = source.IndexOf(end, startIndex, StringComparison.Ordinal);
+        var endIndex = source.IndexOf(end, startIndex + start.Length, StringComparison.Ordinal);
         Assert.True(endIndex > startIndex, $"Missing end marker {end}.");
         return source[startIndex..endIndex];
     }

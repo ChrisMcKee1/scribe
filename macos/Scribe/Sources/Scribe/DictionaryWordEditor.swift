@@ -4,6 +4,11 @@ import Foundation
 enum DictionaryWordEditor {
     static let spokenEmptyMessage = "Type the words Scribe hears, or delete this row."
 
+    /// The sentence for a way Scribe hears a word that another row, or another way typed with it, already has.
+    static func duplicateMessage(for form: String) -> String {
+        "\"\(form)\" is already in your dictionary. Keep one of the two ways."
+    }
+
     struct Result: Equatable {
         let editedEntry: DictionaryEntry?
         let addedEntries: [DictionaryEntry]
@@ -60,7 +65,7 @@ enum DictionaryWordEditor {
                 return Result(
                     editedEntry: nil,
                     addedEntries: [],
-                    error: "\"\(trimmed)\" is already in your dictionary. Keep one of the two ways.",
+                    error: duplicateMessage(for: trimmed),
                     errorFormIndex: index)
             }
 

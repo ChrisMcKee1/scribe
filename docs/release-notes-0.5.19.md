@@ -14,7 +14,7 @@ Scribe 0.5.19 keeps the space after each dictation in Teams, the GitHub Copilot 
 
 ## Privacy and compatibility
 
-Nothing new is sent anywhere, and no audio is ever sent. The formatted copy is made on this PC, holds nothing the text does not, carries the same marks that keep Scribe's clipboard writes out of clipboard history and cloud sync, and is removed when Scribe puts your clipboard back. Backslashes, entities and any markup you dictate stay as typed. Existing settings and the storage schema (`user_version` 7) are unchanged. An older Scribe reads a profile set to Markdown with formatting as Plain text.
+Formatting sends nothing new. AI cleanup never sends audio; the separately selected MAI-Transcribe-2 cloud speech model sends audio and vocabulary phrases to Microsoft Foundry as described in the privacy policy. The formatted copy is made on this PC, holds nothing the text does not, carries the same marks that keep Scribe's clipboard writes out of clipboard history and cloud sync, and is removed when Scribe puts your clipboard back. Backslashes, entities and any markup you dictate stay as typed. Existing settings and the storage schema (`user_version` 7) are unchanged. An older Scribe reads a profile set to Markdown with formatting as Plain text.
 
 The formatted copy is rendered with Markdig (BSD-2-Clause), now credited in the README.
 

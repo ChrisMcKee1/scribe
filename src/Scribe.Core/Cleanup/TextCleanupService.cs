@@ -789,6 +789,11 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
             AgentProbeFailure? failure;
             var localReasoning = new StrongBox<LocalReasoningAllowance?>();
+
+            // What the test learns about how the candidate takes requests stays in this copy, through both Azure surfaces
+            // and every retry, and is dropped with the test: only an initialization publishes a negotiation, so testing
+            // unsaved settings never moves the one a configuration is serving with.
+            var negotiation = BeginNegotiation();
             int? testedContext = null;
             if (TestsLmStudioAtSize(options))
             {
@@ -798,7 +803,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 try
                 {
                     await unloading.WaitAsync(UnloadWaitBound, ct).ConfigureAwait(false);
-                    (failure, var context) = await TestLmStudioAtSizeAsync(options, factory, ct).ConfigureAwait(false);
+                    (failure, var context) = await TestLmStudioAtSizeAsync(options, factory, negotiation, ct)
+                        .ConfigureAwait(false);
                     testedContext = context;
                 }
                 catch (TimeoutException ex)
@@ -808,7 +814,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             }
             else
             {
-                failure = await ProbeAgentAsync(options, factory, ct, localReasoning: localReasoning).ConfigureAwait(false);
+                failure = await ProbeAgentAsync(
+                    options, factory, ct, localReasoning: localReasoning, negotiation: negotiation).ConfigureAwait(false);
             }
 
             if (failure is null)
@@ -835,7 +842,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 return CleanupTestResult.Connected(recipient);
             }
 
-            var fallback = await TryTestAzureChatCompletionsAsync(options, failure, ct).ConfigureAwait(false);
+            var fallback = await TryTestAzureChatCompletionsAsync(options, failure, negotiation, ct).ConfigureAwait(false);
             if (!fallback.Tried)
             {
                 if (failure.Exception is { } ex)
@@ -5046,6 +5053,11 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // the largest context the model takes, which its requests are capped at.
             AgentProbeFailure? probeFailure = null;
             var localReasoning = new StrongBox<LocalReasoningAllowance?>();
+
+            // Read after _initLock was taken, so it starts from what the initialization before this one published. What the
+            // readiness check learns about how the endpoint takes requests stays in this copy until the gate below
+            // publishes it, so an initialization that fails or is superseded changes nothing a configuration serves with.
+            var negotiation = BeginNegotiation();
             var lmStudioUnloading = Task.CompletedTask;
             using var lmStudioUse = LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) is
                 LocalServerApp.LmStudio or LocalServerApp.TensorSharp
@@ -5072,7 +5084,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 // A context already known that leaves the instructions no room for a dictation fails setup without loading
                 // the model for a readiness check every dictation would then make pointless.
                 probeFailure = KnownContextLeavesRoom(options)
-                    ? await ProbeAgentAsync(options, ct, withinUse: lmStudioUse is not null, localReasoning).ConfigureAwait(false)
+                    ? await ProbeAgentAsync(options, ct, withinUse: lmStudioUse is not null, localReasoning, negotiation)
+                        .ConfigureAwait(false)
                     : new AgentProbeFailure(ContextTooSmallReason(options), null);
             }
 
@@ -5089,8 +5102,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     agent = demotion.Agent;
                     options = demotion.Options;
                 }
-                else if (await TryAzureChatCompletionsAsync(options, probeFailure, chatFailure, ct).ConfigureAwait(false)
-                    is { } viaChat)
+                else if (await TryAzureChatCompletionsAsync(options, probeFailure, chatFailure, negotiation, ct)
+                    .ConfigureAwait(false) is { } viaChat)
                 {
                     agent = viaChat;
                 }
@@ -5153,6 +5166,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     Volatile.Write(ref _plainRequestsFor, allowance.PlainRequests ? PlainRequestsKey(options) : null);
                     Volatile.Write(ref _localReasoningAllowance, allowance);
                 }
+
+                // How the endpoint takes requests, as this check learned it: published here, by the generation that owns
+                // the status and in the step that publishes its agent, and never while the check was still running.
+                PublishNegotiationLocked(negotiation);
 
                 // The context Foundry Local's model reads, learned with the options this run publishes.
                 if (options.Provider == CleanupProvider.FoundryLocal && _pendingFoundryContext > 0)
@@ -5384,7 +5401,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
     }
 
     private async Task<TestFallbackResult> TryTestAzureChatCompletionsAsync(
-        CleanupOptions options, AgentProbeFailure failure, CancellationToken ct)
+        CleanupOptions options, AgentProbeFailure failure, WireNegotiation negotiation, CancellationToken ct)
     {
         if (options.Provider != CleanupProvider.AzureFoundry || !IsSurfaceRejection(failure.Exception) ||
             RefusedTheCacheOptions(options, failure))
@@ -5395,7 +5412,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         try
         {
             var chatFactory = BuildAzureChatCompletionsTestAgentFactory(options);
-            var chatFailure = await ProbeAgentAsync(options, chatFactory, ct).ConfigureAwait(false);
+
+            // The same copy the Responses check negotiated into: the deployment asks for the effort it settled on there.
+            var chatFailure = await ProbeAgentAsync(options, chatFactory, ct, negotiation: negotiation)
+                .ConfigureAwait(false);
             return chatFailure is null ? TestFallbackResult.Connected : TestFallbackResult.Failed(chatFailure);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -5438,7 +5458,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
      * itself is never out of date about what it serves.
      */
     private async Task<AIAgent?> TryAzureChatCompletionsAsync(
-        CleanupOptions options, AgentProbeFailure failure, StrongBox<AgentProbeFailure?> fallbackFailure, CancellationToken ct)
+        CleanupOptions options, AgentProbeFailure failure, StrongBox<AgentProbeFailure?> fallbackFailure,
+        WireNegotiation negotiation, CancellationToken ct)
     {
         if (options.Provider != CleanupProvider.AzureFoundry ||
             string.IsNullOrWhiteSpace(options.AzureEndpoint) ||
@@ -5480,7 +5501,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // never true (WithStoredOutputDisabled explains why the field is not sent here).
             _pendingFactory = i => CreateAzureChatCompletionsAgent(deployment, i, options.PromptCaching);
 
-            if (await ProbeAgentAsync(options, ct).ConfigureAwait(false) is { } stillFailing)
+            // The same copy the Responses check negotiated into, which the initialization publishes if this surface passes.
+            if (await ProbeAgentAsync(options, ct, negotiation: negotiation).ConfigureAwait(false) is { } stillFailing)
             {
                 fallbackFailure.Value = stillFailing;
                 // Deployment names are the user's resource names; the log gets the failure's shape.
@@ -5756,17 +5778,17 @@ internal sealed partial class TextCleanupService : ITextCleanupService
      */
     private async Task<AgentProbeFailure?> ProbeAgentAsync(
         CleanupOptions options, CancellationToken ct, bool withinUse = false,
-        StrongBox<LocalReasoningAllowance?>? localReasoning = null)
+        StrongBox<LocalReasoningAllowance?>? localReasoning = null, WireNegotiation? negotiation = null)
     {
         ct.ThrowIfCancellationRequested();
         var factory = _pendingFactory
             ?? throw new InvalidOperationException("The readiness probe has no agent factory to build its agent from.");
-        return await ProbeAgentAsync(options, factory, ct, withinUse, localReasoning).ConfigureAwait(false);
+        return await ProbeAgentAsync(options, factory, ct, withinUse, localReasoning, negotiation).ConfigureAwait(false);
     }
 
     private async Task<AgentProbeFailure?> ProbeAgentAsync(
         CleanupOptions options, Func<string, AIAgent> factory, CancellationToken ct, bool withinUse = false,
-        StrongBox<LocalReasoningAllowance?>? localReasoning = null)
+        StrongBox<LocalReasoningAllowance?>? localReasoning = null, WireNegotiation? negotiation = null)
     {
         ct.ThrowIfCancellationRequested();
         if (LocalAiServer.AppServing(options.Provider, options.CustomEndpoint) == LocalServerApp.Ollama)
@@ -5774,6 +5796,9 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             return await ProbeOllamaAsync(options, factory, ct, withinUse, localReasoning).ConfigureAwait(false);
         }
 
+        // A check that was handed no copy to learn into (a Foundry Local model's warm-up) gets one it throws away, so no
+        // probe can write what a configuration is serving with.
+        negotiation ??= BeginNegotiation();
         var agent = factory(BuildProbeSystemPrompt(options));
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(CleanupTimeoutOverride ?? TimeSpan.FromSeconds(ProbeTimeoutSecondsFor(options)));
@@ -5822,12 +5847,12 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                     Output = ReasoningOutput.None,
                 };
             }
-            else if (AzureReasoningEffortFor(options) is { } azureEffort)
+            else if (AzureReasoningEffortFor(options, negotiation.AzureReasoning) is { } azureEffort)
             {
                 chatOptions.Reasoning = new ReasoningOptions { Effort = azureEffort, Output = ReasoningOutput.None };
             }
 
-            ApplyOnThisPcGeneration(chatOptions, options);
+            ApplyOnThisPcGeneration(chatOptions, options, negotiation.SendsPlainRequests(options));
 
             var runOptions = new ChatClientAgentRunOptions(chatOptions);
 
@@ -5866,9 +5891,10 @@ internal sealed partial class TextCleanupService : ITextCleanupService
             // A Microsoft Foundry deployment that refuses the reasoning effort Scribe asked for gets the next one up, and
             // one that refuses every effort gets none (see AzureReasoningEffortFor).
             if (options.Provider == CleanupProvider.AzureFoundry && ReasoningEffortOverride is null &&
-                IsReasoningEffortRejection(ex) && StepUpAzureReasoningEffort(options))
+                IsReasoningEffortRejection(ex) && StepUpAzureReasoningEffort(options, negotiation))
             {
-                return await ProbeAgentAsync(options, factory, ct, withinUse).ConfigureAwait(false);
+                return await ProbeAgentAsync(options, factory, ct, withinUse, negotiation: negotiation)
+                    .ConfigureAwait(false);
             }
 
             /*
@@ -5876,20 +5902,23 @@ internal sealed partial class TextCleanupService : ITextCleanupService
              * max_tokens copy) gets plain requests for this server and model instead, if it accepts those. Ollama and LM
              * Studio take both; a strict validator, such as a server that allows only low, medium or high for
              * reasoning_effort, answers 400. Any 400 buys this one attempt, as for the Responses surface; if the plain
-             * probe fails too, the first failure stands.
+             * probe fails too, the first failure stands. Plain requests are chosen in the check's own copy, so the choice
+             * of a check that fails, is superseded or only tests unsaved settings is never one a configuration serves with.
              */
-            if (LocalAiServer.Serves(options.Provider, options.CustomEndpoint) && !SendsPlainRequests(options) &&
-                IsSurfaceRejection(ex))
+            if (LocalAiServer.Serves(options.Provider, options.CustomEndpoint) &&
+                !negotiation.SendsPlainRequests(options) && IsSurfaceRejection(ex))
             {
-                Volatile.Write(ref _plainRequestsFor, PlainRequestsKey(options));
-                if (await ProbeAgentAsync(options, factory, ct, withinUse).ConfigureAwait(false) is null)
+                var beforePlain = negotiation.PlainRequestsFor;
+                negotiation.PlainRequestsFor = PlainRequestsKey(options);
+                if (await ProbeAgentAsync(options, factory, ct, withinUse, negotiation: negotiation)
+                    .ConfigureAwait(false) is null)
                 {
                     _log.LogInformation(
-                        "The AI server on this PC refused reasoning_effort or max_tokens; AI cleanup sends it plain requests.");
+                        "The AI server on this PC refused reasoning_effort or max_tokens, and took plain requests.");
                     return null;
                 }
 
-                Volatile.Write(ref _plainRequestsFor, null);
+                negotiation.PlainRequestsFor = beforePlain;
             }
 
             return failure;
@@ -6025,7 +6054,7 @@ internal sealed partial class TextCleanupService : ITextCleanupService
                 if (firstPlainFailure is not null)
                 {
                     _log.LogInformation(
-                        "The AI server on this PC refused reasoning_effort or max_tokens; AI cleanup sends it plain requests.");
+                        "The AI server on this PC refused reasoning_effort or max_tokens, and took plain requests.");
                 }
 
                 NoteModelAnswered(options);
@@ -6059,7 +6088,8 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     // The server, the API it is reached through and the model that refused the local server fields (see ProbeAgentAsync), or
     // null. Keyed by all three, so a change of any tries the fields again: one API of a server refusing them says nothing
-    // about the other.
+    // about the other. Published only by the initialization that owns the generation (PublishNegotiationLocked, and its
+    // LocalReasoningAllowance for Ollama at its own address); a readiness check chooses plain requests in its own copy.
     private string? _plainRequestsFor;
 
     /*
@@ -6070,8 +6100,9 @@ internal sealed partial class TextCleanupService : ITextCleanupService
      * 96.5 at low against 96.1 at its default, in 1.6 s against 2.0 s (docs/local-model-benchmark.md). So Scribe asks for
      * the least effort a deployment accepts: none, then low for a model that refuses none (gpt-6.1-sol answers "'none'
      * is not supported ... Supported values are: 'low', 'medium', 'high', 'xhigh', and 'max'"), then nothing at all for a
-     * model that takes no reasoning effort, which keeps its own behavior. The readiness probe finds the step, and every
-     * request of that deployment uses it. Keyed by the endpoint and deployment, so another deployment starts again.
+     * model that takes no reasoning effort, which keeps its own behavior. The readiness probe finds the step in its own
+     * copy (WireNegotiation), the initialization that passes publishes it, and every request of that deployment uses it.
+     * Keyed by the endpoint and deployment, so another deployment starts again.
      */
     private static readonly ReasoningEffort?[] AzureReasoningSteps = [ReasoningEffort.None, ReasoningEffort.Low, null];
 
@@ -6079,32 +6110,37 @@ internal sealed partial class TextCleanupService : ITextCleanupService
         $"{options.AzureEndpoint?.Trim()}\n{options.AzureDeployment?.Trim()}";
 
     /// <summary>The reasoning effort this Microsoft Foundry deployment is asked for; null asks for none (its own default).</summary>
-    internal ReasoningEffort? AzureReasoningEffortFor(CleanupOptions options)
+    internal ReasoningEffort? AzureReasoningEffortFor(CleanupOptions options) =>
+        AzureReasoningEffortFor(options, Volatile.Read(ref _azureReasoningBox));
+
+    // The effort a record of the negotiation asks of this deployment: a request reads what is published, a readiness check
+    // the copy it is learning into.
+    private ReasoningEffort? AzureReasoningEffortFor(CleanupOptions options, AzureReasoningChoice? recorded)
     {
         if (options.Provider != CleanupProvider.AzureFoundry || ReasoningEffortOverride is not null)
         {
             return null;
         }
 
-        var recorded = Volatile.Read(ref _azureReasoningBox);
-        var step = recorded is { } box && box.Key == AzureReasoningKey(options) ? box.Step : 0;
-        return AzureReasoningSteps[step];
+        return AzureReasoningSteps[AzureStepOf(recorded, AzureReasoningKey(options))];
     }
 
-    // Moves this deployment to the next effort; false once it is already asking for none.
-    private bool StepUpAzureReasoningEffort(CleanupOptions options)
+    private static int AzureStepOf(AzureReasoningChoice? recorded, string key) =>
+        recorded is { } box && box.Key == key ? box.Step : 0;
+
+    // Moves this deployment to the next effort in the check's own copy; false once it is already asking for none.
+    private bool StepUpAzureReasoningEffort(CleanupOptions options, WireNegotiation negotiation)
     {
         var key = AzureReasoningKey(options);
-        var recorded = Volatile.Read(ref _azureReasoningBox);
-        var step = recorded is { } box && box.Key == key ? box.Step : 0;
+        var step = AzureStepOf(negotiation.AzureReasoning, key);
         if (step >= AzureReasoningSteps.Length - 1)
         {
             return false;
         }
 
-        Volatile.Write(ref _azureReasoningBox, new AzureReasoningChoice(key, step + 1));
+        negotiation.AzureReasoning = new AzureReasoningChoice(key, step + 1);
         _log.LogInformation(
-            "The Microsoft Foundry deployment refused reasoning effort {Refused}; AI cleanup asks for {Next}.",
+            "The Microsoft Foundry deployment refused reasoning effort {Refused}; the readiness check asks for {Next}.",
             EffortName(AzureReasoningSteps[step]),
             EffortName(AzureReasoningSteps[step + 1]));
         return true;
@@ -6145,6 +6181,59 @@ internal sealed partial class TextCleanupService : ITextCleanupService
 
     private bool SendsPlainRequests(CleanupOptions options) =>
         string.Equals(Volatile.Read(ref _plainRequestsFor), PlainRequestsKey(options), StringComparison.Ordinal);
+
+    /*
+     * What one readiness check learns about how its endpoint takes requests, kept by the check and not by the service.
+     *
+     * The reasoning effort a Microsoft Foundry deployment accepts and the plain requests a strict server on this PC needs
+     * were written to the two slots above while the probe ran. So testing unsaved settings moved the negotiation the
+     * configuration being served still sent its requests with: deployment A had settled on low, a test of deployment B
+     * that refused none wrote B's key over it, and A's next dictation asked for none again and failed with a 400 while
+     * cleanup read Ready. A test of another server on this PC set or cleared the plain-request choice the same way. A check
+     * now starts from a copy of what is published, learns into that copy through every retry and both Azure surfaces, and
+     * writes nothing itself. Only the initialization that owns the generation publishes it, once its check passed, in the
+     * step that publishes its agent (PublishNegotiationLocked); a test, a failed check and a superseded initialization
+     * drop their copy. Ollama at its own address chooses plain requests in its LocalReasoningAllowance instead, which is
+     * published the same way.
+     */
+    private sealed class WireNegotiation(AzureReasoningChoice? azureReasoning, string? plainRequestsFor)
+    {
+        private readonly AzureReasoningChoice? _startedAzureReasoning = azureReasoning;
+        private readonly string? _startedPlainRequestsFor = plainRequestsFor;
+
+        /// <summary>The effort the deployment is asked for, as this check has settled it so far.</summary>
+        public AzureReasoningChoice? AzureReasoning { get; set; } = azureReasoning;
+
+        /// <summary>The server, API and model that take only plain requests, as this check has settled it so far.</summary>
+        public string? PlainRequestsFor { get; set; } = plainRequestsFor;
+
+        public bool LearnedAzureReasoning => !ReferenceEquals(AzureReasoning, _startedAzureReasoning);
+
+        public bool LearnedPlainRequests =>
+            !string.Equals(PlainRequestsFor, _startedPlainRequestsFor, StringComparison.Ordinal);
+
+        public bool SendsPlainRequests(CleanupOptions options) =>
+            string.Equals(PlainRequestsFor, PlainRequestsKey(options), StringComparison.Ordinal);
+    }
+
+    // A check's own copy of what is published now. Test connection takes it as it starts, and an initialization once it
+    // holds _initLock, so it starts from what the initialization before it published.
+    private WireNegotiation BeginNegotiation() =>
+        new(Volatile.Read(ref _azureReasoningBox), Volatile.Read(ref _plainRequestsFor));
+
+    // Must be called under _gate, by the initialization that owns the generation, once its readiness check passed.
+    private void PublishNegotiationLocked(WireNegotiation negotiation)
+    {
+        if (negotiation.LearnedAzureReasoning)
+        {
+            Volatile.Write(ref _azureReasoningBox, negotiation.AzureReasoning);
+        }
+
+        if (negotiation.LearnedPlainRequests)
+        {
+            Volatile.Write(ref _plainRequestsFor, negotiation.PlainRequestsFor);
+        }
+    }
 
     /// <summary>
     /// How long the readiness probe waits for a first response.

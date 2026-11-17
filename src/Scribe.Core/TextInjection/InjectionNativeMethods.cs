@@ -23,6 +23,10 @@ internal static class InjectionNativeMethods
     internal const uint SMTO_ABORTIFHUNG = 0x0002;
     internal const uint WM_NULL = 0x0000;
 
+    // GetLastError codes that say a window message was refused before it was queued (see Win32InjectionPlatform).
+    internal const int ERROR_ACCESS_DENIED = 5;
+    internal const int ERROR_INVALID_WINDOW_HANDLE = 1400;
+
     internal const uint CF_UNICODETEXT = 13;
     internal const uint CF_ENHMETAFILE = 14;
     internal const uint GMEM_MOVEABLE = 0x0002;

@@ -268,6 +268,26 @@ struct AiVocabularyScope: Equatable, Sendable {
         }
         return true
     }
+
+    /// What this scope and `other` both permit, each library for the content both name. Keeps this scope's generation.
+    func intersection(_ other: AiVocabularyScope) -> AiVocabularyScope {
+        AiVocabularyScope(
+            generation: generation,
+            permittedContent: permittedContent.filter { id, content in other.permits(id, content: content) })
+    }
+
+    /// This scope less every library `keeps` refuses, each judged by its id and the content permitted for it.
+    func narrowed(keeping keeps: (String, String?) -> Bool) -> AiVocabularyScope {
+        let kept = permittedContent.filter { keeps($0.key, $0.value) }
+        return AiVocabularyScope(generation: generation, permittedContent: kept)
+    }
+
+    private func permits(_ id: String, content: String?) -> Bool {
+        guard let held = permittedContent[id.lowercased()] else {
+            return false
+        }
+        return held == content
+    }
 }
 
 struct LibraryVocabulary: Equatable, Sendable {

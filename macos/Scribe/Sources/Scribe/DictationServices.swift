@@ -314,18 +314,28 @@ struct DictationRuleSnapshot: Sendable {
     let snippetCount: Int
     let compileDuration: Duration
 
-    /// Compiles `ruleSet` on the calling thread.
+    /// Compiles `ruleSet` on the calling thread. `cleanupVocabularyEntries` are the entries of the word packs AI
+    /// cleanup may use, which is all `libraryEntries` may say to a provider: the rest are held back until a reply is
+    /// in (`TextPostProcessor.CompiledRules.init`), and `aiScope` is the permission those entries were read under,
+    /// which every request carrying the vocabulary is held to, by `aiGate`, as it leaves
+    /// (`CleanupVocabularyAdmission`). The scope has no default: a caller that left it out would compile a snapshot
+    /// that no request is ever held back from, whatever a save withdraws.
     init(
         _ ruleSet: PersistenceRuleSet,
         libraryEntries: [DictionaryEntry],
-        cleanupVocabularyEntries: [DictionaryEntry]
+        cleanupVocabularyEntries: [DictionaryEntry],
+        aiScope: AiVocabularyScope,
+        aiGate: AiVocabularyGate = .shared
     ) {
         let clock = ContinuousClock()
         let started = clock.now
         rules = TextPostProcessor.CompiledRules(
-            dictionaryEntries: ruleSet.dictionaryEntries, snippets: ruleSet.snippets, libraryEntries: libraryEntries)
+            dictionaryEntries: ruleSet.dictionaryEntries, snippets: ruleSet.snippets, libraryEntries: libraryEntries,
+            aiLibraryEntries: cleanupVocabularyEntries)
         cleanupVocabulary = CleanupVocabulary(
-            glossaryEntries: CleanupPrompt.composeVocabulary(ruleSet.dictionaryEntries, cleanupVocabularyEntries))
+            glossaryEntries: CleanupPrompt.composeVocabulary(ruleSet.dictionaryEntries, cleanupVocabularyEntries),
+            scope: aiScope,
+            gate: aiGate)
         appProfiles = ruleSet.appProfiles
         dictionaryEntryCount = ruleSet.dictionaryEntries.count
         libraryEntryCount = libraryEntries.count
@@ -333,18 +343,31 @@ struct DictationRuleSnapshot: Sendable {
         compileDuration = started.duration(to: clock.now)
     }
 
-    /// Compiles `ruleSet` off the main actor.
+    /// Compiles `ruleSet` off the main actor. The scope has no default, for the reason `init` gives.
     static func compile(
         _ ruleSet: PersistenceRuleSet,
         libraryEntries: [DictionaryEntry],
-        cleanupVocabularyEntries: [DictionaryEntry]
+        cleanupVocabularyEntries: [DictionaryEntry],
+        aiScope: AiVocabularyScope
     ) async -> DictationRuleSnapshot {
         await Task.detached(priority: .userInitiated) {
             DictationRuleSnapshot(
                 ruleSet,
                 libraryEntries: libraryEntries,
-                cleanupVocabularyEntries: cleanupVocabularyEntries)
+                cleanupVocabularyEntries: cleanupVocabularyEntries,
+                aiScope: aiScope)
         }.value
+    }
+
+    /// Compiles `ruleSet` with the word packs `vocabulary` composes, off the main actor. It is how the app builds a
+    /// snapshot after reading the word packs: the permission `vocabulary` was read under goes in with the rules made
+    /// from it, so the two cannot come from different reads.
+    static func compile(_ ruleSet: PersistenceRuleSet, vocabulary: LibraryVocabulary) async -> DictationRuleSnapshot {
+        await compile(
+            ruleSet,
+            libraryEntries: vocabulary.entries,
+            cleanupVocabularyEntries: vocabulary.aiEntries,
+            aiScope: vocabulary.aiScope)
     }
 }
 
@@ -380,13 +403,15 @@ final class DictationRules: DictationRuleSource {
     func apply(
         _ rules: PersistenceRuleSet,
         libraryEntries: [DictionaryEntry],
-        cleanupVocabularyEntries: [DictionaryEntry]? = nil
+        cleanupVocabularyEntries: [DictionaryEntry]? = nil,
+        aiScope: AiVocabularyScope = .none
     ) {
         install(
             DictationRuleSnapshot(
                 rules,
                 libraryEntries: libraryEntries,
-                cleanupVocabularyEntries: cleanupVocabularyEntries ?? libraryEntries))
+                cleanupVocabularyEntries: cleanupVocabularyEntries ?? libraryEntries,
+                aiScope: aiScope))
     }
 
     func postProcess(_ text: String) -> TextPostProcessingResult {

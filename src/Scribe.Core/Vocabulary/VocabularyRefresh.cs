@@ -72,4 +72,15 @@ public static class VocabularyNotice
         return saved.TrimEnd() +
             ", but dictation isn't using the change yet and keeps its previous vocabulary until it can load it.";
     }
+
+    /// <summary>
+    /// What a Settings save says when its settings were stored but could not be put into effect, because reading them back
+    /// or applying them failed (<see cref="Scribe.Core.Settings.SettingsApplicationDebt"/>): dictation keeps running on the
+    /// previous settings, a history retention among them, not just its previous vocabulary.
+    /// <paramref name="retrying"/> is whether Scribe is trying again in the background.
+    /// </summary>
+    public static string SettingsSavedButNotInUse(bool retrying) => retrying
+        ? "Changes saved, but dictation is still using the previous settings. Scribe will try again in the background. " +
+          "Saving again, or restarting Scribe, also puts them into use."
+        : "Changes saved, but dictation is still using the previous settings. Saving again, or restarting Scribe, puts them into use.";
 }

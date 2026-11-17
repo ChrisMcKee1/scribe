@@ -1,4 +1,5 @@
 using Scribe.Core.Models;
+using Scribe.Core.TextInjection;
 
 namespace Scribe.Core.Tray;
 
@@ -26,6 +27,14 @@ public enum DictationProblem
     /// stopped working after it was unplugged and plugged back in does. Raised while the recording is still live.
     /// </summary>
     MicrophoneNotSending,
+
+    /// <summary>
+    /// The app was sent the dictation and did not confirm it in time (a standard edit control that did not answer), so the
+    /// text may already be there, or may still arrive. Scribe typed nothing more, and copying the dictation into the app
+    /// could put it in twice, so the notice says to check the app first. A notice only: the recording indicator's fixed
+    /// "Nothing typed" and "Not all of it was typed" would claim more than is known.
+    /// </summary>
+    DeliveryUnconfirmed,
 }
 
 public sealed record DictationProblemReport(
@@ -36,7 +45,21 @@ public sealed record DictationProblemReport(
     int Minutes = 10,
     HotkeyMode ShortcutMode = HotkeyMode.Hold,
     long RecordingRevision = 0,
-    HotkeyBinding? Shortcut = null);
+    HotkeyBinding? Shortcut = null)
+{
+    /// <summary>
+    /// The problem to report for an insertion that did not succeed, decided from its error: the focused window changed
+    /// (<see cref="InjectionResult.FocusChangedError"/>); the app did not confirm the text in time, so it may already be
+    /// there (<see cref="InjectionResult.DeliveryUnconfirmedError"/>); or anything else, which is an incomplete insertion.
+    /// The unconfirmed one must never get the advice to copy the dictation straight into the app.
+    /// </summary>
+    public static DictationProblemReport ForFailedInsertion(InjectionResult injection) => injection.Error switch
+    {
+        InjectionResult.FocusChangedError => new(DictationProblem.FocusChanged),
+        InjectionResult.DeliveryUnconfirmedError => new(DictationProblem.DeliveryUnconfirmed),
+        _ => new(DictationProblem.TypingIncomplete),
+    };
+}
 
 public sealed record DictationProblemNotice(string Title, string Body, TrayNoticeKind Kind, TrayNoticeAction Action = TrayNoticeAction.None);
 
@@ -54,7 +77,7 @@ public static class DictationProblemRouting
     public static DictationProblemSurface Decide(DictationProblem problem, bool recordingIndicatorOn) => problem switch
     {
         DictationProblem.NoSpeechModel or DictationProblem.FocusChanged or DictationProblem.TypingIncomplete => DictationProblemSurface.PillAndNotice,
-        DictationProblem.MicrophoneDisconnected or DictationProblem.DurationLimit => DictationProblemSurface.Notice,
+        DictationProblem.MicrophoneDisconnected or DictationProblem.DurationLimit or DictationProblem.DeliveryUnconfirmed => DictationProblemSurface.Notice,
         DictationProblem.MicrophoneMuted or DictationProblem.FallbackMicrophone or DictationProblem.MicrophoneNotSending =>
             recordingIndicatorOn ? DictationProblemSurface.RecordingPill : DictationProblemSurface.Notice,
         _ => recordingIndicatorOn ? DictationProblemSurface.PillOutcome : DictationProblemSurface.Notice,
@@ -105,6 +128,9 @@ public static class DictationProblemText
             DictationProblem.NothingRecognized => new("No words recognized", "Scribe didn't catch any words. Try again, a little closer to the microphone.", TrayNoticeKind.Warning),
             DictationProblem.FocusChanged => new("Couldn't type your dictation", "The window changed before Scribe finished typing. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, TrayNoticeAction.CopyLastDictation),
             DictationProblem.TypingIncomplete => new("Couldn't type your dictation", "This app didn't accept all of the text. Right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Error, TrayNoticeAction.CopyLastDictation),
+
+            // No click action: a click that copied the dictation would invite pasting it over text that may already be there.
+            DictationProblem.DeliveryUnconfirmed => new("Couldn't confirm your dictation", "The app didn't confirm the text in time, so Scribe didn't type it again. It may already be there. Check the app before copying. If it isn't there, right-click the Scribe icon and choose Copy last dictation, then paste it.", TrayNoticeKind.Warning),
             DictationProblem.NoSpeechModel => new("No speech model", "Choose a speech model in Settings, Advanced, then try again.", TrayNoticeKind.Warning, TrayNoticeAction.OpenSettings),
             DictationProblem.RecognitionFailed => new("Dictation didn't finish", "Something went wrong while Scribe turned your speech into text. Try again. If it keeps happening, save diagnostics in Settings, Diagnostics.", TrayNoticeKind.Error, TrayNoticeAction.OpenSettingsDiagnostics),
             DictationProblem.ModelLoadFailed => new("Speech model didn't load", "Scribe tries again when you dictate. If dictation doesn't work, save diagnostics in Settings, Diagnostics and report the problem.", TrayNoticeKind.Warning, TrayNoticeAction.OpenSettingsDiagnostics),
@@ -139,6 +165,10 @@ public static class DictationProblemText
         DictationProblem.FallbackMicrophone => "Using the default mic",
         DictationProblem.MicrophoneNotSending => "No sound from the mic",
         DictationProblem.MicrophoneDisconnected => null,
+
+        // Notice only: the recording indicator's fixed headlines say "Nothing typed" or "Not all of it was typed", and
+        // neither is known to be true of text the app may already hold.
+        DictationProblem.DeliveryUnconfirmed => null,
         _ => null,
     };
 

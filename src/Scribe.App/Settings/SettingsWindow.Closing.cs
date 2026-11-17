@@ -87,7 +87,8 @@ public partial class SettingsWindow
             _dictionaryLoad.IsLoaded ? [.. dictionaryRows.Select(ToDictionaryDraftRow)] : [],
             _snippetLoad.IsLoaded ? [.. snippetRows.Select(row => ToDraftRow(row))] : [],
             [.. profileRows.Select(ToProfileDraftRow)],
-            durationFields));
+            durationFields,
+            AzureApiKeySelected: IsAzureApiKeySelected));
         ClearAllInlineValidation();
         foreach (var warning in issues.Where(issue => issue.Severity == ValidationSeverity.Warning))
         {
@@ -414,7 +415,8 @@ public partial class SettingsWindow
             _dictionaryLoad.IsLoaded ? DictionaryDraftRows() : [],
             _snippetLoad.IsLoaded ? SnippetDraftRows() : [],
             ProfileDraftRows(),
-            DurationDraftFields()));
+            DurationDraftFields(),
+            AzureApiKeySelected: IsAzureApiKeySelected));
         foreach (var warning in issues.Where(issue => issue.Severity == ValidationSeverity.Warning))
         {
             ShowValidationIssue(warning);
@@ -553,6 +555,10 @@ public partial class SettingsWindow
             case ValidationCode.ClientSecretEmpty:
                 ShowInfo(issue.Message, Wpf.Ui.Controls.InfoBarSeverity.Error);
                 SpClientSecretBox.Focus();
+                break;
+            case ValidationCode.ApiKeyEmpty:
+                RevealAzureSpeechCredentials(nameof(AzureApiKeyBox));
+                ShowInfo(issue.Message, Wpf.Ui.Controls.InfoBarSeverity.Error);
                 break;
             case ValidationCode.DurationOutOfRange:
                 ShowInfo(issue.Message, Wpf.Ui.Controls.InfoBarSeverity.Error);

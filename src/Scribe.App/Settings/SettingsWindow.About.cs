@@ -22,12 +22,24 @@ public partial class SettingsWindow
 
     private void DictationMaiAuthLink_Click(object sender, RoutedEventArgs e)
     {
-        if (AiProviderFoundryRadio is not null && AiProviderFoundryRadio.IsChecked != true)
-        {
-            AiProviderFoundryRadio.IsChecked = true;
-        }
+        RevealAzureSpeechCredentials(nameof(AzureCliRadio));
+    }
 
-        ShowPage(SettingsPage.AiCleanup, nameof(AiProviderFoundryRadio));
+    private void RevealAzureSpeechCredentials(string focusName)
+    {
+        _showAzureSpeechCredentials = true;
+        UpdateAiProviderPanels();
+        ApplyAzureSettingsAccess();
+        RefreshAiStatus();
+        ShowPage(SettingsPage.AiCleanup);
+        _ = Dispatcher.InvokeAsync(() =>
+        {
+            if (!_closed && FindName(focusName) is FrameworkElement target && target.IsVisible)
+            {
+                target.BringIntoView();
+                target.Focus();
+            }
+        }, System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     private void AboutShowWelcomeButton_Click(object sender, RoutedEventArgs e) =>

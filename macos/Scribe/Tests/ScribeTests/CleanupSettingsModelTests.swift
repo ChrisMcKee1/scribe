@@ -546,6 +546,23 @@ final class CleanupSettingsModelTests: XCTestCase {
         XCTAssertNil(model.errorMessage)
     }
 
+    /// The store keeps a client secret under its client ID and nothing for a blank one, so a Save with no client ID is
+    /// refused, and what was typed stays, rather than being reported as saved and thrown away.
+    @MainActor
+    func testATypedClientSecretIsKeptAndTheSaveRefusedWhileThereIsNoClientId() {
+        let backing = CleanupSettingsBackingFake()
+        let model = makeModel(backing)
+        backing.drafts.azureClientSecret = "typed"
+
+        model.saveAzureClientSecret()
+
+        XCTAssertEqual(backing.drafts.azureClientSecret, "typed")
+        XCTAssertEqual(model.errorMessage, CleanupSettingsModel.clientIdRequiredMessage)
+        XCTAssertNil(model.statusMessage)
+        XCTAssertFalse(model.hasSavedAzureClientSecret)
+        XCTAssertTrue(backing.clientSecrets.isEmpty)
+    }
+
     @MainActor
     func testReplacingTheClientSecretDuringAConnectionTestDropsTheOldResult() async {
         let backing = servicePrincipalBacking()

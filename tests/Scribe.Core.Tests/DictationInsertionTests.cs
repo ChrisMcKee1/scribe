@@ -3,10 +3,12 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Scribe.Core.Diagnostics;
 using Scribe.Core.Models;
+using Scribe.Core.Overlay;
 using Scribe.Core.Persistence;
 using Scribe.Core.PostProcessing;
 using Scribe.Core.Tests.Concurrency;
 using Scribe.Core.TextInjection;
+using Scribe.Core.Tray;
 using static Scribe.Core.TextInjection.InjectionNativeMethods;
 
 namespace Scribe.Core.Tests;
@@ -296,6 +298,56 @@ public class DictationInsertionTests : InsertionFlagTest
         Assert.Equal(["Notepad text. "], rig.Platform.StandardEditTexts);
         Assert.Empty(rig.Platform.Batches);
         Assert.Equal(["Notepad text."], rig.Recovery.GetRecent());
+    }
+
+    [Theory]
+    [InlineData(InjectionMethod.UnicodeType)]
+    [InlineData(InjectionMethod.ClipboardPaste)]
+    public void A_standard_edit_control_that_does_not_answer_is_not_given_the_text_a_second_way_and_the_dictation_stays_copyable(
+        InjectionMethod method)
+    {
+        // The control was sent the text and did not answer in time. It can change its text before it answers, so it may
+        // already hold the dictation: typing or pasting it as well would insert it twice.
+        var rig = new Rig(Flags);
+        rig.Clipboard.SeedText("the user's clipboard");
+        rig.Platform.StandardEditOutcome = StandardEditInsertion.Unconfirmed;
+
+        var insertion = rig.Insert("Notepad text.", method);
+
+        var injection = insertion.Injection;
+        Assert.False(injection.Succeeded);
+        Assert.Equal("win32-edit", injection.Method);
+        Assert.Equal(InjectionResult.DeliveryUnconfirmedError, injection.Error);
+        Assert.Equal(0, injection.Sent);
+        Assert.Equal("Notepad text. ".Length, injection.Total);
+        Assert.Equal(PasteDelivery.NotUsed, injection.Paste);
+        Assert.Equal(["Notepad text. "], rig.Platform.StandardEditTexts);
+        Assert.Empty(rig.Platform.Batches);
+        Assert.Equal(0, rig.Clipboard.OpenAttempts);
+        Assert.Equal("the user's clipboard", rig.Clipboard.Text);
+
+        // Still copyable from the tray, which is how the user gets it if the control never shows it.
+        Assert.Equal(["Notepad text."], rig.Recovery.GetRecent());
+
+        // What the shell is told: not "Nothing typed" and not the advice to copy it into the app, since it may be there.
+        var problem = DictationProblemReport.ForFailedInsertion(injection);
+        Assert.Equal(DictationProblem.DeliveryUnconfirmed, problem.Problem);
+        Assert.Null(PillOutcome.Of(injection, cleanupRequested: false, cleanup: null, problem));
+    }
+
+    [Fact]
+    public void A_standard_edit_control_that_refuses_the_message_still_gets_the_text_typed()
+    {
+        // Nothing was sent to it, so typing cannot duplicate anything: the fall-through is what it always was.
+        var rig = new Rig(Flags);
+        rig.Platform.StandardEditOutcome = StandardEditInsertion.Declined;
+
+        var insertion = rig.Insert("Refused.", InjectionMethod.UnicodeType);
+
+        Assert.True(insertion.Injection.Succeeded);
+        Assert.Equal("unicode", insertion.Injection.Method);
+        Assert.Equal("Refused. ", rig.Typed());
+        Assert.Empty(rig.Platform.StandardEditTexts);
     }
 
     [Theory]

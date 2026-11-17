@@ -23,9 +23,10 @@ namespace Scribe.Core.Settings;
 /// </para>
 /// <para>
 /// A change submitted with a revision is never written over a newer choice either. When the window's save accounted
-/// for it (the window had shown it, or the user set the switch after it) and committed first, the change is superseded
-/// inside its own write transaction, and only the stored settings come back, marked so. Without the check, a change
-/// that waited seconds for the database would land after the user's later save and silently undo it.
+/// for it (the window had shown it, or the user set the switch after it) and committed first, or a newer change to the
+/// same setting committed first, the change is superseded inside its own write transaction, and only the stored settings
+/// come back, marked so. Without the check, a change that waited seconds for the database would land after the user's
+/// later save and silently undo it.
 /// </para>
 /// <para>
 /// <see cref="Submit"/>, <see cref="NoteExternalApply"/> and every callback run on the owner's thread, the callbacks

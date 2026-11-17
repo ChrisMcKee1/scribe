@@ -86,6 +86,18 @@ final class MicrosoftFoundryCleanupProviderTests: XCTestCase {
         XCTAssertEqual(credential.requestedScopes, ["https://ai.azure.com/.default"])
     }
 
+    /// An answer the deployment cut at its output limit says so.
+    func testAnAnswerTheDeploymentCutAtItsOutputLimitIsReportedAsCut() async throws {
+        let provider = makeProvider { request in
+            StubReply.completion(request, "Cleaned so f", finishReason: "length")
+        }
+
+        let response = try await provider.clean(CleanupRequest(transcript: "raw text", writingStylePrompt: "Style."))
+
+        XCTAssertEqual(response.cleanedText, "Cleaned so f")
+        XCTAssertEqual(response.ending, .cutAtOutputLimit)
+    }
+
     func testApiKeyAuthenticationUsesTheApiKeyHeaderWithoutAuthorizationOrBodyDisclosure() async throws {
         let log = RequestLog()
         let key = "candidate-foundry-key"

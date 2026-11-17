@@ -107,6 +107,25 @@ enum QuickDictionaryAdd {
         var canSave: Bool { kind == .create || kind == .update }
     }
 
+    /// What saving every typed way Scribe hears the word would do, and the rows to write for it. The popup shows this
+    /// and writes exactly this (`persist`), so the sentence it shows and what is stored cannot differ: not in the
+    /// whole-word choice, not in whether a switched-off rule is turned on, and not in the text, which is trimmed.
+    struct SavePlan {
+        /// The plan for each typed way, in the order typed. A blank way after the first is an unused box and has none.
+        let plans: [Plan]
+        /// What to tell the user: the first way that cannot be saved, otherwise the first way's own sentence.
+        let message: String
+        /// The new rules, in the order typed.
+        let inserts: [DictionaryEntry]
+        /// The existing rule the first way rewrites, when it matches one.
+        let updates: [DictionaryEntry]
+
+        var isInvalid: Bool { plans.contains { $0.kind == .invalid } }
+
+        /// True when every way can be saved and at least one of them has something to write.
+        var canSave: Bool { !isInvalid && !(inserts.isEmpty && updates.isEmpty) }
+    }
+
     /// Splits a transcript into whitespace-delimited chips. Punctuation stays attached to its word
     /// so the chips read exactly like the dictation the user is looking at; it is stripped later,
     /// when a selection is turned into a pattern.
@@ -262,6 +281,71 @@ enum QuickDictionaryAdd {
 
     private static func describe(_ written: String) -> String {
         written.isEmpty ? "nothing" : written
+    }
+
+    /// Plans every typed way Scribe hears the word, each as `build` plans one. The first may rewrite the rule it
+    /// matches, and then turns it on with the whole-word choice shown; every other way is a new rule, because one
+    /// that matches a stored rule or an earlier way would be a second row for the same words.
+    static func buildSave(
+        forms: [String],
+        replacement: String?,
+        wholeWord: Bool,
+        existing: [DictionaryEntry]
+    ) -> SavePlan {
+        var plans: [Plan] = []
+        var inserts: [DictionaryEntry] = []
+        var updates: [DictionaryEntry] = []
+        var seen = Set<String>()
+        for (index, form) in (forms.isEmpty ? [""] : forms).enumerated() {
+            let trimmed = form.trimmingCharacters(in: .whitespacesAndNewlines)
+            if index > 0, trimmed.isEmpty {
+                continue
+            }
+            var plan = build(pattern: form, replacement: replacement, wholeWord: wholeWord, existing: existing)
+            let repeated = !seen.insert(trimmed.lowercased()).inserted
+            if index > 0 {
+                if repeated || plan.kind == .update || plan.kind == .noChange {
+                    plan = Plan(
+                        kind: .invalid, entry: nil, message: DictionaryWordEditor.duplicateMessage(for: trimmed))
+                } else if plan.kind == .invalid {
+                    plan = Plan(kind: .invalid, entry: nil, message: "\"\(trimmed)\": \(plan.message)")
+                }
+            }
+            plans.append(plan)
+            switch (plan.kind, plan.entry) {
+            case (.create, let entry?):
+                inserts.append(entry)
+            case (.update, let entry?):
+                updates.append(entry)
+            default:
+                break
+            }
+        }
+        let message = plans.first { $0.kind == .invalid }?.message ?? plans.first?.message ?? ""
+        return SavePlan(plans: plans, message: message, inserts: inserts, updates: updates)
+    }
+
+    /// Writes `plan` in one transaction, and returns the rows as they are stored: the rewritten rule first, then the
+    /// new ones with the ids the store gave them.
+    static func persist(_ plan: SavePlan, in store: PersistenceStore) async throws -> [DictionaryEntry] {
+        guard plan.canSave else { return [] }
+        try await store.saveDictionaryChanges(inserts: plan.inserts, updates: plan.updates)
+
+        var saved = plan.updates
+        if !plan.inserts.isEmpty {
+            let stored = try await store.loadAllDictionaryEntries()
+            for inserted in plan.inserts {
+                if let match = stored.first(where: {
+                    $0.pattern == inserted.pattern
+                        && $0.replacement == inserted.replacement
+                        && $0.wholeWord == inserted.wholeWord
+                        && $0.enabled == inserted.enabled
+                }) {
+                    saved.append(match)
+                }
+            }
+        }
+        return saved
     }
 
     /// Applies one just-saved rule to a transcript the user has already seen, so the copy kept for

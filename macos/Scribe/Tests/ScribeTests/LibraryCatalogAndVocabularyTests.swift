@@ -87,6 +87,90 @@ final class LibraryCatalogAndVocabularyTests: XCTestCase {
         XCTAssertNotNil(state.acceptedContent["custom-imported"])
     }
 
+    // MARK: - Built-in edits that cannot be read
+
+    /// An edits document that exists but cannot be read is not an absent one: it is where a term the user turned off is
+    /// recorded, so the shipped rows must not stand in for it. The pack is paused with no rows, as for a document of a
+    /// newer version, and the other built-ins are unaffected. A folder where the file belongs fails to read with
+    /// something other than ENOENT.
+    func testABuiltInWhoseEditsCannotBeReadIsPausedWithNoRows() async throws {
+        let context = try makeContext()
+        defer { context.cleanup() }
+        context.defaults.set(["github", "microsoft-azure"], forKey: DictionaryLibrarySettings.enabledIdsKey)
+        let editsURL = BuiltInLibraryOverlay.editsURL(root: context.tempDirectory, id: "github")
+        try FileManager.default.createDirectory(at: editsURL, withIntermediateDirectories: true)
+
+        let catalog = try await context.service.loadCatalog()
+
+        let github = try XCTUnwrap(catalog.find(id: "github"))
+        XCTAssertEqual(github.state, .unreadable)
+        XCTAssertTrue(github.library.entries.isEmpty)
+        XCTAssertNil(github.contentHash)
+        let azure = try XCTUnwrap(catalog.find(id: "microsoft-azure"))
+        XCTAssertEqual(azure.state, .available)
+        XCTAssertTrue(azure.library.entries.contains { $0.pattern == "azure" })
+        let vocabulary = try await context.service.loadVocabulary()
+        XCTAssertFalse(vocabulary.entries.contains { $0.pattern == "get hub" })
+        XCTAssertFalse(vocabulary.aiEntries.contains { $0.pattern == "get hub" })
+        XCTAssertFalse(vocabulary.aiScope.permittedLibraryIds.contains("github"))
+        XCTAssertTrue(vocabulary.aiScope.permittedLibraryIds.contains("microsoft-azure"))
+    }
+
+    /// The case the finding names: the edits file is there, a term is turned off in it, and the file cannot be opened
+    /// (EACCES here, EIO on a failing disk). A file its owner cannot read is readable by root, so this skips there.
+    func testABuiltInWhoseEditsFileHasNoReadPermissionKeepsItsTurnedOffTermOff() async throws {
+        try XCTSkipIf(geteuid() == 0, "root can read a file whose permissions forbid it")
+        let context = try makeContext()
+        defer { context.cleanup() }
+        context.defaults.set(["github"], forKey: DictionaryLibrarySettings.enabledIdsKey)
+        let edits = BuiltInLibraryEdits(
+            version: BuiltInLibraryEdits.currentVersion,
+            library: "github",
+            terms: [
+                BuiltInTermEdit(
+                    key: "get hub", intent: .off, base: TermValues("get hub", "GitHub"), value: nil,
+                    acknowledged: nil)
+            ])
+        try writeBuiltInEdits(in: context.tempDirectory, edits, id: "github")
+        let editsURL = BuiltInLibraryOverlay.editsURL(root: context.tempDirectory, id: "github")
+        let readable = try await context.service.loadVocabulary()
+        XCTAssertFalse(readable.entries.contains { $0.pattern == "get hub" }, "the edits document turns it off")
+        XCTAssertTrue(readable.entries.contains { $0.pattern == "github" })
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: editsURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: editsURL.path) }
+        let unreadable = try await context.service.loadVocabulary()
+
+        XCTAssertFalse(unreadable.entries.contains { $0.pattern == "get hub" }, "the turned off term came back")
+        XCTAssertFalse(unreadable.entries.contains { $0.pattern == "github" }, "the shipped rows stood in")
+        XCTAssertTrue(unreadable.aiEntries.isEmpty)
+    }
+
+    /// Nothing at all, not even the edits folder, is ENOENT: no edits, so the shipped rows are the pack.
+    func testABuiltInWithNoEditsFileKeepsItsShippedRows() async throws {
+        let context = try makeContext()
+        defer { context.cleanup() }
+        context.defaults.set(["github"], forKey: DictionaryLibrarySettings.enabledIdsKey)
+
+        let catalog = try await context.service.loadCatalog()
+
+        let github = try XCTUnwrap(catalog.find(id: "github"))
+        XCTAssertEqual(github.state, .available)
+        XCTAssertTrue(github.library.entries.contains { $0.pattern == "get hub" })
+        let vocabulary = try await context.service.loadVocabulary()
+        XCTAssertTrue(vocabulary.entries.contains { $0.pattern == "get hub" })
+    }
+
+    func testOnlyAMissingFileCountsAsNoEdits() {
+        XCTAssertTrue(DictionaryLibraryService.isMissingFile(CocoaError(.fileReadNoSuchFile)))
+        XCTAssertTrue(DictionaryLibraryService.isMissingFile(CocoaError(.fileNoSuchFile)))
+        XCTAssertTrue(DictionaryLibraryService.isMissingFile(POSIXError(.ENOENT)))
+        XCTAssertFalse(DictionaryLibraryService.isMissingFile(CocoaError(.fileReadNoPermission)))
+        XCTAssertFalse(DictionaryLibraryService.isMissingFile(CocoaError(.fileReadUnknown)))
+        XCTAssertFalse(DictionaryLibraryService.isMissingFile(POSIXError(.EACCES)))
+        XCTAssertFalse(DictionaryLibraryService.isMissingFile(POSIXError(.EIO)))
+    }
+
     private func makeContext() throws -> TestContext {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("ScribeWordPackModelTests-\(UUID().uuidString)", isDirectory: true)

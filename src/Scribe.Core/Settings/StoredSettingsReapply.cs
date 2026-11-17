@@ -69,4 +69,27 @@ public static class StoredSettingsReapply
             StoredSettingsReapplied.StoredSettings,
             applySettings(stored) ?? throw new InvalidOperationException("Applying the stored settings returned no answer."));
     }
+
+    /// <summary>
+    /// Reads the stored settings and applies them with <paramref name="applySettings"/>, and nothing else: for a caller that
+    /// owes dictation those very settings (<see cref="SettingsApplicationDebt"/>). Reloading only the vocabulary on the
+    /// settings dictation already runs on, which <see cref="Reapply"/> does when the stored settings cannot be used, would
+    /// put none of what that Save stored into effect, so here an unusable document ends in an exception and applies
+    /// nothing, and a read that throws propagates too. The read and the application run on the caller's thread.
+    /// </summary>
+    public static Task<VocabularyRefresh> ApplyStoredOnly(
+        ISettingsRepository repository,
+        Func<AppSettings, Task<VocabularyRefresh>> applySettings)
+    {
+        ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(applySettings);
+
+        var stored = repository.Load();
+        if (repository.LastLoadFailed)
+        {
+            throw new InvalidOperationException("The stored settings cannot be used.");
+        }
+
+        return applySettings(stored) ?? throw new InvalidOperationException("Applying the stored settings returned no answer.");
+    }
 }

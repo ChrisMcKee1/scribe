@@ -100,6 +100,10 @@ public partial class App : Application
     // The tray's settings writes, saved on a worker in click order so a database wait never freezes the UI thread.
     private Scribe.Core.Settings.SettingsWriteLane? _settingsWrites;
 
+    // What a committed Settings save still owes dictation when its stored settings could not be put into effect, kept for
+    // the whole process so a closed window cannot take it along, and retried in the background without one.
+    private Scribe.Core.Settings.SettingsApplicationDebt? _settingsDebt;
+
     // A microphone chosen from the tray whose write has not come back yet, so the tray shows the choice at once.
     private (Scribe.Core.Settings.MicrophoneSelection Selection, long Revision)? _pendingTrayMicrophone;
 
@@ -412,6 +416,11 @@ public partial class App : Application
             services.GetRequiredService<PerfFlags>(),
             _plainTextOnce);
         StartupStages?.Mark("controller");
+
+        // The one owner of a committed save's unpaid application of its stored settings: it can retry in the background,
+        // with no Settings window, because the host knows how to put the stored settings into effect.
+        _settingsDebt = new Scribe.Core.Settings.SettingsApplicationDebt(reportFailure: ReportSettingsApplicationFailure);
+        _settingsDebt.Attach(ApplyStoredSettingsInBackground);
 
         // Before anything that takes input exists (the tray, and at Start the hotkey): the persisted settings load, and the
         // first vocabulary generation is built on a worker and awaited here, never waited on, so the library source's first
@@ -2006,6 +2015,10 @@ public partial class App : Application
             // menu opens, so it needs neither). Before the window reads its list, so a change any later reading finds
             // reaches it; the handler posts, so it runs once the window is in place.
             audio.InputDevicesChanged += OnInputDevicesChanged;
+
+            // A save's stored settings an earlier window could not put into effect, whose background attempts ran out,
+            // start again now that a window is open.
+            _settingsDebt?.Resume();
             _settingsWindow = new SettingsWindow(
                 services.GetRequiredService<ISettingsRepository>(),
                 audio,
@@ -2023,30 +2036,7 @@ public partial class App : Application
                 services.GetRequiredService<StartupRegistration>(),
                 services.GetRequiredService<IOptions<TranscriptionOptions>>(),
                 position => _overlay?.Preview(position),
-                settings =>
-                {
-                    // The window has just saved its whole document, or applied the stored settings after storing a
-                    // dictionary entry itself, so a tray change still on its way reads the stored settings again before
-                    // applying anything. The window awaits what this returns, the answer of the vocabulary generation the
-                    // application asked for, before it says the change is in effect.
-                    _settingsWrites?.NoteExternalApply();
-                    var applying = _controller!.ApplySettings(settings);
-                    var paused = _lastRenderedState == DictationState.Paused;
-                    _overlay?.SetKeepWarm(
-                        settings.ReleaseModelsAfterIdleMinutes,
-                        OverlayWarmup.KeepResident(settings.ShowOverlay, paused));
-                    _overlay?.SetPosition(settings.OverlayPosition);
-                    if (OverlayWarmup.AfterSettingsApplied(settings.ShowOverlay, paused))
-                    {
-                        _overlay?.Warmup(); // turning the pill on must not leave the next dictation to launch it
-                    }
-
-                    _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
-                    AccentContrastResources.UseSource(settings.AccentSource);
-                    UpdateTrayShortcut(settings);
-                    RefreshFoundryDownloadedModel();
-                    return applying;
-                },
+                ApplySettingsToApp,
                 () => _controller!.ReloadVocabulary(),
                 services.GetRequiredService<ILibraryVocabularySource>(),
                 _textScale,
@@ -2057,7 +2047,8 @@ public partial class App : Application
                 services.GetRequiredService<SessionDiagnostics>(),
                 services.GetRequiredService<HistoryDeletionNotifier>(),
                 perfFlags: services.GetRequiredService<PerfFlags>(),
-                openStages: openStages)
+                openStages: openStages,
+                settingsDebt: _settingsDebt)
             {
                 DiagnosticsExport = services.GetRequiredService<DiagnosticsExport>(),
                 OllamaService = services.GetRequiredService<OllamaServiceController>(),
@@ -2093,6 +2084,52 @@ public partial class App : Application
             throw;
         }
     });
+
+    // The Settings window's application of settings: the window has just saved its whole document, or applied the stored
+    // settings after storing a dictionary entry itself, so a tray change still on its way reads the stored settings again
+    // before applying anything. The window awaits what this returns, the answer of the vocabulary generation the
+    // application asked for, before it says the change is in effect.
+    private Task<VocabularyRefresh> ApplySettingsToApp(AppSettings settings)
+    {
+        _settingsWrites?.NoteExternalApply();
+        var applying = _controller!.ApplySettings(settings);
+        var paused = _lastRenderedState == DictationState.Paused;
+        _overlay?.SetKeepWarm(
+            settings.ReleaseModelsAfterIdleMinutes,
+            OverlayWarmup.KeepResident(settings.ShowOverlay, paused));
+        _overlay?.SetPosition(settings.OverlayPosition);
+        if (OverlayWarmup.AfterSettingsApplied(settings.ShowOverlay, paused))
+        {
+            _overlay?.Warmup(); // turning the pill on must not leave the next dictation to launch it
+        }
+
+        _tray?.SetAiCleanupChecked(settings.EnableAiCleanup);
+        AccentContrastResources.UseSource(settings.AccentSource);
+        UpdateTrayShortcut(settings);
+        RefreshFoundryDownloadedModel();
+        return applying;
+    }
+
+    // How the background retry of a committed save's unpaid application puts the stored settings into effect with no Settings
+    // window: the stored settings only (an unusable document is a failed attempt, never a vocabulary-only reload that would
+    // look like success), applied on the UI thread the application belongs to. Never waits on the dispatcher.
+    private Task<VocabularyRefresh> ApplyStoredSettingsInBackground() =>
+        Dispatcher.InvokeAsync(() => StoredSettingsReapply.ApplyStoredOnly(
+            _host!.Services.GetRequiredService<ISettingsRepository>(),
+            ApplySettingsToApp)).Task.Unwrap();
+
+    // Logs only the failure's shape, and never lets the log change what a save reports or stop a retry.
+    private void ReportSettingsApplicationFailure(Scribe.Core.Settings.SettingsApplicationStep step, Exception ex)
+    {
+        try
+        {
+            _appLog?.LogWarning("Putting saved settings into effect failed at {Step} ({Failure}).", step, FailureShape.Describe(ex));
+        }
+        catch
+        {
+            // Saying a failure happened is best effort.
+        }
+    }
 
     // StartupStageTiming: where the start went, as stage codes and whole milliseconds since Windows created the process (or
     // since Main when that time cannot be read). Codes and numbers only; the timeline is dropped either way.
@@ -2714,6 +2751,10 @@ public partial class App : Application
         // bounded waits inside the steps themselves.
         Scribe.Core.Lifecycle.StagedTeardown.Run(
         [
+            // Before anything the retry puts settings into effect on is torn down: it stops waiting and starts nothing
+            // new, and waits for nothing, so quitting is never held by it. Whatever was still owed stays in memory only.
+            new("stop settings application", () => _settingsDebt?.Dispose()),
+
             // First, and waiting for nothing: from here the controller starts nothing new and stops raising the events
             // whose handlers marshal synchronously onto this thread, so nothing raised during the steps below can park
             // behind OnExit and turn the controller's bounded wait into a stall.

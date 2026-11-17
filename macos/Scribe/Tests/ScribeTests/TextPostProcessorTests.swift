@@ -283,6 +283,77 @@ final class TextPostProcessorTests: XCTestCase {
         XCTAssertEqual(pass.result.replacements.map(\.pattern), ["cube flow"])
     }
 
+    // MARK: - Word packs kept from AI cleanup
+
+    /// A word pack kept from AI cleanup still applies on this Mac, but what it writes is never in the text a provider
+    /// is sent: its spoken form goes out as spoken and the replacement is made on the reply, which is what a
+    /// template-like rule has always done. The one-line spelling used to be written before the request whatever the
+    /// vocabulary sent with it left out.
+    func testAWordPackKeptFromAICleanupIsHeldBackUntilTheReply() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [], snippets: [],
+            libraryEntries: [DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow")], aiLibraryEntries: [])
+
+        let pass = processor.correctVocabulary("deploy with cube flow today")
+
+        XCTAssertEqual(pass.text, "deploy with cube flow today", "a local-only spelling was sent")
+        XCTAssertEqual(
+            processor.finishAfterCleanup("Deploy with cube flow today.", after: pass).text,
+            "Deploy with Kubeflow today.")
+        // Applied locally, exactly as cleanup off applies it, and a reply that is the text sent gives that text.
+        XCTAssertEqual(processor.process("deploy with cube flow today"), "deploy with Kubeflow today")
+        XCTAssertEqual(
+            processor.finishAfterCleanup(pass.text, after: pass).text, processor.process("deploy with cube flow today"))
+    }
+
+    func testAWordPackAICleanupMayUseIsStillWrittenIntoTheTextSent() {
+        let permitted = DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow")
+        let kept = DictionaryEntry(pattern: "k eight s", replacement: "K8s")
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [], snippets: [], libraryEntries: [permitted, kept], aiLibraryEntries: [permitted])
+
+        let pass = processor.correctVocabulary("cube flow on k eight s")
+
+        XCTAssertEqual(pass.text, "Kubeflow on k eight s")
+        XCTAssertEqual(processor.finishAfterCleanup("Kubeflow on k eight s.", after: pass).text, "Kubeflow on K8s.")
+    }
+
+    /// The user's own rules always reach the provider, and win over a pack's rule for the same spoken form, so one
+    /// pack kept from AI cleanup never holds a personal rule back.
+    func testAPersonalRuleIsNeverHeldBackByAPackKeptFromAICleanup() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [DictionaryEntry(pattern: "cube flow", replacement: "Kube Flow")], snippets: [],
+            libraryEntries: [DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow")], aiLibraryEntries: [])
+
+        XCTAssertEqual(processor.correctVocabulary("deploy with cube flow").text, "deploy with Kube Flow")
+    }
+
+    /// A pack is told apart from another by what its rule says, not by its spoken form alone: a rule of a pack kept
+    /// from AI cleanup that shares a spoken form with a permitted pack's rule is still held back.
+    func testARuleOfAKeptPackIsNotTakenForAPermittedPacksRuleWithTheSameSpokenForm() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [], snippets: [],
+            libraryEntries: [DictionaryEntry(pattern: "cube flow", replacement: "Kube Flow")],
+            aiLibraryEntries: [DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow")])
+
+        XCTAssertEqual(processor.correctVocabulary("deploy with cube flow").text, "deploy with cube flow")
+    }
+
+    /// Without a list of the permitted packs every library rule may reach a provider, which is what every caller
+    /// that does not know about word packs has always had.
+    func testWithNoListOfPermittedPacksEveryLibraryRuleMayReachTheProvider() {
+        let processor = TextPostProcessor()
+        processor.reload(
+            dictionaryEntries: [], snippets: [],
+            libraryEntries: [DictionaryEntry(pattern: "cube flow", replacement: "Kubeflow")])
+
+        XCTAssertEqual(processor.correctVocabulary("deploy with cube flow").text, "deploy with Kubeflow")
+    }
+
     /// The snippets and the template-like rules run on the reply, each once; the templates arrive canonical, as they
     /// would with cleanup off, and no vocabulary rule runs on the reply, so an expansion is never doubled.
     func testAfterCleanupTheSnippetsAndTemplateLikeRulesRunAndNoVocabularyRuleRunsAgain() {

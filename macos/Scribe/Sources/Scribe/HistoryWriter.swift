@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 
 /// What the history writer does to the store, so tests can hold a step in flight.
 protocol HistoryRecording: Sendable {
@@ -115,7 +114,6 @@ final class HistoryWriter: @unchecked Sendable {
     private let recorder: any HistoryRecording
     private let hooks: Hooks
     private let queue = DispatchQueue(label: "com.scribe.macos.history-writer", qos: .utility)
-    private let logger = Logger(subsystem: "com.scribe.macos", category: "History")
     private let condition = NSCondition()
 
     private var pending: [Work] = []
@@ -147,7 +145,9 @@ final class HistoryWriter: @unchecked Sendable {
         condition.lock()
         if closed {
             condition.unlock()
-            logger.warning("#\(dictationID) dictation history was not recorded: the history writer has shut down.")
+            ScribeLog.warning(
+                .persistence, "Dictation history was not recorded: the history writer has shut down",
+                .integer("dictation", dictationID))
             return false
         }
 
@@ -156,8 +156,9 @@ final class HistoryWriter: @unchecked Sendable {
             droppedForRoom += 1
             let dropped = droppedForRoom
             condition.unlock()
-            logger.error(
-                "#\(dictationID) history not recorded: \(outstanding) earlier writes outstanding (\(dropped) dropped).")
+            ScribeLog.error(
+                .persistence, "History not recorded: earlier writes are still outstanding",
+                .integer("dictation", dictationID), .count("outstanding", outstanding), .count("dropped", dropped))
             return false
         }
 
@@ -267,8 +268,9 @@ final class HistoryWriter: @unchecked Sendable {
         condition.unlock()
 
         if !result.drained {
-            logger.warning(
-                "History writer closed with \(result.stillWriting) step running, \(result.abandoned) abandoned.")
+            ScribeLog.warning(
+                .persistence, "History writer closed with work unfinished", .count("running", result.stillWriting),
+                .count("abandoned", result.abandoned))
         }
         return result
     }
@@ -369,46 +371,39 @@ final class HistoryWriter: @unchecked Sendable {
         request.state = .settled
         condition.unlock()
 
-        logger.warning("Clear history was withdrawn: earlier history writes were still running when it timed out.")
+        ScribeLog.warning(
+            .persistence, "Clear history was withdrawn: earlier history writes were still running when it timed out")
         request.resume(.failure(HistoryWriterError.clearTimedOut))
     }
 
     private func report(_ item: PendingWrite, dropped: Bool, failure: (any Error)?, writeNanoseconds: UInt64) {
-        let writeMilliseconds = writeNanoseconds / 1_000_000
+        let writeMilliseconds = Double(writeNanoseconds) / 1_000_000
         if dropped {
-            logger.warning("#\(item.dictationID) history write was abandoned at shutdown; the entry was not recorded.")
+            ScribeLog.warning(
+                .persistence, "A history write was abandoned at shutdown; the entry was not recorded",
+                .integer("dictation", item.dictationID))
             return
         }
 
         if let failure {
-            let code = (failure as? PersistenceError)?.sqliteCode ?? -1
-            let errorType = String(describing: type(of: failure))
-            logger.error(
-                """
-                #\(item.dictationID) history write failed after \(writeMilliseconds) ms \
-                (\(errorType, privacy: .public), SQLite \(code)).
-                """
-            )
+            ScribeLog.error(
+                .persistence, "A history write failed", .integer("dictation", item.dictationID),
+                .milliseconds("write", writeMilliseconds), .failure(failure))
             return
         }
 
-        let totalMilliseconds = (DispatchTime.now().uptimeNanoseconds - item.queuedAt) / 1_000_000
-        logger.debug(
-            """
-            #\(item.dictationID) history committed \(totalMilliseconds) ms after queueing \
-            (write \(writeMilliseconds) ms).
-            """
-        )
+        let totalMilliseconds = Double(DispatchTime.now().uptimeNanoseconds - item.queuedAt) / 1_000_000
+        ScribeLog.debug(
+            .persistence, "History committed", .integer("dictation", item.dictationID),
+            .milliseconds("sinceQueued", totalMilliseconds), .milliseconds("write", writeMilliseconds))
     }
 
     private func reportClear(_ result: Result<Int, Error>) {
         switch result {
         case .success(let removed):
-            logger.info("History cleared in order: \(removed) entries removed.")
+            ScribeLog.info(.persistence, "History cleared in order", .count("removed", removed))
         case .failure(let error):
-            let code = (error as? PersistenceError)?.sqliteCode ?? -1
-            let errorType = String(describing: type(of: error))
-            logger.error("Clear history failed (\(errorType, privacy: .public), SQLite \(code)).")
+            ScribeLog.error(.persistence, "Clear history failed", .failure(error))
         }
     }
 }

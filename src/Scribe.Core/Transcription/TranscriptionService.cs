@@ -24,7 +24,12 @@ public sealed class TranscriptionService : ITranscriptionService
     private readonly Func<ISpeechRecognizer> _load;
     private readonly ILogger<TranscriptionService> _logger;
     private readonly IMaiTranscribeClient? _maiClient;
-    private readonly Func<MaiTranscribeOptions?>? _maiOptions;
+
+    // Decides, for one dictation admitted with its settings and vocabulary, whether it goes to cloud speech and with what.
+    // Cloud speech is reachable only through an admission, never from a fresh read of the stored settings or the dictionary.
+    // It runs before the gate and outside the recognizer, and a failure in it is the cloud path's, never the dictation's
+    // (TryRecognizeInCloud).
+    private readonly Func<TranscriptionAdmission, MaiTranscribeOptions?>? _maiOptions;
 
     // Every native call happens under this gate: load, warm-up, decode, unload and dispose. Holding it across
     // ensure-ready AND use is what stops an idle Unload from landing between the two, and holding it in Dispose is
@@ -39,7 +44,7 @@ public sealed class TranscriptionService : ITranscriptionService
         IOptions<TranscriptionOptions> options,
         ILogger<TranscriptionService> logger,
         IMaiTranscribeClient? maiClient = null,
-        Func<MaiTranscribeOptions?>? maiOptions = null,
+        Func<TranscriptionAdmission, MaiTranscribeOptions?>? maiOptions = null,
         Diagnostics.PerfFlags? perfFlags = null)
     {
         var resolved = options.Value;
@@ -54,7 +59,7 @@ public sealed class TranscriptionService : ITranscriptionService
         Func<ISpeechRecognizer> load,
         ILogger<TranscriptionService> logger,
         IMaiTranscribeClient? maiClient = null,
-        Func<MaiTranscribeOptions?>? maiOptions = null)
+        Func<TranscriptionAdmission, MaiTranscribeOptions?>? maiOptions = null)
     {
         _load = load;
         _logger = logger;
@@ -217,29 +222,13 @@ public sealed class TranscriptionService : ITranscriptionService
     public TranscriptionResult Transcribe(CapturedAudio audio) =>
         Transcribe(audio, CancellationToken.None);
 
+    // Decodes on this PC only: cloud speech is reachable only through the admission overload below.
     public TranscriptionResult Transcribe(CapturedAudio audio, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(audio);
         if (audio.IsEmpty) return TranscriptionResult.Empty;
 
         cancellationToken.ThrowIfCancellationRequested();
-
-        if (_maiClient is not null && _maiOptions?.Invoke() is { Enabled: true } maiOptions)
-        {
-            var maiAttempt = _maiClient.TryTranscribeAsync(audio, maiOptions, cancellationToken).GetAwaiter().GetResult();
-            if (maiAttempt.Succeeded)
-            {
-                return new TranscriptionResult(
-                    maiAttempt.Text,
-                    audio.Duration,
-                    maiAttempt.Elapsed,
-                    TranscriptionModelCatalog.MaiTranscribe2Id);
-            }
-
-            _logger.LogWarning(
-                "MAI-Transcribe-2 was unavailable ({Reason}); using the speech model on this PC.",
-                maiAttempt.DiagnosticReason);
-        }
 
         var waitStarted = Stopwatch.GetTimestamp();
         lock (_gate)
@@ -304,6 +293,67 @@ public sealed class TranscriptionService : ITranscriptionService
                 spans.Count, text.Length, (long)loadTime.TotalMilliseconds, (long)waited.TotalMilliseconds);
 
             return result;
+        }
+    }
+
+    public TranscriptionResult Transcribe(
+        CapturedAudio audio, TranscriptionAdmission admission, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(audio);
+        ArgumentNullException.ThrowIfNull(admission);
+        if (audio.IsEmpty) return TranscriptionResult.Empty;
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Cloud speech first, when the admission chose it and it answers; otherwise the speech model on this PC decodes the
+        // retained audio, whatever kept the cloud from answering.
+        return TryRecognizeInCloud(audio, admission, cancellationToken) ?? Transcribe(audio, cancellationToken);
+    }
+
+    // The cloud attempt, which can only add a result. Everything that can go wrong in deciding for it or making it (a client
+    // that throws, a service the admission cannot resolve) is logged by shape and the capture is decoded on this PC instead,
+    // so a cloud-only step can never cost a dictation that the speech model on this PC could have written. Only the caller's
+    // own cancellation leaves it.
+    private TranscriptionResult? TryRecognizeInCloud(
+        CapturedAudio audio, TranscriptionAdmission admission, CancellationToken cancellationToken)
+    {
+        if (_maiClient is null || _maiOptions is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (_maiOptions(admission) is not { Enabled: true } maiOptions)
+            {
+                return null;
+            }
+
+            var maiAttempt = _maiClient.TryTranscribeAsync(audio, maiOptions, cancellationToken).GetAwaiter().GetResult();
+            if (maiAttempt.Succeeded)
+            {
+                return new TranscriptionResult(
+                    maiAttempt.Text,
+                    audio.Duration,
+                    maiAttempt.Elapsed,
+                    TranscriptionModelCatalog.MaiTranscribe2Id);
+            }
+
+            _logger.LogWarning(
+                "MAI-Transcribe-2 was unavailable ({Reason}); using the speech model on this PC.",
+                maiAttempt.DiagnosticReason);
+            return null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                "MAI-Transcribe-2 could not be prepared or reached ({Failure}); using the speech model on this PC.",
+                Diagnostics.FailureShape.Describe(ex));
+            return null;
         }
     }
 

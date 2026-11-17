@@ -231,7 +231,7 @@ function New-ScribeMsix {
     <DisplayName>$displayName</DisplayName>
     <PublisherDisplayName>$publisherDisplay</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
-    <Description>Private, fully offline push-to-talk voice dictation for Windows.</Description>
+    <Description>Offline-first push-to-talk voice dictation with optional online features for Windows.</Description>
 
     <!-- No FileSystemWriteVirtualization exclusion, deliberately.
 
@@ -272,7 +272,7 @@ function New-ScribeMsix {
     <Application Id="Scribe" Executable="Scribe.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="$displayName"
-        Description="Private, fully offline push-to-talk voice dictation for Windows."
+        Description="Offline-first push-to-talk voice dictation with optional online features for Windows."
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">

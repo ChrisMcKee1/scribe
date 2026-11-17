@@ -116,6 +116,85 @@ public sealed class TextInjectorTests
         Assert.Equal(InjectionNativeMethods.KEYEVENTF_KEYUP, lastBatch[0].U.ki.dwFlags);
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void A_remainder_is_never_resent_to_a_window_that_took_focus_during_a_retry_sleep(int sleepThatMovesFocus)
+    {
+        // Every send is short, so the rest waits for a retry. Focus was right before each send and moves while the retry
+        // sleeps: what is left of the text is for the window that had focus, so it is not sent at all.
+        const nint Target = 0x1234;
+        var platform = new TextInjectionFakes.Platform { Foreground = Target, Deliver = (_, _) => 2u };
+        int sleeps = 0;
+        platform.OnSleep = _ =>
+        {
+            if (++sleeps == sleepThatMovesFocus)
+            {
+                platform.Foreground = 0x9999;
+            }
+        };
+        var injector = new TextInjector(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TextInjector>.Instance,
+            platform,
+            new TextInjectionFakes.Clipboard());
+
+        var result = injector.Inject("abcd", Models.InjectionMethod.UnicodeType, Target);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(2 * sleepThatMovesFocus, result.Sent);
+        Assert.Equal(sleepThatMovesFocus, platform.Batches.Count);
+        Assert.Equal(Enumerable.Repeat(12, sleepThatMovesFocus), platform.Sleeps);
+    }
+
+    [Fact]
+    public void A_remainder_is_still_resent_when_focus_stays_where_it_was()
+    {
+        const nint Target = 0x1234;
+        var platform = new TextInjectionFakes.Platform
+        {
+            Foreground = Target,
+            Deliver = (index, inputs) => index == 0 ? 2u : (uint)inputs.Length,
+        };
+        var injector = new TextInjector(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TextInjector>.Instance,
+            platform,
+            new TextInjectionFakes.Clipboard());
+
+        var result = injector.Inject("abcd", Models.InjectionMethod.UnicodeType, Target);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(8, result.Sent);
+        Assert.Equal([8, 6], platform.Batches.Select(batch => batch.Length));
+        Assert.Equal([12], platform.Sleeps);
+    }
+
+    [Fact]
+    public void The_shift_release_still_goes_out_when_focus_moved_during_the_retry_sleep_that_ended_the_text()
+    {
+        // The first send stops after Shift went down, and the user clicks another window while its retry sleeps. The key-up
+        // is not content for any window, so it is sent whatever has focus; the rest of the text is not.
+        const nint Target = 0x1234;
+        var platform = new TextInjectionFakes.Platform
+        {
+            Foreground = Target,
+            Deliver = (_, inputs) => inputs.Length == 1 ? 1u : 3u,
+        };
+        platform.OnSleep = _ => platform.Foreground = 0x9999;
+        var injector = new TextInjector(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TextInjector>.Instance,
+            platform,
+            new TextInjectionFakes.Clipboard());
+
+        var result = injector.Inject("a\nb", Models.InjectionMethod.UnicodeType, Target, shiftEnterLineBreaks: true);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(3, result.Sent);
+        Assert.Equal([8, 1], platform.Batches.Select(batch => batch.Length));
+        var release = Assert.Single(platform.Batches[1]).U.ki;
+        Assert.Equal(InjectionNativeMethods.VK_SHIFT, release.wVk);
+        Assert.Equal(InjectionNativeMethods.KEYEVENTF_KEYUP, release.dwFlags);
+    }
+
     private static string Replay(string text, bool shiftEnter) =>
         text.Replace("\r\n", shiftEnter ? "\u21B5" : "\u23CE").Replace("\r", shiftEnter ? "\u21B5" : "\u23CE")
             .Replace("\n", shiftEnter ? "\u21B5" : "\u23CE");

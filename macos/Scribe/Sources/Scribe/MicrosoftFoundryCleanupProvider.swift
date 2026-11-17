@@ -170,7 +170,8 @@ final class MicrosoftFoundryCleanupProvider: CleanupProvider {
                     cleanedText: completion.text,
                     latency: completion.latency,
                     providerID: id,
-                    modelID: deployment)
+                    modelID: deployment,
+                    ending: completion.ending)
             } catch let error as CleanupProviderError {
                 if !promptCachingEnabled(), Self.namesField(Self.promptCacheField, in: error) {
                     throw error

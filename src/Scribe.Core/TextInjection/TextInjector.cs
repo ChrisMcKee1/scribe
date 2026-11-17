@@ -12,7 +12,9 @@ namespace Scribe.Core.TextInjection;
 /// on a dedicated STA thread, with small delays so the target app reads the clipboard before it is
 /// restored. Falls back to Unicode keystroke typing whenever no paste can have fired, and exposes typing
 /// directly via <see cref="InjectionMethod.UnicodeType"/>. A Remote Desktop or virtual machine client is always
-/// typed into, never pasted into, whatever the method asked for (see <see cref="TypingPace"/>).
+/// typed into, never pasted into, whatever the method asked for (see <see cref="TypingPace"/>). A standard edit control
+/// that was sent the text and did not answer in time may already hold it, so it is neither pasted nor typed into as well
+/// (<see cref="StandardEditInsertion.Unconfirmed"/>).
 /// </summary>
 public sealed class TextInjector : ITextInjector
 {
@@ -150,10 +152,18 @@ public sealed class TextInjector : ITextInjector
             return FocusChanged(text.Length);
         }
 
-        if (_platform.TryInsertIntoStandardEdit(text, expectedForegroundWindow))
+        switch (_platform.InsertIntoStandardEdit(text, expectedForegroundWindow))
         {
-            ReportInjection(activity, "win32-edit", text.Length, text.Length, fallback: false);
-            return new InjectionResult(true, "win32-edit", text.Length, text.Length);
+            case StandardEditInsertion.Inserted:
+                ReportInjection(activity, "win32-edit", text.Length, text.Length, fallback: false);
+                return new InjectionResult(true, "win32-edit", text.Length, text.Length);
+
+            case StandardEditInsertion.Unconfirmed:
+                // The control was sent the text and did not answer in time. It can change its text before it answers, so
+                // the text may already be there, and pasting or typing it as well could put it in twice. Nothing is sent
+                // again: the insertion is reported as unconfirmed and the dictation stays copyable (DictationInsertion
+                // keeps it first). A refusal (Declined) sent nothing, and falls through to the paste or typing as before.
+                return StandardEditUnconfirmed(activity, text.Length);
         }
 
         // Read once, from the layout of the window about to receive the keys (see InjectionKeys).
@@ -222,6 +232,21 @@ public sealed class TextInjector : ITextInjector
             Paste = paste.Delivery,
             ClipboardRestore = paste.Restore,
         };
+    }
+
+    // An insertion into a standard edit control that was sent the text and did not answer in time: the text may already be
+    // there, so it was neither pasted nor typed as well. Reported as not delivered, with nothing counted as accepted: the
+    // control may hold all of the text, none of it, or get it later, and the count says only what was confirmed. It is the
+    // failed result every incomplete insertion gets, so the dictation stays copyable, but its error is the one the shell maps
+    // to a notice that says to check the app before copying (InjectionResult.DeliveryUnconfirmedError); the method says where
+    // the text was sent.
+    private InjectionResult StandardEditUnconfirmed(Activity? activity, int total)
+    {
+        _logger.LogWarning(
+            "An edit control did not answer the insertion in time; the text was neither pasted nor typed as well, " +
+            "because it may already be there.");
+        ReportInjection(activity, "win32-edit", 0, total, fallback: false, incomplete: InjectionResult.DeliveryUnconfirmedError);
+        return new InjectionResult(false, "win32-edit", 0, total, InjectionResult.DeliveryUnconfirmedError);
     }
 
     /// <summary>The error of a paste that went through while the space typed after it did not all arrive.</summary>
@@ -382,8 +407,10 @@ public sealed class TextInjector : ITextInjector
     private bool IsExpectedForeground(nint expected) =>
         expected == 0 || _platform.GetForegroundWindow() == expected;
 
-    // Runs after text may already have reached the target, so it must not throw (see TryStop).
-    private static void ReportInjection(Activity? activity, string method, int sent, int total, bool fallback)
+    // Runs after text may already have reached the target, so it must not throw (see TryStop). An incomplete insertion is
+    // described as a partial SendInput unless the caller says what it was.
+    private static void ReportInjection(
+        Activity? activity, string method, int sent, int total, bool fallback, string? incomplete = null)
     {
         if (activity is null)
         {
@@ -403,7 +430,7 @@ public sealed class TextInjector : ITextInjector
             // mark the span as an error so it stands out in the log and any OTLP backend.
             if (!complete)
             {
-                activity.SetStatus(ActivityStatusCode.Error, $"SendInput delivered {sent}/{total} events.");
+                activity.SetStatus(ActivityStatusCode.Error, incomplete ?? $"SendInput delivered {sent}/{total} events.");
             }
         }
         catch (Exception)
@@ -943,6 +970,9 @@ public sealed class TextInjector : ITextInjector
 
     // Sends a batch, resending only the unsent remainder when SendInput reports a short count (the
     // input stream was momentarily blocked by other input). Returns how many events were delivered.
+    // With an expected window, the remainder is content for that window, so focus is judged again immediately before every
+    // resend and never carried over from before the retry sleep. Without one (the key-ups that end a chord) nothing is
+    // judged: a Shift or Ctrl left down is worse than a key-up that lands in another window.
     private int SendWithRetry(
         ReadOnlySpan<INPUT> inputs, InjectionTimingMeasurement? timing, nint expectedForegroundWindow = 0)
     {
@@ -961,9 +991,7 @@ public sealed class TextInjector : ITextInjector
 
             if (!IsExpectedForeground(expectedForegroundWindow))
             {
-                _logger.LogWarning(
-                    "SendInput stopped at {Offset}/{Total} events because the focused window changed.",
-                    offset, inputs.Length);
+                LogStoppedForFocus(offset, inputs.Length);
                 break;
             }
 
@@ -975,10 +1003,22 @@ public sealed class TextInjector : ITextInjector
             }
 
             Sleep(ChunkRetryDelayMs, timing, InjectionWait.Retry);
+
+            // Focus can move during the sleep, and the check above came before it.
+            if (!IsExpectedForeground(expectedForegroundWindow))
+            {
+                LogStoppedForFocus(offset, inputs.Length);
+                break;
+            }
         }
 
         return offset;
     }
+
+    private void LogStoppedForFocus(int offset, int total) =>
+        _logger.LogWarning(
+            "SendInput stopped at {Offset}/{Total} events because the focused window changed.",
+            offset, total);
 
     // True when a delivered prefix ended between a shifted line break's Shift-down and its Shift-up.
     internal static bool LeavesShiftDown(ReadOnlySpan<INPUT> delivered)

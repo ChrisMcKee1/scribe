@@ -2,9 +2,38 @@ using Scribe.Core.Infrastructure;
 
 namespace Scribe.Core.Libraries;
 
+/// <summary>
+/// What recovery did with one manifest it acted on (<see cref="LibraryRecoveryOutcome.Fates"/>), which the stored generation
+/// alone cannot tell: a manifest at the committed generation is resumed and retired, left unresolved, or set aside unapplied.
+/// </summary>
+internal enum LibraryManifestFate
+{
+    /// <summary>Resumed and retired: every operation done, so what it prepared is installed.</summary>
+    Completed,
+
+    /// <summary>Resumed, not finished (a file waits for release): committed, read logically, installed once it can be.</summary>
+    Unresolved,
+
+    /// <summary>Above the stored generation, so it never committed: discarded, nothing of it installed.</summary>
+    Discarded,
+
+    /// <summary>
+    /// Quarantined unapplied: below the stored generation, a duplicate of it, unreadable, with a redo image that is missing
+    /// or fails its hash, or any manifest while the generation row is lost. Nothing of it was installed, even when its
+    /// generation is the committed one.
+    /// </summary>
+    SetAside,
+}
+
 /// <summary>What one recovery attempt did (contract 6.6.6 and 6.6.7).</summary>
 internal sealed class LibraryRecoveryOutcome
 {
+    /// <summary>
+    /// What this attempt did with each manifest it finished, discarded or set aside, by manifest id (case-insensitive). A
+    /// manifest it left held, or could not read, has no entry. In memory only: nothing of it is written to disk.
+    /// </summary>
+    public Dictionary<string, LibraryManifestFate> Fates { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     public int Completed { get; set; }
 
     public int Discarded { get; set; }
@@ -566,6 +595,7 @@ internal sealed class LibraryJournal
                 if (SetAsideUnreadable(name, now, out var failure))
                 {
                     outcome.SetAside++;
+                    outcome.Fates[name.ManifestId] = LibraryManifestFate.SetAside;
                 }
                 else
                 {
@@ -604,12 +634,14 @@ internal sealed class LibraryJournal
                 if (completion.Retired)
                 {
                     outcome.Completed++;
+                    outcome.Fates[name.ManifestId] = LibraryManifestFate.Completed;
                 }
                 else
                 {
                     outcome.Unresolved = manifest;
                     outcome.FilesAwaitingRelease += Math.Max(1, completion.Pending);
                     outcome.NoteFailure(completion.Failure);
+                    outcome.Fates[name.ManifestId] = LibraryManifestFate.Unresolved;
                 }
 
                 continue;
@@ -620,6 +652,7 @@ internal sealed class LibraryJournal
                 if (Discard(manifest, kept, out var discardFailure))
                 {
                     outcome.Discarded++;
+                    outcome.Fates[name.ManifestId] = LibraryManifestFate.Discarded;
                 }
                 else
                 {
@@ -633,6 +666,7 @@ internal sealed class LibraryJournal
             if (SetAside(manifest, now, kept, out var setAsideFailure))
             {
                 outcome.SetAside++;
+                outcome.Fates[name.ManifestId] = LibraryManifestFate.SetAside;
             }
             else
             {

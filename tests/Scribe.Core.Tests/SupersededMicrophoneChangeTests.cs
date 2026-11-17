@@ -144,6 +144,44 @@ public sealed class SupersededMicrophoneChangeTests : IDisposable
     }
 
     [Fact]
+    public void A_save_that_captured_its_microphone_intent_before_a_newer_tray_choice_committed_keeps_the_trays_choice()
+    {
+        // The window's Save captured its intent, USB, then waited for a confirmation; the tray picked Yeti, a newer intent,
+        // and that write committed. The Save's older choice must not land over it.
+        var windowIntent = ExternalSwitchSync.NextRevision();
+        var trayChoice = ExternalSwitchSync.NextRevision();
+        _settings.Update(Yeti.ApplyTo, ExternalSetting.Microphone, trayChoice, out var superseded);
+        Assert.False(superseded);
+        var window = new AppSettings { HistoryRetentionDays = 30 };
+        Usb.ApplyTo(window);
+
+        _settings.SaveBundle(window, null, null, new ExternalIntents(0, Microphone: windowIntent));
+
+        var stored = _settings.Load();
+        Assert.Equal(Yeti, MicrophoneSelection.From(stored));
+        Assert.Equal(30, stored.HistoryRetentionDays);
+        Assert.Equal(Yeti, MicrophoneSelection.From(window));
+    }
+
+    [Fact]
+    public void A_stale_intent_for_one_setting_never_keeps_the_stored_value_of_the_other()
+    {
+        // The tray turned the AI switch off after the Save captured its intents, and the window's microphone intent is
+        // current: the stale AI intent keeps the opt-out, and the microphone is still the window's choice.
+        _settings.Save(new AppSettings { EnableAiCleanup = true });
+        var staleAiIntent = ExternalSwitchSync.NextRevision();
+        _settings.Update(s => s.EnableAiCleanup = false, ExternalSwitchSync.NextRevision(), out _);
+        var window = new AppSettings { EnableAiCleanup = true };
+        Usb.ApplyTo(window);
+
+        _settings.SaveBundle(window, null, null, new ExternalIntents(AiCleanup: staleAiIntent, Microphone: ExternalSwitchSync.NextRevision()));
+
+        var stored = _settings.Load();
+        Assert.False(stored.EnableAiCleanup);
+        Assert.Equal(Usb, MicrophoneSelection.From(stored));
+    }
+
+    [Fact]
     public async Task The_lane_reports_a_microphone_change_a_save_accounted_for_as_superseded()
     {
         var lane = new SettingsWriteLane(_settings, callback => callback());

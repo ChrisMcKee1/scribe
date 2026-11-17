@@ -40,13 +40,17 @@ public sealed class VocabularyApplicationSourceTests
         // said to have saved the settings without them applying yet, and the window stays open with that.
         var save = Body(window, "private async Task<bool> TrySaveAsync()");
         var protocol = Read("src", "Scribe.Core", "Settings", "WordPackSaveProtocol.cs");
-        var apply = protocol.IndexOf("request.ApplySettings()", StringComparison.Ordinal);
+        var apply = protocol.IndexOf("ApplyForAcknowledgement(request)", StringComparison.Ordinal);
         var awaited = protocol.IndexOf("var outcome = await acknowledgement.CompleteAsync()", StringComparison.Ordinal);
         var notApplied = protocol.IndexOf("StoredChangeOutcome.NotInUseYet", StringComparison.Ordinal);
         var succeeded = save.LastIndexOf("return result.Success;", StringComparison.Ordinal);
         Assert.True(
             apply > 0 && apply < awaited && awaited < notApplied && succeeded > 0,
             "A Save is reported before dictation can use what it stored.");
+        var application = Body(protocol, "private StoredSettingsReapplyResult ApplyForAcknowledgement(");
+        Assert.Contains("var application = request.ApplySettings();", application, StringComparison.Ordinal);
+        Assert.Contains("return application;", application, StringComparison.Ordinal);
+        Assert.Contains("StoredChangeAcknowledgement.Watch(application.Vocabulary, Draft)", protocol, StringComparison.Ordinal);
         Assert.Contains("VocabularyNotice.SavedButNotApplied(\"Changes saved\")", protocol[notApplied..], StringComparison.Ordinal);
         Assert.Contains("if (await ConfirmDictionaryOverlapAsync() && await TrySaveAsync())", Body(window, "private async void SaveButton_Click("), StringComparison.Ordinal);
 
@@ -138,8 +142,8 @@ public sealed class VocabularyApplicationSourceTests
         var signatures = save.IndexOf("var dictionarySignature = DictionarySignature();", StringComparison.Ordinal);
         var capture = protocol.IndexOf("var savedDraft = request.CaptureDraft();", StringComparison.Ordinal);
         var read = save.IndexOf("_externalMicrophone.ForSave(ShownMicrophone).ApplyTo(_settings);", StringComparison.Ordinal);
-        var apply = protocol.IndexOf("request.ApplySettings()", StringComparison.Ordinal);
-        var watch = protocol.IndexOf("StoredChangeAcknowledgement.Watch(request.ApplySettings(), Draft)", StringComparison.Ordinal);
+        var apply = protocol.IndexOf("ApplyForAcknowledgement(request)", StringComparison.Ordinal);
+        var watch = protocol.IndexOf("StoredChangeAcknowledgement.Watch(application.Vocabulary, Draft)", StringComparison.Ordinal);
         var awaited = protocol.IndexOf("var outcome = await acknowledgement.CompleteAsync()", StringComparison.Ordinal);
         Assert.True(
             signatures > 0 && read > signatures && capture > 0 && capture < watch && apply < awaited && watch < awaited,

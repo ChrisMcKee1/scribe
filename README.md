@@ -7,7 +7,7 @@
 **Private, offline push-to-talk dictation for Windows 11.**
 
 Hold a key, speak, and let go: punctuated text appears in whatever app you're using.<br />
-Speech recognition runs on your PC, and your audio never leaves it.
+Speech recognition runs on your PC by default. Optional MAI-Transcribe-2 sends audio to Microsoft Foundry when you select it.
 
 <a href="https://apps.microsoft.com/detail/9N2P0SG059TJ?hl=en-us&amp;gl=US&amp;ocid=pdpshare">
   <img src="https://get.microsoft.com/images/en-us%20dark.svg" alt="Get Scribe AI from the Microsoft Store" width="200" />
@@ -21,7 +21,7 @@ Free · Signed by Microsoft · Updated by the Store · For Intel, AMD and Arm PC
 
 ## Why Scribe
 
-- **Private.** Your audio is recognized on your PC and then discarded. It is never uploaded, and it's kept
+- **Private by default.** With a local speech model, your audio is recognized on your PC and then discarded. It is not uploaded, and it's kept
   only if you turn on audio history, on your PC, for at most 7 days and 250 MB. There's no Scribe account
   and no advertising.
 - **Offline.** The speech model, NVIDIA Parakeet, comes with Scribe and recognizes about 25 European
@@ -383,11 +383,16 @@ samples included, and how to reproduce them.
 
 ## Privacy
 
-- **Audio never leaves your PC.** It's recognized on your PC and discarded, unless you turn on audio
+- **Local speech keeps audio on your PC.** It's recognized on your PC and discarded, unless you turn on audio
   history, which keeps recordings on your PC for at most 7 days and 250 MB.
-- **Speech recognition is local:** Parakeet runs on your CPU through
+- **Cloud speech is an explicit choice.** Selecting MAI-Transcribe-2 sends each dictation's audio and up to
+  500 phrases from your dictionary and AI-permitted word packs to your configured Microsoft Foundry resource.
+  It is available in direct installs, or in Store installs with `MaiTranscribeSpeech` enabled.
+  See the [setup guide](docs/mai-transcribe-setup.md) and [privacy policy](PRIVACY.md). Turning AI cleanup
+  off does not turn cloud speech off; select a local speech model to keep audio on your PC.
+- **Local speech recognition:** Parakeet runs on your CPU through
   [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx).
-- **AI cleanup is optional, and goes where you choose.** On this PC, with Scribe's own model, Ollama, LM
+- **AI cleanup is optional, and goes where you choose.** AI cleanup never sends audio. On this PC, with Scribe's own model, Ollama, LM
   Studio or TensorSharp, your text, instructions and vocabulary stay on your PC. With Microsoft Foundry, GitHub Copilot or another AI
   service, each cleanup request sends the text Scribe recognized for that dictation (never audio), Scribe's
   cleanup instructions with your writing style, and the words from your dictionary plus the word packs you

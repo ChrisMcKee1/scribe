@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 
 /// How long dictation text is kept: a number of days, or forever. Mirrors Windows
 /// `AppSettings.HistoryRetentionDays`, which stores forever as 0.
@@ -323,7 +322,6 @@ final class StorageMaintenance: @unchecked Sendable {
     private let now: @Sendable () -> Date
     private let uptime: @Sendable () -> TimeInterval
     private let queue = DispatchQueue(label: "com.scribe.macos.storage-maintenance", qos: .utility)
-    private let logger = Logger(subsystem: "com.scribe.macos", category: "StorageMaintenance")
 
     // Guarded by `stateLock`.
     private let stateLock = NSLock()
@@ -605,17 +603,12 @@ final class StorageMaintenance: @unchecked Sendable {
             checkpointOwed = true
             let reclaimOutcome = reclaim()
             let checkpointOutcome = checkpointIfOwed()
-            logger.info(
-                """
-                Cleared \(removed) history entries; reclaim \(Self.describe(reclaimOutcome), privacy: .public); \
-                checkpoint \(Self.describe(checkpointOutcome), privacy: .public).
-                """
-            )
+            var fields: [ScribeLog.Field] = [.count("removed", removed)]
+            fields += Self.fields(reclaimOutcome)
+            fields += Self.fields(checkpointOutcome)
+            ScribeLog.log(.info, .persistence, "Cleared history", fields)
         case .failure(let error):
-            let code = Self.code(of: error)
-            let errorType = String(describing: type(of: error))
-            logger.warning(
-                "Clear history failed (\(errorType, privacy: .public), SQLite \(code)); nothing was cleared.")
+            ScribeLog.warning(.persistence, "Clear history failed; nothing was cleared", .failure(error))
         }
         // What stood aside for the Clear runs now, whatever became of it: after a failed Clear nothing else would ask
         // for it until the next day. A whole pass checkpoints too. Both requests do nothing once shutdown has begun.
@@ -792,8 +785,8 @@ final class StorageMaintenance: @unchecked Sendable {
         let after = try store.pageStats()
         if after.autoVacuum != 2 {
             conversionBlocked = true
-            logger.warning(
-                "Storage maintenance compacted the database, but it did not switch to incremental auto-vacuum.")
+            ScribeLog.warning(
+                .persistence, "Storage maintenance compacted the database but did not switch to incremental vacuum")
         }
         return .completed(.convertedToIncremental, freedPages: max(0, freePages - after.freePages))
     }
@@ -966,9 +959,6 @@ final class StorageMaintenance: @unchecked Sendable {
     // MARK: - Logging (shapes only)
 
     private func log(_ report: StorageMaintenanceReport) {
-        let retentionText = Self.describe(report.retention)
-        let reclaimText = Self.describe(report.reclaim)
-        let checkpointText = Self.describe(report.checkpoint)
         let eventful: Bool
         switch (report.retention, report.reclaim, report.checkpoint) {
         case (.applied(_, let removed), _, _) where removed > 0:
@@ -980,71 +970,50 @@ final class StorageMaintenance: @unchecked Sendable {
             eventful = false
         }
 
-        if eventful {
-            logger.info(
-                """
-                Storage maintenance: retention \(retentionText, privacy: .public); \
-                reclaim \(reclaimText, privacy: .public); checkpoint \(checkpointText, privacy: .public).
-                """
-            )
-        } else {
-            logger.debug(
-                """
-                Storage maintenance: retention \(retentionText, privacy: .public); \
-                reclaim \(reclaimText, privacy: .public); checkpoint \(checkpointText, privacy: .public).
-                """
-            )
-        }
+        var fields = Self.fields(report.retention)
+        fields += Self.fields(report.reclaim)
+        fields += Self.fields(report.checkpoint)
+        ScribeLog.log(eventful ? .info : .debug, .persistence, "Storage maintenance pass finished", fields)
     }
 
-    private static func describe(_ retention: StorageMaintenanceReport.Retention) -> String {
+    /// Each outcome as its case name and the numbers it carries, never text.
+    private static func fields(_ retention: StorageMaintenanceReport.Retention) -> [ScribeLog.Field] {
+        let outcome = ScribeLog.Field.name("retention", retention)
         switch retention {
         case .notRun:
-            return "not run"
+            return [outcome]
         case .applied(let days, let removed):
-            return "\(days) days, removed \(removed)"
+            return [outcome, .integer("retentionDays", days), .count("retentionRemoved", removed)]
         case .kept(let reason):
-            return "kept everything (\(reason.rawValue))"
+            return [outcome, .name("retentionKept", reason)]
         case .superseded(let removed):
-            return "stopped for a changed choice after removing \(removed)"
+            return [outcome, .count("retentionRemoved", removed)]
         case .failed(let removed, let code):
-            return "failed with SQLite \(code) after removing \(removed)"
+            return [outcome, .count("retentionRemoved", removed), .integer("retentionSqlite", code)]
         }
     }
 
-    private static func describe(_ reclaim: StorageMaintenanceReport.Reclaim) -> String {
+    private static func fields(_ reclaim: StorageMaintenanceReport.Reclaim) -> [ScribeLog.Field] {
+        let outcome = ScribeLog.Field.name("reclaim", reclaim)
         switch reclaim {
-        case .notRun:
-            return "not run"
-        case .notNeeded:
-            return "not needed"
-        case .deferredForActivity:
-            return "deferred for activity"
+        case .notRun, .notNeeded, .deferredForActivity, .yielded, .outOfTime:
+            return [outcome]
         case .completed(let method, let freedPages):
-            return "\(method.rawValue), freed \(freedPages) pages"
-        case .yielded:
-            return "yielded"
-        case .outOfTime:
-            return "stopped at its time budget"
+            return [outcome, .name("reclaimMethod", method), .integer("reclaimFreedPages", freedPages)]
         case .failed(let code):
-            return "failed with SQLite \(code)"
+            return [outcome, .integer("reclaimSqlite", code)]
         }
     }
 
-    private static func describe(_ checkpoint: StorageMaintenanceReport.Checkpoint) -> String {
+    private static func fields(_ checkpoint: StorageMaintenanceReport.Checkpoint) -> [ScribeLog.Field] {
+        let outcome = ScribeLog.Field.name("checkpoint", checkpoint)
         switch checkpoint {
-        case .notRun:
-            return "not run"
-        case .notNeeded:
-            return "not needed"
-        case .completed:
-            return "completed"
+        case .notRun, .notNeeded, .completed, .deferredForActivity:
+            return [outcome]
         case .busy(let retryIn):
-            return "busy, retry in \(Int(retryIn)) s"
-        case .deferredForActivity:
-            return "deferred for activity"
+            return [outcome, .integer("checkpointRetryInSeconds", Int(retryIn))]
         case .failed(let code):
-            return "failed with SQLite \(code)"
+            return [outcome, .integer("checkpointSqlite", code)]
         }
     }
 

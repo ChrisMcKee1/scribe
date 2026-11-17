@@ -1561,7 +1561,7 @@ internal sealed partial class TextCleanupService
      * the readiness check's failure, or null, and the context the test found.
      */
     private async Task<(AgentProbeFailure? Failure, int ContextTokens)> TestLmStudioAtSizeAsync(
-        CleanupOptions candidate, Func<string, AIAgent> factory, CancellationToken ct)
+        CleanupOptions candidate, Func<string, AIAgent> factory, WireNegotiation negotiation, CancellationToken ct)
     {
         var endpoint = candidate.CustomEndpoint!;
         var model = candidate.CustomModel!;
@@ -1652,7 +1652,9 @@ internal sealed partial class TextCleanupService
             // barrier, which a second use refuses.
             _lmStudioLane.Release();
             laneReleased = true;
-            return (await ProbeAgentAsync(candidate, factory, ct, withinUse: true).ConfigureAwait(false), context);
+            var failure = await ProbeAgentAsync(candidate, factory, ct, withinUse: true, negotiation: negotiation)
+                .ConfigureAwait(false);
+            return (failure, context);
         }
         finally
         {

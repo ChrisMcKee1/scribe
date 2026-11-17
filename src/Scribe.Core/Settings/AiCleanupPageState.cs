@@ -110,6 +110,7 @@ public enum AzureSetupResult
     SignedIn,
     ListingModels,
     ListingFailed,
+    ModelsPartiallyListed,
     Verifying,
     ApiKeyIncomplete,
     ApiKeyComplete,
@@ -163,8 +164,41 @@ public sealed record AiCleanupPageDescription(
     string? OffHelperText,
     AiCleanupStatusRow? StatusRow);
 
+public sealed record AzureCredentialPresentation(
+    bool ShowCard,
+    bool ShowCleanupChoices,
+    bool ShowAzure,
+    bool ShowOtherSetup,
+    AiCleanupStatusRow? StatusRow);
+
 public static class AiCleanupPageState
 {
+    public static AzureCredentialPresentation Credentials(
+        bool cleanupEnabled,
+        CleanupProvider provider,
+        bool revealSpeechCredentials,
+        AzureAiSetupState setup)
+    {
+        var showAzure = revealSpeechCredentials || (cleanupEnabled && provider == CleanupProvider.AzureFoundry);
+        return new(cleanupEnabled || revealSpeechCredentials, cleanupEnabled, showAzure,
+            cleanupEnabled, showAzure ? AzureRow(setup) : null);
+    }
+
+    public static AzureAiSetupState? AzureModelListing(int deploymentCount, int failedTenantCount)
+    {
+        if (deploymentCount > 0)
+        {
+            return failedTenantCount > 0
+                ? new(AzureSetupResult.ModelsPartiallyListed,
+                    SafeReason: $"Found {deploymentCount} compatible model(s). Some organizations couldn't be checked.")
+                : null;
+        }
+
+        return new(AzureSetupResult.ListingFailed, SafeReason: failedTenantCount > 0
+            ? "Check access to the selected organizations and subscriptions."
+            : "No compatible models were returned. Check the subscription and your access to its models.");
+    }
+
     public static AiCleanupPageDescription Describe(
         AppSettings savedSettings,
         AppSettings draftSettings,
@@ -186,7 +220,8 @@ public static class AiCleanupPageState
             return DescribeOff(savedSetupState, providerSummary ?? ProviderName(savedSettings.AiCleanupProvider));
         }
 
-        var savedAndActive = RemoteActivityPolicy.IsSavedAndActive(savedSettings, draftSettings);
+        var savedAndActive = RemoteActivityPolicy.IsSavedAndActive(savedSettings, draftSettings,
+            azureSetup?.ApiKeySelected == true);
         var row = DraftStatusRow(
             draftSettings.AiCleanupProvider,
             foundrySetup,
@@ -439,6 +474,7 @@ public static class AiCleanupPageState
         AzureSetupResult.SignedIn => new(AiCleanupStatusKind.Success, string.IsNullOrWhiteSpace(setup.Account) ? "Signed in." : $"Signed in as {setup.Account}.", new(AiCleanupActionId.RefreshModels, "Refresh models")),
         AzureSetupResult.ListingModels => new(AiCleanupStatusKind.Busy, "Finding your models..."),
         AzureSetupResult.ListingFailed => new(AiCleanupStatusKind.Error, $"Couldn't list your models. {setup.SafeReason ?? "Try again."}", new(AiCleanupActionId.TryAgain, "Try again")),
+        AzureSetupResult.ModelsPartiallyListed => new(AiCleanupStatusKind.Warning, setup.SafeReason ?? "Some organizations couldn't be checked.", new(AiCleanupActionId.RefreshModels, "Refresh models")),
         AzureSetupResult.Verifying => new(AiCleanupStatusKind.Busy, "Testing the connection..."),
         AzureSetupResult.ApiKeyIncomplete or AzureSetupResult.ServicePrincipalIncomplete => new(AiCleanupStatusKind.Info, "Fill in the details above, then choose Test connection.", new(AiCleanupActionId.TestConnection, "Test connection", IsEnabled: false)),
         AzureSetupResult.ApiKeyComplete or AzureSetupResult.ServicePrincipalComplete => new(AiCleanupStatusKind.Info, "Not tested yet.", new(AiCleanupActionId.TestConnection, "Test connection")),

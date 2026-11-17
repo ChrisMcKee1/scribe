@@ -43,22 +43,23 @@ public interface ISettingsRepository
     /// <summary>
     /// <see cref="Update(Action{AppSettings})"/> for a change asked for outside the settings window, the tray's AI
     /// cleanup switch, with the revision it took when the user asked for it
-    /// (<see cref="Scribe.Core.Settings.ExternalSwitchSync.NextRevision"/>). When a whole-document save whose intent
-    /// for the switch is at least as new (<see cref="SaveBundle"/>) has already committed, the change is superseded:
-    /// nothing is written, and the settings as stored come back with <paramref name="superseded"/> set. Otherwise it
-    /// is exactly <see cref="Update(Action{AppSettings})"/>. Every settings write in this process runs whole under one
-    /// lock, and the check is made inside the transaction the change would be written in, so no save can land between
-    /// the check and the write.
+    /// (<see cref="Scribe.Core.Settings.ExternalSwitchSync.NextRevision"/>). When a committed write has already carried an
+    /// intent for the switch at least as new (a whole-document save, <see cref="SaveBundle"/>, or a later change of the
+    /// switch whose write committed), the change is superseded: nothing is written, and the settings as stored come back
+    /// with <paramref name="superseded"/> set. Otherwise it is exactly <see cref="Update(Action{AppSettings})"/>, and once
+    /// it has committed its revision is the newest intent for the switch. Every settings write in this process runs whole
+    /// under one lock, and the check is made inside the transaction the change would be written in, so no save can land
+    /// between the check and the write.
     /// </summary>
     AppSettings Update(Action<AppSettings> mutate, long revision, out bool superseded);
 
     /// <summary>
     /// <see cref="Update(Action{AppSettings}, long, out bool)"/> for any setting the tray can change, checked against that
-    /// setting's own record of intent: a committed whole-document save (<see cref="SaveBundle"/> with
-    /// <see cref="ExternalIntents"/>) whose intent for <paramref name="setting"/> is at least <paramref name="revision"/>
-    /// supersedes the change, and an intent for another setting never does. This default checks only the AI cleanup
-    /// switch and treats any other setting as an unchecked <see cref="Update(Action{AppSettings})"/>;
-    /// <see cref="SettingsRepository"/> checks every one.
+    /// setting's own record of intent: a committed write (a whole-document save, <see cref="SaveBundle"/> with
+    /// <see cref="ExternalIntents"/>, or a later change of the setting) whose intent for <paramref name="setting"/> is at
+    /// least <paramref name="revision"/> supersedes the change, and an intent for another setting never does. This default
+    /// checks only the AI cleanup switch and treats any other setting as an unchecked
+    /// <see cref="Update(Action{AppSettings})"/>; <see cref="SettingsRepository"/> checks every one.
     /// </summary>
     AppSettings Update(Action<AppSettings> mutate, ExternalSetting setting, long revision, out bool superseded)
     {
@@ -78,9 +79,11 @@ public interface ISettingsRepository
     /// Once the save commits, every tray change up to it is superseded
     /// (<see cref="Update(Action{AppSettings}, long, out bool)"/>). Zero means the window has no intent, so its switch
     /// may be older than what is stored: the stored value is kept, and <paramref name="settings"/> takes it once the
-    /// save has succeeded, so the caller shows and applies what is stored. The microphone is written as given. Once
-    /// library state is stored, the enabled-library list is kept as stored as well (and <paramref name="settings"/>
-    /// takes it), because only a save with a library payload may change it.
+    /// save has succeeded, so the caller shows and applies what is stored. So does an intent older than one a committed
+    /// write already carried for the switch (a tray change that committed while the save, which had captured its intent
+    /// earlier, waited for a confirmation): the window's value is then the older choice. The microphone is written as
+    /// given. Once library state is stored, the enabled-library list is kept as stored as well (and
+    /// <paramref name="settings"/> takes it), because only a save with a library payload may change it.
     /// </summary>
     void SaveBundle(
         AppSettings settings,
@@ -90,8 +93,9 @@ public interface ISettingsRepository
 
     /// <summary>
     /// The whole-document save above with the window's intent for every setting the tray can change. Each works as the AI
-    /// cleanup switch does there: zero keeps that setting's stored value (and <paramref name="settings"/> takes it once the
-    /// save has succeeded), and once the save commits every tray change to that setting up to its intent is superseded
+    /// cleanup switch does there: zero, or an intent older than one a committed write already carried for that setting,
+    /// keeps that setting's stored value (and <paramref name="settings"/> takes it once the save has succeeded), and once
+    /// the save commits every tray change to that setting up to its intent is superseded
     /// (<see cref="Update(Action{AppSettings}, ExternalSetting, long, out bool)"/>). This default passes on only the AI
     /// cleanup intent; <see cref="SettingsRepository"/> honors every one.
     /// </summary>

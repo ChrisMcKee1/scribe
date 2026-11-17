@@ -28,7 +28,10 @@ public enum PasteDelivery
     /// </summary>
     NonTextContent,
 
-    /// <summary>The clipboard reported text that could not be read, so it was left untouched.</summary>
+    /// <summary>
+    /// The clipboard reported text that could not be read, or its owner did not answer in time to be asked for it, so it
+    /// was left untouched.
+    /// </summary>
     SnapshotUnreadable,
 
     /// <summary>Scribe could not place its text on the clipboard.</summary>

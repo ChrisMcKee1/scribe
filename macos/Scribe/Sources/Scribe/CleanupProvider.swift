@@ -43,6 +43,26 @@ struct CleanupResponse: Sendable {
     let latency: TimeInterval
     let providerID: String
     let modelID: String
+    /// How the service said the answer ended. Defaulted so a provider that reports nothing, and a fake, gives an
+    /// answer taken as whole.
+    var ending: CleanupAnswerEnding = .finished
+}
+
+/// How a model's answer ended, as the service reported it. Only explicit evidence counts: an answer with no finish
+/// reason is taken as whole, because a missing field is also how valid services report a completed answer. A cut
+/// answer is the beginning of the cleaned text, so using it would drop the rest of what the person said.
+enum CleanupAnswerEnding: Sendable, Equatable {
+    case finished
+    /// The service stopped at its output limit: `finish_reason` or `done_reason` "length", or a Responses answer
+    /// that is incomplete.
+    case cutAtOutputLimit
+    /// The service withheld the rest of the answer (`finish_reason` "content_filter", or a Responses answer that is
+    /// incomplete because of its content filter).
+    case filtered
+
+    var isIncomplete: Bool {
+        self != .finished
+    }
 }
 
 /// Common surface every AI cleanup backend implements: Foundry Local, managed Ollama, any OpenAI-compatible endpoint

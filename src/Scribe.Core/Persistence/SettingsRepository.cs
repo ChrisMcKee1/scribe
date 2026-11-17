@@ -47,9 +47,13 @@ public sealed class SettingsRepository : ISettingsRepository
     // it, from the tray or in the Settings window, and a whole-document save never writes over a stored value its window
     // neither showed nor changed. So a save carries the revision of its window's newest intent for each of them (a change
     // there, or a tray change the window took; see ExternalChoiceSync) and, carrying none for one, keeps that stored
-    // value. A tray change is superseded by a committed save whose intent for the same setting is at least as new; an
-    // intent for another setting never supersedes it. These are the newest intents committed saves carried. They change
-    // only after that commit has succeeded, under the write lock, so no writer can ever act on a save that did not happen.
+    // value. These are the newest intent any committed write carried for each setting: a save's, or a tray change's own
+    // revision once its write committed. A tray change is superseded by a committed write whose intent for the same
+    // setting is at least as new; an intent for another setting never supersedes it. And a save whose intent is older
+    // than what is recorded keeps the stored value too: its window captured that intent before a newer change committed (a
+    // Save that waited for a confirmation while the tray changed the setting), so the value it carries is the older choice.
+    // They change only after that commit has succeeded, under the write lock, so no writer can ever act on a write that
+    // did not happen.
     private long _aiCleanupSavedThrough;
     private long _microphoneSavedThrough;
 
@@ -234,6 +238,14 @@ public sealed class SettingsRepository : ISettingsRepository
             ForgetLoss(connection, transaction);
             transaction.Commit();
             LastLoadFailed = false;
+
+            // Only now that the commit has succeeded, still under the write lock: a save that carries an older intent for
+            // this setting keeps what this change stored, and a still older change is superseded by it.
+            if (revision is { } written && setting is { } changed)
+            {
+                RecordSavedThrough(changed, written);
+            }
+
             return (settings, false);
         });
 
@@ -320,9 +332,11 @@ public sealed class SettingsRepository : ISettingsRepository
 
             // Without an intent for a setting, the window neither changed it nor took a tray change, so what it shows can
             // be older than what is stored: a tray change that committed before word of it reached the window. The stored
-            // value stays. With no readable document there is nothing to keep, and the window's value is saved.
-            var keepAiCleanup = aiCleanupIntent <= 0;
-            var keepMicrophone = microphoneIntent is <= 0;
+            // value stays. So it does for an intent older than one a committed write already carried: the window captured
+            // that intent before a newer change committed, and the value it carries is the older choice. With no readable
+            // document there is nothing to keep, and the window's value is saved.
+            var keepAiCleanup = KeepsStored(ExternalSetting.AiCleanup, aiCleanupIntent);
+            var keepMicrophone = microphoneIntent.HasValue && KeepsStored(ExternalSetting.Microphone, microphoneIntent.Value);
 
             // The document's enabled-library list is the library state's projection, and once that state is stored the
             // list is written only with it (review finding A17): a save that carries no list keeps the stored one.
@@ -586,15 +600,16 @@ public sealed class SettingsRepository : ISettingsRepository
     }
 
     /// <summary>
-    /// Records the AI cleanup intent a committed save carried, keeping the newest. Tests call it to stand for such a save.
+    /// Records the AI cleanup intent a committed write carried, keeping the newest. Tests call it to stand for such a save.
     /// Only on a thread that holds the write lock, as inside a <see cref="WriteStep"/> callback.
     /// </summary>
     internal void RecordSavedThrough(long revision) => RecordSavedThrough(ExternalSetting.AiCleanup, revision);
 
     /// <summary>
-    /// Records the intent a committed save carried for one setting, keeping the newest. <see cref="SaveBundleCore"/>
-    /// calls it once its commit has succeeded; tests call it to stand for such a save. Only on a thread that holds the
-    /// write lock, as inside a <see cref="WriteStep"/> callback.
+    /// Records the intent a committed write carried for one setting, keeping the newest: a save's intent, or the revision of
+    /// a tray change whose write committed. <see cref="SaveBundleCore"/> and <see cref="UpdateCore"/> call it once their
+    /// commit has succeeded; tests call it to stand for such a write. Only on a thread that holds the write lock, as inside
+    /// a <see cref="WriteStep"/> callback.
     /// </summary>
     internal void RecordSavedThrough(ExternalSetting setting, long revision)
     {
@@ -616,6 +631,11 @@ public sealed class SettingsRepository : ISettingsRepository
         ExternalSetting.Microphone => _microphoneSavedThrough,
         _ => 0,
     };
+
+    // Caller holds the write lock. Whether a whole-document save carrying this intent leaves the stored value for the
+    // setting alone: it carries none, or its intent is older than the newest a committed write carried for the setting.
+    // An intent as new as that one is the window's own choice or the very tray change that committed, and is written.
+    private bool KeepsStored(ExternalSetting setting, long intent) => intent <= 0 || intent < SavedThrough(setting);
 
     // The microphone is one choice: its endpoint ID and the name it had when chosen, the ID blank for the Windows default.
     private static bool SameMicrophone(AppSettings a, AppSettings b) =>

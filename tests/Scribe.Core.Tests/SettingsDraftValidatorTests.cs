@@ -1,11 +1,74 @@
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
 using Scribe.Core.Settings;
+using Scribe.Core.Transcription;
 
 namespace Scribe.Core.Tests;
 
 public sealed class SettingsDraftValidatorTests
 {
+    [Theory]
+    [InlineData(CleanupProvider.FoundryLocal)]
+    [InlineData(CleanupProvider.GitHubCopilot)]
+    [InlineData(CleanupProvider.OpenAiCompatible)]
+    public void A_selected_blank_key_cannot_save_even_when_neither_speech_nor_cleanup_uses_Azure(CleanupProvider provider)
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.EnableAiCleanup = false;
+        settings.AiCleanupProvider = provider;
+        settings.TranscriptionModelId = TranscriptionModelCatalog.DefaultId;
+
+        Assert.Equal(ValidationCode.ApiKeyEmpty,
+            Single(new SettingsDraft(settings, AzureApiKeySelected: true)).Code);
+        Assert.Empty(SettingsDraftValidator.Validate(new SettingsDraft(settings, AzureApiKeySelected: false)));
+    }
+
+    [Fact]
+    public void Disabled_Foundry_cleanup_cannot_save_a_selected_blank_key_as_CLI()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.AiCleanupProvider = CleanupProvider.AzureFoundry;
+        settings.EnableAiCleanup = false;
+        Assert.Equal(ValidationCode.ApiKeyEmpty,
+            Single(new SettingsDraft(settings, AzureApiKeySelected: true)).Code);
+    }
+
+    [Fact]
+    public void Cloud_speech_also_requires_a_selected_API_key_with_cleanup_off()
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.EnableAiCleanup = false;
+        settings.TranscriptionModelId = TranscriptionModelCatalog.MaiTranscribe2Id;
+
+        var issue = Single(new SettingsDraft(settings, AzureApiKeySelected: true));
+
+        Assert.Equal(ValidationCode.ApiKeyEmpty, issue.Code);
+        Assert.Equal("AzureApiKeyBox", issue.ControlName);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void Selecting_an_empty_API_key_cannot_save_as_Azure_CLI(string? key)
+    {
+        var settings = AppSettings.CreateDefault();
+        settings.EnableAiCleanup = true;
+        settings.AiCleanupProvider = CleanupProvider.AzureFoundry;
+        settings.AiCleanupAzureEndpoint = "https://example.openai.azure.com";
+        settings.AiCleanupAzureDeployment = "model";
+        settings.AiCleanupAzureAuthMode = AzureAuthMode.AzureCli;
+        settings.AiCleanupAzureApiKey = key;
+
+        var issue = Single(new SettingsDraft(settings, AzureApiKeySelected: true));
+
+        AssertIssue(issue, ValidationCode.ApiKeyEmpty, SettingsPage.AiCleanup, "AzureApiKeyBox", null,
+            SettingsDraftValidator.ApiKeyEmptyMessage);
+        Assert.Empty(SettingsDraftValidator.Validate(new SettingsDraft(settings, AzureApiKeySelected: false)));
+        settings.AiCleanupAzureApiKey = "test-key";
+        Assert.Empty(SettingsDraftValidator.Validate(new SettingsDraft(settings, AzureApiKeySelected: true)));
+    }
+
     [Fact]
     public void Untouched_new_rows_are_dropped_silently()
     {

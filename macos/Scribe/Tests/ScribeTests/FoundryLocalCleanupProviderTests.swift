@@ -326,6 +326,21 @@ final class FoundryLocalCleanupProviderTests: XCTestCase {
         XCTAssertEqual(log.all.count, 1)
     }
 
+    func testAnAnswerTheModelCutAtItsOutputLimitIsReportedAsCut() async throws {
+        let provider = FoundryLocalCleanupProvider(
+            status: .init(lookup: { URL(string: "http://localhost:5273")! }),
+            context: .init(lookup: { _ in 4096 }), residency: .alreadyResident,
+            session: makeStubSession { request in
+                StubReply.completion(request, "Cleaned so f", finishReason: "length")
+            })
+
+        let response = try await provider.clean(
+            CleanupRequest(transcript: "hello", writingStylePrompt: "Fix spelling.", maxOutputTokens: 64))
+
+        XCTAssertEqual(response.cleanedText, "Cleaned so f")
+        XCTAssertEqual(response.ending, .cutAtOutputLimit)
+    }
+
     func testUnknownCapacityNeverSendsAndMissingOutputLimitBecomesBounded() async throws {
         let log = RequestLog()
         let handler: StubURLProtocol.Handler = { request in

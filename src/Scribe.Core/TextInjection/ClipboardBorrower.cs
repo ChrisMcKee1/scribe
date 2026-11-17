@@ -180,11 +180,13 @@ internal sealed class ClipboardLease
 /// </para>
 /// <para>
 /// By default a borrow keeps plain text only, and refuses a clipboard holding anything else, so the caller types instead
-/// and the user's screenshot or formatted copy survives. A borrow asked to keep the whole clipboard
-/// (<see cref="TryBorrow(string, bool)"/>) is made when typing would get the text wrong: literal Markdown typed line by
-/// line makes a Markdown app continue each list with markers of its own. It copies every format it can put back exactly
-/// (see <see cref="TryKeepWholeClipboard"/>) in the same open session as the replacement, and restores all of them by the
-/// same receipt rule, so a newer copy the user makes during the paste is still never overwritten.
+/// and the user's screenshot or formatted copy survives. Reading that text can make its owner render it (see
+/// <see cref="OwnerAnswers"/>), so an owner that does not answer is asked nothing and the borrow is refused untouched
+/// (<see cref="ClipboardBorrowStatus.SnapshotUnreadable"/>), as a whole-clipboard borrow is. A borrow asked to keep the
+/// whole clipboard (<see cref="TryBorrow(string, bool)"/>) is made when typing would get the text wrong: literal Markdown
+/// typed line by line makes a Markdown app continue each list with markers of its own. It copies every format it can put
+/// back exactly (see <see cref="TryKeepWholeClipboard"/>) in the same open session as the replacement, and restores all of
+/// them by the same receipt rule, so a newer copy the user makes during the paste is still never overwritten.
 /// </para>
 /// </remarks>
 internal sealed class ClipboardBorrower
@@ -200,7 +202,11 @@ internal sealed class ClipboardBorrower
     /// </summary>
     internal const long MaxKeptBytes = 128L * 1024 * 1024;
 
-    /// <summary>How long the clipboard's owner has to answer before a whole-clipboard borrow asks it for any data.</summary>
+    /// <summary>
+    /// How long the clipboard's owner has to answer before a borrow asks it for any data: the text a plain borrow keeps, or
+    /// every format a whole-clipboard borrow copies. See <see cref="OwnerAnswers"/> for what the answer does and does not
+    /// promise.
+    /// </summary>
     internal const uint OwnerResponseTimeoutMs = 250;
 
     // Standard formats the whole-clipboard borrow treats by kind: families Windows converts between, handles, and data
@@ -306,7 +312,11 @@ internal sealed class ClipboardBorrower
 
         bool wasEmpty = _native.FormatCount == 0;
         string? previous = null;
-        if (kept is null && !wasEmpty && !_native.TryReadText(out previous))
+
+        // The text is read with GetClipboardData, which makes an owner that supplies it on request render it first, so the
+        // owner is asked before anything is read, as a whole-clipboard borrow asks it (see OwnerAnswers). An empty clipboard
+        // has nothing to read, and a whole-clipboard borrow has already asked.
+        if (kept is null && !wasEmpty && (!OwnerAnswers() || !_native.TryReadText(out previous)))
         {
             return new(ClipboardBorrowStatus.SnapshotUnreadable, null, attempts, ClipboardRestoreOutcome.NotApplicable);
         }
@@ -480,13 +490,12 @@ internal sealed class ClipboardBorrower
     /// formats), private formats (CF_PRIVATEFIRST to CF_PRIVATELAST), whose handles can be anything, a picture metafile
     /// with no enhanced metafile beside it, a bitmap handle with no device-independent bitmap, more than
     /// <see cref="MaxKeptBytes"/>, any format that cannot be read, and an owner that does not answer within
-    /// <see cref="OwnerResponseTimeoutMs"/>: reading a format it renders on request sends it WM_RENDERFORMAT and waits,
-    /// and Microsoft documents no bound on that wait, which would leave Scribe holding everyone's clipboard.
+    /// <see cref="OwnerResponseTimeoutMs"/> (see <see cref="OwnerAnswers"/>).
     /// </para>
     /// </remarks>
     private KeptClipboard? TryKeepWholeClipboard()
     {
-        if (!_native.OwnerResponds(OwnerResponseTimeoutMs) || _native.ListFormats() is not { } listed)
+        if (!OwnerAnswers() || _native.ListFormats() is not { } listed)
         {
             return null;
         }
@@ -570,6 +579,19 @@ internal sealed class ClipboardBorrower
 
         return kept.Count == 0 ? null : new KeptClipboard(kept, bytes);
     }
+
+    // Must be called while the clipboard is held open, and before anything of another application's is read from it, so the
+    // owner asked is the one a read would ask. GetClipboardData makes an owner that supplies a format on request (delayed
+    // rendering) render it: it sends the owner WM_RENDERFORMAT and waits, and Microsoft documents no bound on that wait, so
+    // an owner that is not answering would leave Scribe holding everyone's clipboard. The owner is therefore sent a
+    // WM_NULL first (GetClipboardOwner, then SendMessageTimeout within OwnerResponseTimeoutMs), and a borrow whose owner
+    // does not answer is refused untouched.
+    // What that proves is narrow. It shows that the owner answered a moment ago, not that it will render when asked, so an
+    // owner that stops answering after the probe can still hold the read; the borrow is not made safe, only less likely to
+    // meet an owner that was already stuck. And it cannot tell a format that must be rendered from one already in memory,
+    // so a busy owner of plain text, or one the probe cannot reach for another reason, is refused too, and the dictation
+    // is typed instead.
+    private bool OwnerAnswers() => _native.OwnerResponds(OwnerResponseTimeoutMs);
 
     // Must be called while the clipboard is held open, because a true answer authorizes a paste or a
     // mutation.

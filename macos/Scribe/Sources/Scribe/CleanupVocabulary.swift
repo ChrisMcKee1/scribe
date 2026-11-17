@@ -12,6 +12,15 @@ struct CleanupVocabulary: Sendable {
     static let none = CleanupVocabulary(glossaryEntries: [])
 
     let glossaryEntries: [DictionaryEntry]
+    /// What every request of a dictation that carries this vocabulary is held to as it leaves: the word pack permission
+    /// the vocabulary was read under (`LibraryVocabulary.aiScope`), which the glossary and any spelling already written
+    /// into the text sent depend on, against the permission in force then (`CleanupVocabularyAdmission`).
+    let admission: CleanupVocabularyAdmission
+
+    init(glossaryEntries: [DictionaryEntry], scope: AiVocabularyScope = .none, gate: AiVocabularyGate = .shared) {
+        self.glossaryEntries = glossaryEntries
+        admission = CleanupVocabularyAdmission(scope: scope, gate: gate)
+    }
 
     var wholeGlossaryTokens: Int {
         let lines = CleanupPrompt.glossaryLines(glossaryEntries)

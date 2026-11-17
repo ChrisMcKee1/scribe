@@ -14,6 +14,13 @@ public sealed class DictationOutcomeHandOffTests
     private static readonly string Controller = ReadSource("src", "Scribe.App", "Dictation", "DictationController.cs");
 
     [Fact]
+    public void Failed_insertion_keeps_the_unconfirmed_delivery_problem_in_its_notice()
+    {
+        var process = Body(Controller, "private async Task ProcessAsync(");
+        Assert.Contains("pillProblem = DictationProblemReport.ForFailedInsertion(injection);", process, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Processing_decides_its_outcome_once_from_what_the_pipeline_set()
     {
         var process = Body(Controller, "private async Task ProcessAsync(");

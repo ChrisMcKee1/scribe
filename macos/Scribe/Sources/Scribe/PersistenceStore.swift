@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 import SQLite3
 
 /// SQLite's `SQLITE_TRANSIENT`, which Swift cannot import because the C macro casts -1 to a function pointer: it
@@ -241,7 +240,6 @@ final class PersistenceStore: Sendable {
     let databaseURL: URL
     private let owner: ConnectionOwner
     private let removedText = RemovedTextLedger()
-    private let logger = Logger(subsystem: "com.scribe.macos", category: "Persistence")
 
     init(
         fileManager: FileManager = .default,
@@ -279,7 +277,7 @@ final class PersistenceStore: Sendable {
             }
         }
 
-        logger.info("Database ready (new history table: \(createdHistory)).")
+        ScribeLog.info(.persistence, "Database ready", .flag("newHistoryTable", createdHistory))
     }
 
     /// `initialize()` for main-actor callers: queues the migration and waits for it without holding the
@@ -302,14 +300,13 @@ final class PersistenceStore: Sendable {
             return preparation
         }
 
-        let logger = self.logger
         owner.enqueue(.foreground) { session in
             try session.transaction(.migrate) {
                 try Self.migrate(session)
             }
         } completion: { result in
             if case .success(let createdHistory) = result {
-                logger.info("Database ready (new history table: \(createdHistory)).")
+                ScribeLog.info(.persistence, "Database ready", .flag("newHistoryTable", createdHistory))
             }
             preparation.settle(result.map { _ in () })
         }
@@ -725,7 +722,7 @@ final class PersistenceStore: Sendable {
         try owner.withSession(.foreground) { session in
             try Self.writeRetention(normalized, session)
         }
-        logger.info("History retention set to \(normalized.storedDays) day(s); 0 keeps text forever.")
+        Self.logRetentionSet(normalized)
     }
 
     /// `setHistoryRetention(_:)` for main-actor callers.
@@ -734,7 +731,12 @@ final class PersistenceStore: Sendable {
         try await owner.withSessionAsync(.foreground) { session in
             try Self.writeRetention(normalized, session)
         }
-        logger.info("History retention set to \(normalized.storedDays) day(s); 0 keeps text forever.")
+        Self.logRetentionSet(normalized)
+    }
+
+    private static func logRetentionSet(_ retention: HistoryRetention) {
+        ScribeLog.info(
+            .persistence, "History retention set; 0 days keeps text forever", .integer("days", retention.storedDays))
     }
 
     private static func readRetention(_ session: SQLiteSession) throws -> HistoryRetentionSetting {
@@ -1567,6 +1569,29 @@ private final class RemovedTextLedger: @unchecked Sendable {
 
 // MARK: - Connection ownership
 
+/// The journal modes SQLite documents, so the log names the mode it chose and never repeats text SQLite returned.
+private enum JournalModeName {
+    case delete
+    case truncate
+    case persist
+    case memory
+    case wal
+    case off
+    case unknown
+
+    init(_ reported: String) {
+        switch reported.lowercased() {
+        case "delete": self = .delete
+        case "truncate": self = .truncate
+        case "persist": self = .persist
+        case "memory": self = .memory
+        case "wal": self = .wal
+        case "off": self = .off
+        default: self = .unknown
+        }
+    }
+}
+
 /// The one SQLite connection and the state that may only be touched while holding it.
 ///
 /// `@unchecked Sendable` because the compiler cannot see the confinement. `handle` and `timestamps`
@@ -1587,7 +1612,6 @@ private final class ConnectionOwner: @unchecked Sendable {
     let progressInterval: Int32
 
     private let hooks: PersistenceStore.TestHooks
-    private let logger = Logger(subsystem: "com.scribe.macos", category: "Persistence")
     private let queue = DispatchQueue(label: "com.scribe.macos.persistence")
     private var handle: OpaquePointer?
     private let timestamps: ISO8601DateFormatter = {
@@ -1745,14 +1769,16 @@ private final class ConnectionOwner: @unchecked Sendable {
         }
 
         do {
-            let journalMode = try Self.configure(
+            let reported = try Self.configure(
                 opened, readOnly: readOnly, busyTimeoutMilliseconds: busyTimeoutMilliseconds, timestamps: timestamps)
-            if journalMode.lowercased() == "wal" {
-                logger.info("Opened the database in WAL mode.")
+            let journalMode = JournalModeName(reported)
+            if journalMode == .wal {
+                ScribeLog.info(.persistence, "Opened the database in WAL mode")
             } else {
-                // Reported by name only: a mode SQLite itself chose, such as "delete" on a volume
-                // without shared memory support.
-                logger.warning("Opened the database, but it stayed in \(journalMode, privacy: .public) journal mode.")
+                // A mode SQLite itself chose, such as "delete" on a volume without shared memory support.
+                ScribeLog.warning(
+                    .persistence, "Opened the database, but it did not stay in WAL mode",
+                    .name("journalMode", journalMode))
             }
         } catch {
             sqlite3_close_v2(opened)

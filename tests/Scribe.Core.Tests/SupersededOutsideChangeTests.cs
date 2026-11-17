@@ -229,6 +229,66 @@ public sealed class SupersededOutsideChangeTests : IDisposable
     }
 
     [Fact]
+    public void A_save_that_captured_its_intent_before_a_newer_tray_opt_out_committed_keeps_the_opt_out()
+    {
+        // Cleanup is on. Settings captures its Save's intent, the switch on, and waits for a confirmation; the tray turns
+        // cleanup off, a newer intent, and that write commits; the Save then stores the document it captured. It used to
+        // write its older on over the opt-out, because only an absent intent kept the stored value.
+        _settings.Save(new AppSettings { EnableAiCleanup = true });
+        var windowIntent = ExternalSwitchSync.NextRevision();
+        var trayOff = ExternalSwitchSync.NextRevision();
+        _settings.Update(s => s.EnableAiCleanup = false, trayOff, out var superseded);
+        Assert.False(superseded);
+        var window = new AppSettings { EnableAiCleanup = true, HistoryRetentionDays = 30 };
+
+        _settings.SaveBundle(window, null, null, aiCleanupIntent: windowIntent);
+
+        var stored = _settings.Load();
+        Assert.False(stored.EnableAiCleanup);
+        Assert.Equal(30, stored.HistoryRetentionDays);
+        Assert.False(window.EnableAiCleanup);
+    }
+
+    [Fact]
+    public void A_save_whose_intent_is_newer_than_a_committed_tray_change_writes_the_windows_value()
+    {
+        // The user turned cleanup off in the tray, then on in the window before saving: the later choice wins.
+        _settings.Save(new AppSettings { EnableAiCleanup = true });
+        _settings.Update(s => s.EnableAiCleanup = false, ExternalSwitchSync.NextRevision(), out _);
+
+        _settings.SaveBundle(new AppSettings { EnableAiCleanup = true }, null, null, aiCleanupIntent: ExternalSwitchSync.NextRevision());
+
+        Assert.True(_settings.Load().EnableAiCleanup);
+    }
+
+    [Fact]
+    public void A_save_whose_intent_is_older_than_one_an_earlier_save_committed_keeps_the_stored_value()
+    {
+        _settings.Save(new AppSettings { EnableAiCleanup = true });
+        var older = ExternalSwitchSync.NextRevision();
+        var newer = ExternalSwitchSync.NextRevision();
+        _settings.SaveBundle(new AppSettings { EnableAiCleanup = false }, null, null, aiCleanupIntent: newer);
+
+        _settings.SaveBundle(new AppSettings { EnableAiCleanup = true }, null, null, aiCleanupIntent: older);
+
+        Assert.False(_settings.Load().EnableAiCleanup);
+    }
+
+    [Fact]
+    public void A_tray_change_older_than_one_that_committed_is_superseded_by_it()
+    {
+        var older = ExternalSwitchSync.NextRevision();
+        var newer = ExternalSwitchSync.NextRevision();
+        _settings.Update(s => s.EnableAiCleanup = true, newer, out _);
+
+        var stored = _settings.Update(s => s.EnableAiCleanup = false, older, out var superseded);
+
+        Assert.True(superseded);
+        Assert.True(stored.EnableAiCleanup);
+        Assert.True(_settings.Load().EnableAiCleanup);
+    }
+
+    [Fact]
     public void An_unchecked_update_is_never_superseded()
     {
         _settings.SaveBundle(new AppSettings { EnableAiCleanup = false }, null, null, aiCleanupIntent: long.MaxValue);

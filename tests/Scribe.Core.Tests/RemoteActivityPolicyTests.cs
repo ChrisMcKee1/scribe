@@ -6,6 +6,31 @@ namespace Scribe.Core.Tests;
 
 public sealed class RemoteActivityPolicyTests
 {
+    [Fact]
+    public void A_blank_selected_key_is_an_unsaved_choice_not_the_saved_CLI_identity()
+    {
+        var saved = Complete(CleanupProvider.AzureFoundry);
+        saved.AiCleanupAzureApiKey = null;
+        var draft = saved.Clone();
+
+        Assert.False(SettingsChangeTracker.Compare(saved, draft).IsDirty);
+        Assert.Contains(SettingsPage.AiCleanup,
+            SettingsChangeTracker.Compare(saved, draft, azureApiKeySelected: true).Pages);
+        Assert.False(RemoteActivityPolicy.IsSavedAndActive(saved, draft, azureApiKeySelected: true));
+        Assert.False(RemoteActivityPolicy.MayContact(saved, draft, RemoteActivityTrigger.WindowOpen,
+            azureApiKeySelected: true));
+        var page = AiCleanupPageState.Describe(saved, draft, CleanupStatus.Ready,
+            azureSetup: new(AzureSetupResult.ApiKeyIncomplete, ApiKeySelected: true));
+        Assert.Equal("Save to start AI cleanup.", page.StatusLine);
+
+        var speech = TranscriptionModelChoices.DescribeSetupStatus(
+            Scribe.Core.Transcription.TranscriptionModelCatalog.MaiTranscribe2Id,
+            null, saved.AiCleanupAzureEndpoint, AzureAuthMode.AzureCli, null, null, null, null,
+            azureCliSignedIn: true, apiKeySelected: true);
+        Assert.False(speech.IsReady);
+        Assert.Contains("Enter your Microsoft Foundry API key", speech.AuthStatusLine, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData(RemoteActivityTrigger.WindowOpen, true)]
     [InlineData(RemoteActivityTrigger.PageSwitch, true)]

@@ -14,6 +14,13 @@ namespace Scribe.Core.Tests;
 /// </summary>
 public sealed class LogPrivacyGuardTests
 {
+    [Fact]
+    public void Applying_a_profile_does_not_send_its_name_to_any_log_sink()
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "src", "Scribe.App", "Dictation", "DictationController.cs"));
+        Assert.DoesNotMatch(@"Log(?:Information|Debug|Warning|Error|Trace)\s*\([^;]*\bprofile\.Name\b", source);
+    }
+
     // The whole app shell (Settings verifies endpoints, keys and Azure sign-in; the tray, quick add and dictation
     // relay cleanup), every Core folder whose code talks to a provider or handles what one returned, the folder that
     // holds library names and terms, the folder that builds and publishes every dictation's vocabulary, and the

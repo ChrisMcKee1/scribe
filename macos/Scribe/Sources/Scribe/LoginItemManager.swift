@@ -1,5 +1,4 @@
 import AppKit
-import OSLog
 import ServiceManagement
 
 /// What macOS reports for Scribe as a login item (`SMAppService.mainApp.status`).
@@ -212,7 +211,6 @@ final class LoginItemSwitch: ObservableObject {
 
     private let service: any LoginItemService
     private let openLoginItemsAction: @MainActor () -> Void
-    private let logger = Logger(subsystem: "com.scribe.macos", category: "LoginItem")
     /// Advances when a flip starts or a read is requested while another is running, so a read that began earlier
     /// can tell it has been overtaken.
     private var generation = 0
@@ -356,12 +354,15 @@ final class LoginItemSwitch: ObservableObject {
             outcome = .declined
         }
         refusal = (outcome == .declined && latest == settled) ? (refused ?? .noEffect) : nil
-        // Enum names, a flag and an error code only, never a message from macOS.
-        let refusalShape = refused.map { "\($0)" } ?? "none"
-        let shape =
-            "requested=\(requested) before=\(shown) after=\(settled) latest=\(latest) "
-            + "refusal=\(refusalShape) outcome=\(outcome)"
-        logger.info("Login item change: \(shape, privacy: .public)")
+        // Enum case names, flags and an error code only, never a message from macOS.
+        var fields: [ScribeLog.Field] = [
+            .flag("requested", requested), .name("before", shown), .name("after", settled), .name("latest", latest),
+            .name("refusal", refused), .name("outcome", outcome),
+        ]
+        if case .failed(let code)? = refused {
+            fields.append(.integer("errorCode", code))
+        }
+        ScribeLog.log(.info, .app, "Login item change", fields)
         return outcome
     }
 

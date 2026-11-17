@@ -843,6 +843,9 @@ final class DictationController {
         var postDuration = Duration.zero
         if services.cleanup.isEnabled {
             let vocabularyStarted = clock.now
+            // Taken in the same turn as the pass: the pass's text carries spellings of the packs this vocabulary's
+            // scope permits, so the glossary and the permission every request is held to must be the pass's own.
+            let vocabulary = rules.cleanupVocabulary
             let pass = rules.correctVocabulary(raw)
             postDuration += vocabularyStarted.duration(to: clock.now)
             if Self.isBlank(pass.text) {
@@ -852,6 +855,7 @@ final class DictationController {
                 let stage = await cleanUp(
                     pass.text,
                     dictationText: raw,
+                    vocabulary: vocabulary,
                     dictation: dictation,
                     readiness: dictation.localModelPreparation,
                     profile: profile,
@@ -968,9 +972,12 @@ final class DictationController {
     }
 
     /// Sends `sent`, the raw transcript with the vocabulary rules applied, and checks the reply against it.
+    /// `vocabulary` is the one the pass that made `sent` was built from, and every request is held to its permission
+    /// as it leaves.
     private func cleanUp(
         _ sent: String,
         dictationText raw: String,
+        vocabulary: CleanupVocabulary,
         dictation: AdmittedDictation,
         readiness: LocalModelPreparation?,
         profile: AppProfile?,
@@ -1002,7 +1009,6 @@ final class DictationController {
         guard mayContinue else { return CleanupStage(outcome: .fellBack, text: nil, requestDuration: nil) }
 
         let settings = services.cleanup.currentSettings()
-        let vocabulary = services.rules.cleanupVocabulary
         let context: Int?
         do {
             context = try await provider.contextForPlanning()
@@ -1066,14 +1072,25 @@ final class DictationController {
                 guard mayContinue else { throw CancellationError() }
                 let remaining = LocalCleanupPlan.answerTimeLimit - started.duration(to: clock.now).seconds
                 if segments.count > 1, remaining <= 0 { throw CleanupProviderError.timedOut }
-                let response = try await provider.clean(
-                    CleanupRequest(
-                        transcript: CleanupPrompt.wrapTranscript(segment.text), writingStylePrompt: prompt,
-                        singleLineMode: singleLine,
-                        timeout: segments.count > 1 ? remaining : nil,
-                        maxOutputTokens: outputCeiling == nil ? nil : ContextBudget.cleanupOutputCeiling(segment.text)))
+                let request = CleanupRequest(
+                    transcript: CleanupPrompt.wrapTranscript(segment.text), writingStylePrompt: prompt,
+                    singleLineMode: singleLine,
+                    timeout: segments.count > 1 ? remaining : nil,
+                    maxOutputTokens: outputCeiling == nil ? nil : ContextBudget.cleanupOutputCeiling(segment.text))
+                // Held to the word pack permission the request was composed under until the moment it leaves.
+                let response = try await vocabulary.admission.whileAdmitted { try await provider.clean(request) }
                 try Task.checkCancellation()
                 guard mayContinue else { throw CancellationError() }
+                guard !response.ending.isIncomplete else {
+                    // A reply the service says it cut short is only the start of the cleaned text, and using it
+                    // would drop the rest of what was said.
+                    let elapsed = started.duration(to: clock.now)
+                    ScribeLog.warning(
+                        .cleanup, "The AI cleanup reply stopped before its end, so the raw transcript is used",
+                        .integer("dictation", id.rawValue), .name("ending", response.ending),
+                        .duration("cleanup", elapsed))
+                    return CleanupStage(outcome: .fellBack, text: nil, requestDuration: elapsed)
+                }
                 if segments.count > 1, started.duration(to: clock.now).seconds >= LocalCleanupPlan.answerTimeLimit {
                     throw CleanupProviderError.timedOut
                 }

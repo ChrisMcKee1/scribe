@@ -108,7 +108,8 @@ public static class CleanupDisclosure
         "Each time cleanup connects, for example when Scribe starts or you save a change to where AI cleanup " +
         "runs, it first sends a short test request holding the word \"ok\" and the same instructions, with " +
         "none of your vocabulary. " + WholeVocabularyOnThisPc + " " + ReadiesALocalServer + " " + ManagesALocalApp +
-        " Cleanup never sends your snippet templates, and audio never leaves this device. " + FoundryLocalStartupEvent + " " +
+        " Cleanup never sends your snippet templates or audio. The separate MAI-Transcribe-2 speech model sends audio " +
+        "to Microsoft Foundry when selected, even with AI cleanup off. " + FoundryLocalStartupEvent + " " +
         "GitHub Copilot sends all of this to GitHub under your own Copilot sign-in and GitHub's terms, and " +
         "listing its models contacts GitHub too.";
 
@@ -147,7 +148,7 @@ public static class CleanupDisclosure
 
     public static string SummaryFor(CleanupProvider provider) => provider switch
     {
-        CleanupProvider.FoundryLocal => "Your text, writing style and vocabulary stay on this PC. Audio never leaves it.",
+        CleanupProvider.FoundryLocal => "Your cleanup text, writing style and vocabulary stay on this PC. AI cleanup never sends audio.",
         CleanupProvider.AzureFoundry => RemoteSummary("your Microsoft Foundry deployment"),
         CleanupProvider.OpenAiCompatible => RemoteSummary("the address you enter"),
         CleanupProvider.GitHubCopilot => RemoteSummary("GitHub"),
@@ -164,7 +165,7 @@ public static class CleanupDisclosure
             : SummaryFor(provider);
 
     private static string RemoteSummary(string destination) =>
-        $"Each cleanup sends the text Scribe heard, your writing style, and the dictionary and word pack words it mentions to {destination}. Audio never leaves this PC.";
+        $"Each cleanup sends the text Scribe heard, your writing style, and the dictionary and word pack words it mentions to {destination}. AI cleanup never sends audio.";
 
     /// <summary>The title of the confirmation shown before AI dictionary suggestions send dictation text.</summary>
     public const string SuggestionConsentTitle = "Send recent dictations to your AI service?";

@@ -168,6 +168,23 @@ public sealed class PillOutcomeTests
         Assert.Null(PillOutcome.Of(InjectionResult.Empty, cleanupRequested: false, CleanupResult.Skip(string.Empty), problem: null));
     }
 
+    [Theory]
+    [InlineData(DictationProblem.DeliveryUnconfirmed)]
+    [InlineData(DictationProblem.TypingIncomplete)]
+    public void An_insertion_the_app_did_not_confirm_says_nothing_whatever_problem_came_with_it(DictationProblem problem)
+    {
+        // The app may already hold the text, so "Nothing typed" and its advice to copy it would not be known to be true,
+        // and copying it into the app could put it in twice. A controller that still reports it as an incomplete
+        // insertion gets the same silent pill; the notice is what tells the user to check the app first.
+        var unconfirmed = new InjectionResult(false, "win32-edit", 0, 6, InjectionResult.DeliveryUnconfirmedError);
+        var report = new DictationProblemReport(problem);
+        var failedCleanup = new CleanupResult("raw text", CleanupOutcome.Failed, FailureReason: "AI cleanup timed out.");
+
+        Assert.Null(PillOutcome.Of(unconfirmed, cleanupRequested: false, CleanupResult.Skip("x"), report));
+        Assert.Null(PillOutcome.Of(unconfirmed, cleanupRequested: true, failedCleanup, report));
+        Assert.Null(PillOutcome.Of(unconfirmed, cleanupRequested: false, CleanupResult.Skip("x"), problem: null));
+    }
+
     [Fact]
     public void A_dictation_that_failed_before_insertion_is_Nothing_typed_with_its_own_next_step()
     {

@@ -43,6 +43,15 @@ public sealed record InjectionResult(bool Succeeded, string Method, int Sent, in
     /// </summary>
     public const string FocusChangedError = "The focused window changed while processing.";
 
+    /// <summary>
+    /// The exact <see cref="Error"/> reported when the target was sent the text and did not confirm it in time (a
+    /// standard edit control that did not answer): the text may already be there, or may still arrive, so it was neither
+    /// pasted nor typed as well. Callers match on it to tell the user to check the app before copying the dictation, since
+    /// copying it into the app could put it in twice, so it must never be reworded.
+    /// </summary>
+    public const string DeliveryUnconfirmedError =
+        "The app did not confirm the text in time, so it was not typed again. It may already be there.";
+
     public static InjectionResult Empty { get; } = new(true, "none", 0, 0);
 
     /// <summary>How the clipboard paste path ended; <see cref="PasteDelivery.NotUsed"/> on every other path.</summary>

@@ -1,6 +1,7 @@
 using Scribe.Core.Cleanup;
 using Scribe.Core.Models;
 using Scribe.Core.TextInjection;
+using Scribe.Core.Transcription;
 
 namespace Scribe.Core.Settings;
 
@@ -27,6 +28,7 @@ public enum ValidationCode
     TenantEmpty,
     ClientIdEmpty,
     ClientSecretEmpty,
+    ApiKeyEmpty,
     DurationOutOfRange,
     MarkdownNewlineConflict,
 }
@@ -100,7 +102,8 @@ public sealed record SettingsDraft(
     IReadOnlyList<DictionaryDraftRow>? DictionaryRows = null,
     IReadOnlyList<SnippetDraftRow>? SnippetRows = null,
     IReadOnlyList<ProfileDraftRow>? ProfileRows = null,
-    IReadOnlyList<DurationDraftField>? DurationFields = null);
+    IReadOnlyList<DurationDraftField>? DurationFields = null,
+    bool AzureApiKeySelected = false);
 
 public static class SettingsDraftValidator
 {
@@ -123,6 +126,7 @@ public static class SettingsDraftValidator
     public const string TenantEmptyMessage = "Enter the tenant ID.";
     public const string ClientIdEmptyMessage = "Enter the client ID.";
     public const string ClientSecretEmptyMessage = "Enter the client secret.";
+    public const string ApiKeyEmptyMessage = "Enter the API key, or choose another sign-in method.";
 
     public static IReadOnlyList<ValidationIssue> Validate(SettingsDraft draft)
     {
@@ -310,6 +314,11 @@ public static class SettingsDraftValidator
 
         void ValidateProvider(AppSettings settings)
         {
+            if (draft.AzureApiKeySelected && string.IsNullOrWhiteSpace(settings.AiCleanupAzureApiKey))
+            {
+                Add(ValidationCode.ApiKeyEmpty, SettingsPage.AiCleanup, "AzureApiKeyBox", null, ApiKeyEmptyMessage);
+            }
+
             if (!settings.EnableAiCleanup)
             {
                 return;
