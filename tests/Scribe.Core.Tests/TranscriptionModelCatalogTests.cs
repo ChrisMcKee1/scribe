@@ -27,6 +27,26 @@ public sealed class TranscriptionModelCatalogTests
         });
     }
 
+    [Fact]
+    public void App_and_packaging_download_the_same_immutable_default_model()
+    {
+        var repository = RepositoryRoot();
+        var downloader = File.ReadAllText(Path.Combine(repository, "scripts", "Download-Models.ps1"));
+        var manifest = File.ReadAllText(Path.Combine(repository, "scripts", "Model-Manifest.ps1"));
+        var source = Regex.Match(downloader, @"\$AsrBase\s*=\s*'([^']+)'");
+        Assert.True(source.Success);
+        var baseUrl = source.Groups[1].Value;
+        Assert.Matches(@"/resolve/[0-9a-f]{40}$", baseUrl);
+
+        foreach (var file in TranscriptionModelCatalog.Resolve(null).DownloadFiles!)
+        {
+            Assert.Equal(new Uri($"{baseUrl}/{file.FileName}"), file.DownloadUri);
+            Assert.Matches(
+                $@"Path\s*=\s*'{Regex.Escape(file.FileName)}';\s*Size\s*=\s*{file.Size.ToString(CultureInfo.InvariantCulture)};\s*Sha256\s*=\s*'{file.Sha256}'",
+                manifest);
+        }
+    }
+
     [Theory]
     [InlineData("moonshine-base-en-int8")]
     [InlineData("moonshine-tiny-en-int8")]

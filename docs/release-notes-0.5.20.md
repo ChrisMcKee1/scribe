@@ -8,6 +8,7 @@ Scribe 0.5.20 is a Windows reliability patch for dictation delivery, settings sa
 - Treat a timed-out edit-control insertion as uncertain delivery instead of resending the entire dictation and risking duplicate text. The recording indicator and recovery notice explain that uncertainty.
 - Check that a clipboard owner responds before borrowing plain text, as well as when keeping formatted clipboard content.
 - Keep offline recognition independent of optional cloud-preparation reads. A cloud preparation failure can fall back to the local speech model.
+- Pin speech-model downloads to the original upstream revision so fresh builds and in-app downloads keep receiving the verified weights after upstream changes.
 
 ## Settings and word packs
 

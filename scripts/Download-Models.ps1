@@ -35,8 +35,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$AsrRepo  = 'csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'
-$AsrBase  = "https://huggingface.co/$AsrRepo/resolve/main"
+# Keep the source revision aligned with the manifest's hashes when upstream replaces its main branch.
+$AsrBase  = 'https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78'
 $VadBase  = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models'
 
 . (Join-Path $PSScriptRoot 'Model-Manifest.ps1')
